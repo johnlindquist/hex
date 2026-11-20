@@ -21,13 +21,27 @@ public final class HexTheme {
     d.setStroke(dp(c, 1), border);
     return d;
   }
+  static android.graphics.drawable.Drawable ripple(Context c, int color, int radius) {
+    return new android.graphics.drawable.RippleDrawable(
+        android.content.res.ColorStateList.valueOf(BORDER), shape(c, color, radius, 0), null);
+  }
+  static EditText input(Context c, String hint) {
+    EditText v = new EditText(c);
+    v.setBackground(shape(c, SURFACE, 12, BORDER));
+    v.setPadding(dp(c, 14), dp(c, 12), dp(c, 14), dp(c, 12));
+    v.setTextColor(TEXT);
+    v.setHintTextColor(FAINT);
+    v.setTextSize(15);
+    v.setHint(hint);
+    return v;
+  }
   static TextView text(Context c, String s, int size, int color) {
     TextView v = new TextView(c);
     v.setText(s);
     v.setTextSize(size);
     v.setTextColor(color);
     v.setIncludeFontPadding(false);
-    if (size >= 20)
+    if (size >= 18 || size == 12)
       v.setTypeface(Typeface.create("sans-serif-medium", 0));
     return v;
   }
@@ -38,7 +52,7 @@ public final class HexTheme {
     b.setTextSize(15);
     b.setMinHeight(dp(c, 48));
     b.setTextColor(primary ? CANVAS : TEXT);
-    b.setBackground(shape(c, primary ? PRIMARY : CONTROL, 10, BORDER));
+    b.setBackground(ripple(c, primary ? PRIMARY : CONTROL, 10));
     b.setOnClickListener(v -> action.run());
     return b;
   }

@@ -6,7 +6,9 @@ Internal ARM64 debug app, Android 13+. The Android settings and Accessibility se
 Prepare Hex on the phone                              // android.setup
 ├── Install the debug APK → push the verified Parakeet files into private storage
 ├── Open Hex → grant Microphone and enable dictation in Android Accessibility
-└── Keep the current keyboard → focus a supported, non-password text editor
+├── Try Hex or General → tap the scratchpad to test with your current keyboard
+├── General → check readiness, copy or clear scratchpad text
+└── Labs → Run setup again to revisit the three onboarding steps
 
 Tap the floating mic                                  // android.dictate
 ├── Speak → local Parakeet recognizes phrases → insert at the original cursor
@@ -20,7 +22,8 @@ Sources: [manifest and permission boundary](../../android/app/src/main/AndroidMa
 ```ts
 Choose how words come out                             // android.output
 ├── Choose Polished, Casual, Notes or Verbatim → style the result locally
-├── Custom vocabulary → prefer the spellings you supply
+├── Custom vocabulary → add or remove preferred spellings inline
+├── History → search as you type and copy a retained dictation
 └── History → choose Off, seven days or 30 days; distinct from unfinished drafts
 
 Enable a Lab (each starts off)                        // android.labs

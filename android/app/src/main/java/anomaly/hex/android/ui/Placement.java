@@ -14,8 +14,8 @@ public final class Placement {
   private String rev;
   public Placement(Context c) {
     prefs = c.getSharedPreferences("mic_position", 0);
-    x = prefs.getInt("x", 980);
-    y = prefs.getInt("y", 500);
+    x = prefs.getInt("x", 955);
+    y = prefs.getInt("y", 915);
     rev = prefs.getString("rev", "default");
   }
   public JSONObject info() throws JSONException {
@@ -27,15 +27,23 @@ public final class Placement {
     Rect r = m.getBounds();
     Insets i = m.getWindowInsets().getInsetsIgnoringVisibility(
         WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+    WindowInsets attached = strip.getRootWindowInsets();
+    int ime = m.getWindowInsets().getInsets(WindowInsets.Type.ime()).bottom;
+    if (attached != null)
+      ime = Math.max(ime, attached.getInsets(WindowInsets.Type.ime()).bottom);
     strip.measure(0, 0);
     return new Point(Math.max(1, r.width() - i.left - i.right - strip.getMeasuredWidth()),
-        Math.max(1, r.height() - i.top - i.bottom - strip.getMeasuredHeight()));
+        Math.max(1, r.height() - i.top - Math.max(i.bottom, ime) - strip.getMeasuredHeight()));
   }
   public void layout(View strip, WindowManager.LayoutParams p) {
     Point s = span(strip);
     p.gravity = Gravity.LEFT | Gravity.TOP;
     p.x = Math.round(s.x * x / 1000f);
-    p.y = Math.round(s.y * y / 1000f);
+    // Leave the bottom action row reachable until the user explicitly places the strip.
+    int parked = Math.max(0, s.y - HexTheme.dp(strip.getContext(), 76));
+    p.y = !dragging && "default".equals(rev) ? parked : Math.round(s.y * y / 1000f);
+    if (!dragging && "default".equals(rev))
+      y = Math.round(1000f * parked / s.y);
   }
   public void begin(float a, float b) {
     startX = x;

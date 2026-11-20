@@ -6,6 +6,7 @@ import android.widget.*;
 import anomaly.hex.android.service.HexBubbleService;
 
 public final class MicStrip extends LinearLayout {
+  private int imeBottom;
   private final HexBubbleService host;
   private final DotScopeView scope;
   private final TextView cancel, action, count, review;
@@ -13,7 +14,17 @@ public final class MicStrip extends LinearLayout {
     super(h);
     host = h;
     setGravity(Gravity.CENTER_VERTICAL);
-    setBackground(shape(h, SURFACE, 24, BORDER));
+    setBackground(shape(h, SURFACE, 28, BORDER));
+    setElevation(dp(h, 6));
+    setPadding(dp(h, 10), dp(h, 3), dp(h, 4), dp(h, 3));
+    setOnApplyWindowInsetsListener((view, insets) -> {
+      int bottom = insets.getInsets(WindowInsets.Type.ime()).bottom;
+      if (bottom != imeBottom) {
+        imeBottom = bottom;
+        post(host::positionStrip);
+      }
+      return insets;
+    });
     cancel = tile("×", "Cancel dictation", () -> h.cancel("cancelled"));
     scope = new DotScopeView(h);
     addView(scope, dp(h, 86), dp(h, 32));
