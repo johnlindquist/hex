@@ -32,6 +32,10 @@ public final class DictationReplayTest extends Instrumentation {
   @Override
   public void onStart() {
     Bundle out = new Bundle();
+    if ("perf".equals(args.getString("mode"))) {
+      PerfBenchTest.run(this);
+      return;
+    }
     try {
       if (!Build.FINGERPRINT.contains("generic") && !Build.PRODUCT.startsWith("sdk_gphone"))
         throw new IllegalStateException("Emulator only");
