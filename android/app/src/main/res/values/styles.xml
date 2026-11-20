@@ -1,0 +1,8 @@
+<resources>
+  <style name="Theme.Hex" parent="@android:style/Theme.Material.NoActionBar">
+    <item name="android:windowBackground">#0A0B0D</item>
+    <item name="android:statusBarColor">#0A0B0D</item>
+    <item name="android:navigationBarColor">#0A0B0D</item>
+    <item name="android:colorAccent">#F0F2F5</item>
+  </style>
+</resources>

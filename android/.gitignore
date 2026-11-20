@@ -1,0 +1,9 @@
+.gradle/
+build/
+app/build/
+local.properties
+app/libs/sherpa.aar
+model/
+*.apk
+*.aab
+*.iml
