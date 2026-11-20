@@ -37,7 +37,8 @@ public final class Placement {
     Insets i = m.getWindowInsets().getInsetsIgnoringVisibility(
         WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
     int ime = currentImeBottom(strip.getContext(), strip);
-    strip.measure(0, 0);
+    if (strip.isLayoutRequested() || strip.getMeasuredWidth() <= 0 || strip.getMeasuredHeight() <= 0)
+      strip.measure(0, 0);
     return new Span(Math.max(1, r.width() - i.left - i.right - strip.getMeasuredWidth()),
         Math.max(1, r.height() - i.top - Math.max(i.bottom, ime) - strip.getMeasuredHeight()), ime > i.bottom);
   }

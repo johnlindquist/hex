@@ -27,6 +27,14 @@ public final class HexHomeActivity extends Activity {
   private EditText practice;
   private final String[] tabs = {"General", "Output", "History", "Labs"};
   private final Handler handler = new Handler(Looper.getMainLooper());
+  private boolean modelAvailable, draftPending;
+  private final Runnable persistDraft = () -> {
+    draftPending = false;
+    SharedPreferences.Editor edit = getPreferences(MODE_PRIVATE).edit();
+    if (scratch.isEmpty()) edit.remove("scratch_draft");
+    else edit.putString("scratch_draft", scratch);
+    edit.apply();
+  };
   private String readiness = "";
   private final Runnable poll = new Runnable() {
     public void run() {
@@ -43,6 +51,7 @@ public final class HexHomeActivity extends Activity {
     labs = new HexLabs(this);
     history = new HexHistory(this);
     vocabulary = new CustomVocabulary(this);
+    scratch = getPreferences(MODE_PRIVATE).getString("scratch_draft", "");
     if (b != null) {
       tab = b.getInt("tab");
       scratch = b.getString("scratch", "");
@@ -58,12 +67,17 @@ public final class HexHomeActivity extends Activity {
   @Override
   public void onResume() {
     super.onResume();
+    modelAvailable = ModelStore.inspect(this).state != ModelStore.State.MISSING;
     render();
     handler.post(poll);
   }
   @Override
   public void onPause() {
     handler.removeCallbacks(poll);
+    if (draftPending) {
+      handler.removeCallbacks(persistDraft);
+      persistDraft.run();
+    }
     super.onPause();
   }
   @Override
@@ -76,7 +90,7 @@ public final class HexHomeActivity extends Activity {
         == PackageManager.PERMISSION_GRANTED;
   }
   private boolean model() {
-    return ModelStore.inspect(this).state != ModelStore.State.MISSING;
+    return modelAvailable;
   }
   private String readyKey() {
     return mic() + ":" + (HexBubbleService.active != null) + ":" + model();
@@ -325,8 +339,6 @@ public final class HexHomeActivity extends Activity {
   }
   private void scratchpad(boolean actions) {
     card("Scratchpad");
-    if (scratch.isEmpty())
-      scratch = getPreferences(MODE_PRIVATE).getString("scratch_draft", "");
     practice = input(this, "Tap here and press the floating mic to test dictation…");
     practice.setGravity(Gravity.TOP | Gravity.START);
     practice.setMinHeight(d(110));
@@ -336,7 +348,9 @@ public final class HexHomeActivity extends Activity {
       @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
       @Override public void afterTextChanged(android.text.Editable s) {
         scratch = s == null ? "" : s.toString();
-        getPreferences(MODE_PRIVATE).edit().putString("scratch_draft", scratch).apply();
+        handler.removeCallbacks(persistDraft);
+        draftPending = true;
+        handler.postDelayed(persistDraft, 400);
       }
     });
     add(group, practice, 8);
@@ -344,8 +358,6 @@ public final class HexHomeActivity extends Activity {
       LinearLayout r = row(group, 10);
       r.addView(button(this, "Copy", false, () -> copy(practice.getText().toString())));
       r.addView(button(this, "Clear", false, () -> {
-        scratch = "";
-        getPreferences(MODE_PRIVATE).edit().remove("scratch_draft").apply();
         practice.setText("");
       }), afterControl());
     }
