@@ -21,6 +21,14 @@ public final class Placement {
   public JSONObject info() throws JSONException {
     return new JSONObject().put("x", x).put("y", y).put("rev", rev).put("dragging", dragging);
   }
+  public int currentImeBottom(Context c, View strip) {
+    WindowMetrics m = c.getSystemService(WindowManager.class).getCurrentWindowMetrics();
+    int ime = m.getWindowInsets().getInsets(WindowInsets.Type.ime()).bottom;
+    WindowInsets attached = strip == null ? null : strip.getRootWindowInsets();
+    if (attached != null)
+      ime = Math.max(ime, attached.getInsets(WindowInsets.Type.ime()).bottom);
+    return ime;
+  }
   private record Span(int x, int y, boolean imeVisible) {}
   private Span span(View strip) {
     WindowMetrics m =
@@ -28,10 +36,7 @@ public final class Placement {
     Rect r = m.getBounds();
     Insets i = m.getWindowInsets().getInsetsIgnoringVisibility(
         WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-    WindowInsets attached = strip.getRootWindowInsets();
-    int ime = m.getWindowInsets().getInsets(WindowInsets.Type.ime()).bottom;
-    if (attached != null)
-      ime = Math.max(ime, attached.getInsets(WindowInsets.Type.ime()).bottom);
+    int ime = currentImeBottom(strip.getContext(), strip);
     strip.measure(0, 0);
     return new Span(Math.max(1, r.width() - i.left - i.right - strip.getMeasuredWidth()),
         Math.max(1, r.height() - i.top - Math.max(i.bottom, ime) - strip.getMeasuredHeight()), ime > i.bottom);

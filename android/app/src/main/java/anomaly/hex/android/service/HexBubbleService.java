@@ -172,9 +172,27 @@ public final class HexBubbleService extends AccessibilityService {
     super.onConfigurationChanged(c);
     positionStrip();
   }
+  private int lastImeBottom = -1;
+  private final Runnable imeWatch = new Runnable() {
+    @Override
+    public void run() {
+      if (strip == null) {
+        lastImeBottom = -1;
+        return;
+      }
+      int ime = placement.currentImeBottom(HexBubbleService.this, strip);
+      if (ime != lastImeBottom) {
+        lastImeBottom = ime;
+        positionStrip();
+      }
+      main.postDelayed(this, 100);
+    }
+  };
   private void render() {
     WindowManager wm = getSystemService(WindowManager.class);
     if (!connected || !editor || !unlocked() || calling()) {
+      main.removeCallbacks(imeWatch);
+      lastImeBottom = -1;
       if (strip != null) {
         placement.end(false);
         wm.removeView(strip);
@@ -191,12 +209,16 @@ public final class HexBubbleService extends AccessibilityService {
               | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
           PixelFormat.TRANSLUCENT);
       params.setTitle("Hex dictation");
-      params.setFitInsetsTypes(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+      params.setFitInsetsTypes(WindowInsets.Type.systemBars()
+          | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
     }
     strip.update(state, words, !passageId().isEmpty());
     if (fresh) {
       placement.layout(strip, params);
       wm.addView(strip, params);
+      lastImeBottom = placement.currentImeBottom(this, strip);
+      main.removeCallbacks(imeWatch);
+      main.postDelayed(imeWatch, 100);
     } else
       positionStrip();
   }

@@ -134,9 +134,18 @@ public final class HexHomeActivity extends Activity {
     root.setOnApplyWindowInsetsListener((v, i) -> {
       android.graphics.Insets pad = i.getInsets(WindowInsets.Type.systemBars()
           | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+      boolean wasIme = imeVisible;
       imeVisible = i.isVisible(WindowInsets.Type.ime());
+      body.setPadding(d(20), 0, d(20), d(imeVisible ? 88 : 24));
       updateNav();
       v.setPadding(pad.left, pad.top, pad.right, pad.bottom);
+      if (imeVisible && !wasIme && practice != null && practice.hasFocus()) {
+        scroll.post(() -> {
+          if (practice != null && practice.getParent() instanceof View parent) {
+            scroll.smoothScrollTo(0, Math.max(0, parent.getTop() - d(12)));
+          }
+        });
+      }
       return i;
     });
     setContentView(root);
@@ -316,15 +325,29 @@ public final class HexHomeActivity extends Activity {
   }
   private void scratchpad(boolean actions) {
     card("Scratchpad");
+    if (scratch.isEmpty())
+      scratch = getPreferences(MODE_PRIVATE).getString("scratch_draft", "");
     practice = input(this, "Tap here and press the floating mic to test dictation…");
     practice.setGravity(Gravity.TOP | Gravity.START);
     practice.setMinHeight(d(110));
     practice.setText(scratch);
+    practice.addTextChangedListener(new android.text.TextWatcher() {
+      @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+      @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+      @Override public void afterTextChanged(android.text.Editable s) {
+        scratch = s == null ? "" : s.toString();
+        getPreferences(MODE_PRIVATE).edit().putString("scratch_draft", scratch).apply();
+      }
+    });
     add(group, practice, 8);
     if (actions) {
       LinearLayout r = row(group, 10);
       r.addView(button(this, "Copy", false, () -> copy(practice.getText().toString())));
-      r.addView(button(this, "Clear", false, () -> practice.setText("")), afterControl());
+      r.addView(button(this, "Clear", false, () -> {
+        scratch = "";
+        getPreferences(MODE_PRIVATE).edit().remove("scratch_draft").apply();
+        practice.setText("");
+      }), afterControl());
     }
   }
   private void general() {
