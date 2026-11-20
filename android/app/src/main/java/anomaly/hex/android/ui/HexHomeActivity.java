@@ -124,12 +124,18 @@ public final class HexHomeActivity extends Activity {
   private void act(String label, boolean primary, Runnable fn) {
     add(group, button(this, label, primary, fn), 8);
   }
+  private boolean imeVisible;
+  private void updateNav() {
+    nav.setVisibility(settings.onboardingCompleted() && !imeVisible ? View.VISIBLE : View.GONE);
+  }
   private void buildShell() {
     root = column();
     root.setBackgroundColor(CANVAS);
     root.setOnApplyWindowInsetsListener((v, i) -> {
       android.graphics.Insets pad = i.getInsets(WindowInsets.Type.systemBars()
           | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+      imeVisible = i.isVisible(WindowInsets.Type.ime());
+      updateNav();
       v.setPadding(pad.left, pad.top, pad.right, pad.bottom);
       return i;
     });
@@ -158,7 +164,11 @@ public final class HexHomeActivity extends Activity {
       item.setContentDescription(tabs[i]);
       item.setFocusable(true);
       item.addView(new TabIcon(this, i), d(46), d(26));
-      item.addView(text(this, tabs[i], 12, MUTED));
+      TextView label = text(this, tabs[i], 12, MUTED);
+      label.setGravity(Gravity.CENTER_HORIZONTAL);
+      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+      lp.topMargin = d(4);
+      item.addView(label, lp);
       item.setOnClickListener(v -> {
         if (tab != dest) {
           tab = dest;
@@ -182,7 +192,7 @@ public final class HexHomeActivity extends Activity {
       scroll.scrollTo(0, 0);
     screen = next;
     footer.setVisibility(setup ? View.VISIBLE : View.GONE);
-    nav.setVisibility(setup ? View.GONE : View.VISIBLE);
+    updateNav();
     if (setup)
       add(header, text(this, "Hex   /   " + (settings.onboardingPage() + 1) + " of 3", 12, MUTED),
           0);
@@ -212,9 +222,14 @@ public final class HexHomeActivity extends Activity {
     }
   }
   private void divider(LinearLayout box) {
+    divider(box, box == group && box.getChildCount() == 1 ? 10 : 0);
+  }
+  private void divider(LinearLayout box, int gap) {
     View line = new View(this);
     line.setBackgroundColor(LINE);
-    box.addView(line, -1, d(1));
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, d(1));
+    lp.topMargin = d(gap);
+    box.addView(line, lp);
   }
   private void footerAction(String label, Runnable back, Runnable forward, boolean enabled) {
     if (back != null)
@@ -251,13 +266,21 @@ public final class HexHomeActivity extends Activity {
     }
   }
   private LinearLayout row(LinearLayout parent) {
+    return row(parent, 0);
+  }
+  private LinearLayout row(LinearLayout parent, int gap) {
     LinearLayout r = new LinearLayout(this);
     r.setGravity(Gravity.CENTER_VERTICAL);
-    add(parent, r, 0);
+    add(parent, r, gap);
     return r;
   }
   private void flexible(LinearLayout r, View v) {
     r.addView(v, new LinearLayout.LayoutParams(0, -2, 1));
+  }
+  private LinearLayout.LayoutParams afterControl() {
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+    lp.setMarginStart(d(8));
+    return lp;
   }
   private void status(String name, String value) {
     divider(group);
@@ -299,9 +322,9 @@ public final class HexHomeActivity extends Activity {
     practice.setText(scratch);
     add(group, practice, 8);
     if (actions) {
-      LinearLayout r = row(group);
+      LinearLayout r = row(group, 10);
       r.addView(button(this, "Copy", false, () -> copy(practice.getText().toString())));
-      r.addView(button(this, "Clear", false, () -> practice.setText("")));
+      r.addView(button(this, "Clear", false, () -> practice.setText("")), afterControl());
     }
   }
   private void general() {
@@ -321,7 +344,9 @@ public final class HexHomeActivity extends Activity {
     LinearLayout r = row(group);
     r.setPadding(0, d(12), 0, d(12));
     LinearLayout labels = column();
-    flexible(r, labels);
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
+    lp.setMarginEnd(d(12));
+    r.addView(labels, lp);
     add(labels, text(this, label, 16, TEXT), 0);
     add(labels, text(this, summary, 14, MUTED), 3);
     Switch toggle = new Switch(this);
@@ -336,6 +361,26 @@ public final class HexHomeActivity extends Activity {
     r.addView(toggle);
     r.setOnClickListener(v -> toggle.toggle());
   }
+  private void radioRow(String label, String summary, boolean checked, Runnable select) {
+    divider(group);
+    LinearLayout r = row(group);
+    r.setPadding(0, d(10), 0, d(10));
+    r.setMinimumHeight(d(52));
+    RadioButton b = new RadioButton(this);
+    b.setButtonTintList(android.content.res.ColorStateList.valueOf(PRIMARY));
+    b.setChecked(checked);
+    b.setContentDescription(summary == null ? label : label + ". " + summary);
+    r.addView(b);
+    LinearLayout labels = column();
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
+    lp.setMarginStart(d(8));
+    r.addView(labels, lp);
+    add(labels, text(this, label, 16, TEXT), 0);
+    if (summary != null)
+      add(labels, text(this, summary, 14, MUTED), 2);
+    b.setOnClickListener(v -> { select.run(); render(); });
+    r.setOnClickListener(v -> b.performClick());
+  }
   private void output() {
     title("Output", "Choose how Hex writes your words.");
     card("Transcript style");
@@ -345,27 +390,12 @@ public final class HexHomeActivity extends Activity {
         case CASUAL -> "Relaxed, conversational text.";
         case NOTES -> "Format speech as notes.";
         case VERBATIM -> "Keep words as recognized.";
-      }; divider(group);
-      LinearLayout r = row(group);
-      r.setMinimumHeight(d(52));
-      RadioButton b = new RadioButton(this);
-      b.setButtonTintList(android.content.res.ColorStateList.valueOf(PRIMARY));
-      b.setChecked(settings.style() == s);
-      b.setContentDescription(s.label() + ". " + summary);
-      r.addView(b);
-      LinearLayout labels = column();
-      flexible(r, labels);
-      add(labels, text(this, s.label(), 16, TEXT), 0);
-      add(labels, text(this, summary, 14, MUTED), 2);
-      b.setOnClickListener(v -> {
-        settings.setStyle(s);
-        render();
-      });
-      r.setOnClickListener(v -> b.performClick());
+      };
+      radioRow(s.label(), summary, settings.style() == s, () -> settings.setStyle(s));
     }
     card("Custom vocabulary");
     note("Add names or terms you want Hex to recognize.");
-    LinearLayout form = row(group);
+    LinearLayout form = row(group, 10);
     EditText entry = input(this, "New term");
     entry.setSingleLine();
     flexible(form, entry);
@@ -374,15 +404,16 @@ public final class HexHomeActivity extends Activity {
         render();
       else
         entry.setError("Enter a new term within the vocabulary limit");
-    }));
+    }), afterControl());
     for (String term : vocabulary.terms()) {
-      divider(group);
+      divider(group, 10);
       LinearLayout r = row(group);
       flexible(r, text(this, term, 15, TEXT));
       Button remove = button(this, "×", false, () -> {
         vocabulary.removeTerm(term);
         render();
       });
+      remove.setPadding(0, 0, 0, 0);
       remove.setContentDescription("Remove " + term);
       r.addView(remove, d(48), d(48));
     }
@@ -390,19 +421,8 @@ public final class HexHomeActivity extends Activity {
   private void history() {
     title("History", "Dictations confirmed in the text field.");
     card("Keep dictations");
-    for (HistoryRetention r : HistoryRetention.values()) {
-      RadioButton b = new RadioButton(this);
-      b.setMinHeight(d(48));
-      b.setButtonTintList(android.content.res.ColorStateList.valueOf(PRIMARY));
-      b.setText(r.label());
-      b.setTextColor(TEXT);
-      b.setChecked(r == settings.historyRetention());
-      b.setOnClickListener(v -> {
-        settings.setHistoryRetention(r);
-        render();
-      });
-      add(group, b, 0);
-    }
+    for (HistoryRetention r : HistoryRetention.values())
+      radioRow(r.label(), null, r == settings.historyRetention(), () -> settings.setHistoryRetention(r));
     history.pruneExpired(settings.historyRetention());
     card("Recent dictations");
     EditText search = input(this, "Search dictations…");
@@ -442,11 +462,12 @@ public final class HexHomeActivity extends Activity {
     if (rows.isEmpty())
       add(results, text(this, "No matching dictations.", 15, MUTED), 8);
     for (var e : rows) {
-      divider(results);
+      divider(results, 10);
       TextView words = text(this, e.finalText, 16, TEXT);
       words.setTextIsSelectable(true);
       add(results, words, 10);
-      LinearLayout r = row(results);
+      LinearLayout r = row(results, 6);
+      ((LinearLayout.LayoutParams) r.getLayoutParams()).bottomMargin = d(4);
       String date = java.text.DateFormat
                         .getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
                         .format(new java.util.Date(e.createdAtMs));

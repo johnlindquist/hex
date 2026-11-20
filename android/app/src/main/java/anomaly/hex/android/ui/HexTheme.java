@@ -8,8 +8,8 @@ public final class HexTheme {
   private HexTheme() {}
   public static final int CANVAS = 0xff0a0b0d, SURFACE = 0xff111316, CARD = 0xff17191d,
                           CONTROL = 0xff202329, TEXT = 0xf0ffffff, MUTED = 0x8fffffff,
-                          FAINT = 0x5cffffff, LINE = 0x0fffffff, BORDER = 0x1cffffff,
-                          PRIMARY = 0xfff0f2f5, DANGER = 0xffe54d42, MIC = 0xffff9500,
+                          FAINT = 0x78ffffff, LINE = 0x0fffffff, BORDER = 0x1cffffff,
+                          PRIMARY = 0xfff0f2f5, DANGER = 0xffff6961, MIC = 0xffff9500,
                           SUCCESS = 0xff34c759;
   public static int dp(Context c, float v) {
     return Math.round(c.getResources().getDisplayMetrics().density * v);

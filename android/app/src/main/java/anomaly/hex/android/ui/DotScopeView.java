@@ -20,7 +20,9 @@ public final class DotScopeView extends View {
   }
   public void update(boolean recording, int[] targets) {
     live = recording;
-    if (targets != null)
+    if (!recording)
+      java.util.Arrays.fill(levels, 0f);
+    else if (targets != null)
       for (int i = 0; i < levels.length; i++)
         levels[i] = i < targets.length ? Math.min(1f, Math.max(0, targets[i]) / 100f) : 0;
     invalidate();

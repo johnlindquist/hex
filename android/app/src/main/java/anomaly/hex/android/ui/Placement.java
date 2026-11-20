@@ -21,7 +21,8 @@ public final class Placement {
   public JSONObject info() throws JSONException {
     return new JSONObject().put("x", x).put("y", y).put("rev", rev).put("dragging", dragging);
   }
-  private Point span(View strip) {
+  private record Span(int x, int y, boolean imeVisible) {}
+  private Span span(View strip) {
     WindowMetrics m =
         strip.getContext().getSystemService(WindowManager.class).getCurrentWindowMetrics();
     Rect r = m.getBounds();
@@ -32,28 +33,28 @@ public final class Placement {
     if (attached != null)
       ime = Math.max(ime, attached.getInsets(WindowInsets.Type.ime()).bottom);
     strip.measure(0, 0);
-    return new Point(Math.max(1, r.width() - i.left - i.right - strip.getMeasuredWidth()),
-        Math.max(1, r.height() - i.top - Math.max(i.bottom, ime) - strip.getMeasuredHeight()));
+    return new Span(Math.max(1, r.width() - i.left - i.right - strip.getMeasuredWidth()),
+        Math.max(1, r.height() - i.top - Math.max(i.bottom, ime) - strip.getMeasuredHeight()), ime > i.bottom);
   }
   public void layout(View strip, WindowManager.LayoutParams p) {
-    Point s = span(strip);
+    Span s = span(strip);
     p.gravity = Gravity.LEFT | Gravity.TOP;
     p.x = Math.round(s.x * x / 1000f);
     // Leave the bottom action row reachable until the user explicitly places the strip.
-    int parked = Math.max(0, s.y - HexTheme.dp(strip.getContext(), 76));
-    p.y = !dragging && "default".equals(rev) ? parked : Math.round(s.y * y / 1000f);
-    if (!dragging && "default".equals(rev))
-      y = Math.round(1000f * parked / s.y);
+    int parked = Math.max(0, s.y - HexTheme.dp(strip.getContext(), s.imeVisible ? 12 : 76));
+    int effectiveY = !dragging && "default".equals(rev) ? parked : Math.round(s.y * y / 1000f);
+    p.y = effectiveY;
   }
-  public void begin(float a, float b) {
+  public void begin(View strip, float a, float b) {
     startX = x;
-    startY = y;
+    WindowManager.LayoutParams p = (WindowManager.LayoutParams) strip.getLayoutParams();
+    startY = "default".equals(rev) ? Math.round(1000f * p.y / span(strip).y) : y;
     rawX = a;
     rawY = b;
     dragging = true;
   }
   public void drag(View strip, float a, float b) {
-    Point s = span(strip);
+    Span s = span(strip);
     x = Math.max(0, Math.min(1000, startX + Math.round((a - rawX) * 1000 / s.x)));
     y = Math.max(0, Math.min(1000, startY + Math.round((b - rawY) * 1000 / s.y)));
   }

@@ -16,7 +16,6 @@ public final class MicStrip extends LinearLayout {
     setGravity(Gravity.CENTER_VERTICAL);
     setBackground(shape(h, SURFACE, 28, BORDER));
     setElevation(dp(h, 6));
-    setPadding(dp(h, 10), dp(h, 3), dp(h, 4), dp(h, 3));
     setOnApplyWindowInsetsListener((view, insets) -> {
       int bottom = insets.getInsets(WindowInsets.Type.ime()).bottom;
       if (bottom != imeBottom) {
@@ -29,6 +28,7 @@ public final class MicStrip extends LinearLayout {
     scope = new DotScopeView(h);
     addView(scope, dp(h, 86), dp(h, 32));
     count = text(h, "", 12, MUTED);
+    count.setPadding(dp(h, 6), 0, dp(h, 2), 0);
     addView(count);
     action = tile("✓", "Finish dictation", () -> {
       String code = h.isBusy() ? h.stop() : h.start();
@@ -62,7 +62,7 @@ public final class MicStrip extends LinearLayout {
             if (!moved
                 && Math.hypot(e.getRawX() - x, e.getRawY() - y)
                     > ViewConfiguration.get(getContext()).getScaledTouchSlop()) {
-              host.placement.begin(x, y);
+              host.placement.begin(MicStrip.this, x, y);
               moved = true;
             }
             if (moved) {
@@ -86,12 +86,13 @@ public final class MicStrip extends LinearLayout {
   }
   public void update(String state, int words, boolean canReview) {
     boolean busy = !state.equals("idle"), live = state.equals("listening");
+    setPadding(dp(host, busy ? 4 : 12), dp(host, 3), dp(host, 4), dp(host, 3));
     scope.update(live, null);
     cancel.setVisibility(busy ? VISIBLE : GONE);
     count.setVisibility(words > 0 ? VISIBLE : GONE);
     count.setText(Integer.toString(words));
     count.setContentDescription(words + " confirmed words");
-    action.setText(!busy ? "●" : live ? "✓" : "…");
+    action.setText(!busy ? "●" : live ? "✓" : "⋯");
     action.setTextColor(busy ? TEXT : MIC);
     action.setContentDescription(!busy ? "Start dictation"
             : live                     ? "Finish dictation"

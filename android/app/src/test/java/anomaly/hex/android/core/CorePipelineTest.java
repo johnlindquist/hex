@@ -42,6 +42,7 @@ public class CorePipelineTest {
         assertFalse(again.hapticsEnabled()); assertEquals(3,again.onboardingPage()); assertEquals(HistoryRetention.OFF,again.historyRetention());
         assertEquals(30L*86400000, HistoryRetention.DAYS_30.millis());
         for (TranscriptStyle t:TranscriptStyle.values()) assertEquals(t,TranscriptStyle.fromId(t.id()));
+        assertEquals(HistoryRetention.DAYS_7, HistoryRetention.fromId(null));
         for (HistoryRetention r:HistoryRetention.values()) assertEquals(r,HistoryRetention.fromId(r.id()));
     }
     @Test public void labsIndependentAndStaleWritesRejected() {
