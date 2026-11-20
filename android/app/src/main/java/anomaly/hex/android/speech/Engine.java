@@ -13,6 +13,7 @@ public final class Engine {
   private static Engine shared;
   private final Context ctx;
   private long prepMs;
+  private static final short[] EMPTY = new short[0];
   private float[] scratch;
   private final AtomicBoolean warming = new AtomicBoolean();
 
@@ -42,17 +43,24 @@ public final class Engine {
   }
 
   public synchronized String transcribe(short[] samples, int length) {
-    if (length < 2000) return "";
+    OfflineRecognizerResult r = decodeSegments(EMPTY, samples, length, EMPTY);
+    return r == null ? "" : r.getText().trim();
+  }
+
+  synchronized OfflineRecognizerResult decodeSegments(short[] left, short[] core, int coreLen, short[] right) {
+    int length = left.length + coreLen + right.length;
+    if (length < 2000) return null;
     // sherpa accepts the whole array, never a slice: do not feed a stale tail.
     if (scratch == null || scratch.length != length) scratch = new float[length];
     float peak = 0;
+    int coreEnd = left.length + coreLen;
     for (int i = 0; i < length; i++) {
-      float x = samples[i] / 32768f;
+      short sample = i < left.length ? left[i] : i < coreEnd ? core[i - left.length] : right[i - coreEnd];
+      float x = sample / 32768f;
       scratch[i] = x;
       peak = Math.max(peak, Math.abs(x));
     }
-    OfflineRecognizerResult r = decode(scratch, peak);
-    return r == null ? "" : r.getText().trim();
+    return decode(scratch, peak);
   }
 
   private volatile OfflineRecognizer recognizer;

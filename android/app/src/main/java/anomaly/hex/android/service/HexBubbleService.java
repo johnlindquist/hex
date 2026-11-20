@@ -184,6 +184,8 @@ public final class HexBubbleService extends AccessibilityService {
     super.onConfigurationChanged(c);
     positionStrip();
   }
+  private static final int FAST_IME_TICKS = 15;
+  private int fastImeTicks;
   private int lastImeBottom = -1;
   private final Runnable imeWatch = new Runnable() {
     @Override
@@ -193,11 +195,13 @@ public final class HexBubbleService extends AccessibilityService {
         return;
       }
       int ime = placement.currentImeBottom(HexBubbleService.this, strip);
+      if (fastImeTicks > 0) fastImeTicks--;
       if (ime != lastImeBottom) {
+        fastImeTicks = FAST_IME_TICKS;
         lastImeBottom = ime;
         positionStrip();
       }
-      main.postDelayed(this, 100);
+      main.postDelayed(this, fastImeTicks > 0 ? 100 : 500);
     }
   };
   private void render() {
@@ -230,6 +234,7 @@ public final class HexBubbleService extends AccessibilityService {
       wm.addView(strip, params);
       lastImeBottom = placement.currentImeBottom(this, strip);
       main.removeCallbacks(imeWatch);
+      fastImeTicks = FAST_IME_TICKS;
       main.postDelayed(imeWatch, 100);
     } else
       positionStrip();

@@ -48,7 +48,11 @@ public final class SpeechSession {
     OfflineRecognizerResult run(float[] pcm);
   }
 
-  private final Decode decode;
+  private final SegmentDecode decode;
+
+  private interface SegmentDecode {
+    OfflineRecognizerResult run(short[] left, short[] core, int coreLen, short[] right);
+  }
   final Source source;
   final Sink sink;
   final PostProcessor processor;
@@ -95,10 +99,21 @@ public final class SpeechSession {
 
   public SpeechSession(
       Context ctx, Engine engine, Source source, PostProcessor processor, Sink sink) {
-    this(engine::decode, source == null ? () -> new Microphone(ctx) : source, processor, sink);
+    this(engine::decodeSegments, source == null ? () -> new Microphone(ctx) : source, processor, sink);
   }
 
   SpeechSession(Decode decode, Source source, PostProcessor processor, Sink sink) {
+    this((left, core, coreLen, right) -> {
+      float[] pcm = new float[left.length + coreLen + right.length];
+      int j = 0;
+      for (short x : left) pcm[j++] = x / 32768f;
+      for (int i = 0; i < coreLen; i++) pcm[j++] = core[i] / 32768f;
+      for (short x : right) pcm[j++] = x / 32768f;
+      return decode.run(pcm);
+    }, source, processor, sink);
+  }
+
+  private SpeechSession(SegmentDecode decode, Source source, PostProcessor processor, Sink sink) {
     this.decode = decode;
     this.source = source;
     this.processor = processor;
@@ -146,7 +161,7 @@ public final class SpeechSession {
   }
 
   final class Part {
-    short[] pcm = new short[HARD + 640];
+    short[] pcm = new short[2 * RATE];
     short[] left, right = EMPTY;
     short[] block = new short[5120];
     int n, buf, seq, quiet;
@@ -162,6 +177,7 @@ public final class SpeechSession {
     }
 
     void add(short[] src, int len) throws Exception {
+      if (n + len > pcm.length) pcm = Arrays.copyOf(pcm, Math.min(HARD + 640, pcm.length * 2));
       System.arraycopy(src, 0, pcm, n, len);
       n += len;
       for (int i = 0; i < len; i++) {
@@ -363,14 +379,14 @@ public final class SpeechSession {
     int stamp = p.stamp;
     p.attempted = stamp;
     probing = true;
-    short[] snapshot = Arrays.copyOf(p.pcm, p.n);
+    // Capture only appends, so this prefix stays immutable even if Part grows.
+    short[] snapshot = p.pcm;
+    int length = p.n;
     decoder.execute(
         () -> {
           try {
             if (stop || p.sealed || p.stamp != stamp) return;
-            float[] pcm = new float[snapshot.length];
-            for (int i = 0; i < pcm.length; i++) pcm[i] = snapshot[i] / 32768f;
-            OfflineRecognizerResult r = decode.run(pcm);
+            OfflineRecognizerResult r = decode.run(EMPTY, snapshot, length, EMPTY);
             if (r != null && p.stamp == stamp && !p.sealed && SentenceEnds.complete(r.getText())) {
               p.guess = r;
               p.approved = stamp;
@@ -432,13 +448,8 @@ public final class SpeechSession {
             if (!interruption.isEmpty()) {
               return;
             }
-            float[] pcm = new float[p.left.length + p.n + p.right.length];
-            int j = 0;
-            for (short x : p.left) pcm[j++] = x / 32768f;
-            for (int i = 0; i < p.n; i++) pcm[j++] = p.pcm[i] / 32768f;
-            for (short x : p.right) pcm[j++] = x / 32768f;
             OfflineRecognizerResult result =
-                p.natural && p.left.length == 0 && p.guess != null ? p.guess : decode.run(pcm);
+                p.natural && p.left.length == 0 && p.guess != null ? p.guess : decode.run(p.left, p.pcm, p.n, p.right);
             String s =
                 result == null
                     ? ""
@@ -446,9 +457,7 @@ public final class SpeechSession {
             if (s == null) {
               fallback++;
               join.tail.clear();
-              float[] core = new float[p.n];
-              for (int i = 0; i < p.n; i++) core[i] = p.pcm[i] / 32768f;
-              OfflineRecognizerResult retry = decode.run(core);
+              OfflineRecognizerResult retry = decode.run(EMPTY, p.pcm, p.n, EMPTY);
               s = retry == null ? "" : retry.getText().trim();
             }
             if (s.isEmpty()) {
