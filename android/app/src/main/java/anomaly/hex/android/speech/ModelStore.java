@@ -47,8 +47,23 @@ public final class ModelStore {
     return new Info(State.READY_EXTERNAL, dir, bytes);
   }
 
-  public static Info inspect(Context ctx) {
+  private static Info cached;
+  private static File cachedDir;
+  private static long cachedAt, cachedModified;
+
+  public static synchronized Info inspect(Context ctx) {
     File dir = externalDir(ctx);
+    long modified = dir.lastModified(), now = android.os.SystemClock.elapsedRealtime();
+    if (cached != null && cached.state != State.MISSING && dir.equals(cachedDir)
+        && modified == cachedModified && now - cachedAt < 5000) return cached;
+    cached = inspectUncached(ctx, dir);
+    cachedDir = dir;
+    cachedAt = now;
+    cachedModified = modified;
+    return cached;
+  }
+
+  private static Info inspectUncached(Context ctx, File dir) {
     Info info = external(dir);
     if (info != null) return info;
     try {

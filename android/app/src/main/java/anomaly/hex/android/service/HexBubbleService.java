@@ -88,6 +88,7 @@ public final class HexBubbleService extends AccessibilityService {
         loseEditor();
         editor = eligible(e);
         if (editor) {
+          Engine.get(HexBubbleService.this).prewarmAsync();
           target = UUID.randomUUID().toString();
           pkg = e.packageName;
           selectionA = e.initialSelStart;
@@ -119,6 +120,7 @@ public final class HexBubbleService extends AccessibilityService {
       registerReceiver(screen, new IntentFilter(Intent.ACTION_SCREEN_OFF), RECEIVER_NOT_EXPORTED);
       getSystemService(AudioManager.class).addOnModeChangedListener(getMainExecutor(), mode);
     }
+    Engine.get(this).prewarmAsync();
     connected = true;
     active = this;
     render();
@@ -152,6 +154,16 @@ public final class HexBubbleService extends AccessibilityService {
         ? im.getCurrentInputConnection()
         : null;
   }
+  private final Runnable unloadIdle = () -> {
+    if (!isBusy()) Engine.get(this).releaseIfIdle();
+  };
+
+  @Override
+  public void onTrimMemory(int level) {
+    super.onTrimMemory(level);
+    if (!isBusy() && level >= TRIM_MEMORY_BACKGROUND) Engine.get(this).releaseIfIdle();
+  }
+
   public boolean isBusy() {
     return take != null;
   }
@@ -352,6 +364,7 @@ public final class HexBubbleService extends AccessibilityService {
     words = 0;
     state = "starting";
     outcome = "none";
+    main.removeCallbacks(unloadIdle);
     take = t;
     last = t.session;
     vibrate();
@@ -379,6 +392,7 @@ public final class HexBubbleService extends AccessibilityService {
     if (t == null)
       return;
     take = null;
+    main.postDelayed(unloadIdle, 120_000);
     pending.clear();
     confirming = false;
     t.session.cancel();
@@ -404,6 +418,7 @@ public final class HexBubbleService extends AccessibilityService {
     } else if (t.finished) {
       deleteDraft(t);
       take = null;
+      main.postDelayed(unloadIdle, 120_000);
       state = "idle";
       outcome = words > 0 ? "inserted" : "no_speech";
       render();

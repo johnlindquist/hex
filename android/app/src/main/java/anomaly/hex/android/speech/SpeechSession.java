@@ -52,7 +52,11 @@ public final class SpeechSession {
   final Source source;
   final Sink sink;
   final PostProcessor processor;
-  final ExecutorService decoder = Executors.newSingleThreadExecutor();
+  private static final ExecutorService decoder = Executors.newSingleThreadExecutor(r -> {
+    Thread t = new Thread(r, "hex-decoder");
+    t.setDaemon(true);
+    return t;
+  });
   final MicEnvelope envelope = new MicEnvelope();
   private volatile boolean running;
   private boolean started;
@@ -199,6 +203,9 @@ public final class SpeechSession {
   }
 
   void capture() {
+    try {
+      android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+    } catch (Throwable ignored) { /* Best effort on this platform. */ }
     Input input = null;
     String failure = "";
     try {
@@ -273,7 +280,6 @@ public final class SpeechSession {
             Arrays.fill(pre, (short) 0);
             nextLeft = EMPTY;
             running = false;
-            decoder.shutdown();
             sink.onStateChanged(
                 discard ? "cancelled" : interruption.isEmpty() ? "finished" : "error");
           }

@@ -1,6 +1,9 @@
 package anomaly.hex.android.speech;
 
+import android.content.ComponentCallbacks2;
 import android.content.Context;
+import android.content.res.Configuration;
+import java.util.concurrent.atomic.AtomicBoolean;
 import android.content.res.AssetManager;
 import android.os.SystemClock;
 import com.k2fsa.sherpa.onnx.*;
@@ -10,9 +13,19 @@ public final class Engine {
   private static Engine shared;
   private final Context ctx;
   private long prepMs;
+  private float[] scratch;
+  private final AtomicBoolean warming = new AtomicBoolean();
 
   private Engine(Context ctx) {
     this.ctx = ctx.getApplicationContext();
+    this.ctx.registerComponentCallbacks(new ComponentCallbacks2() {
+      public void onConfigurationChanged(Configuration config) {}
+      public void onLowMemory() { releaseIfIdle(); }
+      public void onTrimMemory(int level) {
+        if (level >= TRIM_MEMORY_BACKGROUND || level == TRIM_MEMORY_RUNNING_CRITICAL
+            || level == TRIM_MEMORY_RUNNING_LOW) releaseIfIdle();
+      }
+    });
   }
 
   public static synchronized Engine get(Context ctx) {
@@ -29,17 +42,56 @@ public final class Engine {
   }
 
   public synchronized String transcribe(short[] samples, int length) {
-    float[] pcm = new float[length];
-    for (int i = 0; i < length; i++) pcm[i] = samples[i] / 32768f;
-    OfflineRecognizerResult r = decode(pcm);
+    if (length < 2000) return "";
+    // sherpa accepts the whole array, never a slice: do not feed a stale tail.
+    if (scratch == null || scratch.length != length) scratch = new float[length];
+    float peak = 0;
+    for (int i = 0; i < length; i++) {
+      float x = samples[i] / 32768f;
+      scratch[i] = x;
+      peak = Math.max(peak, Math.abs(x));
+    }
+    OfflineRecognizerResult r = decode(scratch, peak);
     return r == null ? "" : r.getText().trim();
   }
 
-  private OfflineRecognizer recognizer;
+  private volatile OfflineRecognizer recognizer;
+
+  public void prewarmAsync() {
+    if (recognizer != null || !warming.compareAndSet(false, true)) return;
+    Thread thread = new Thread(() -> {
+      try {
+        synchronized (this) {
+          if (recognizer == null && isAvailable()) load();
+        }
+      } catch (RuntimeException e) {
+        android.util.Log.w("HexEngine", "Model prewarm failed", e);
+      } finally {
+        warming.set(false);
+      }
+    }, "hex-model-warm");
+    thread.setDaemon(true);
+    thread.start();
+  }
+
+  public synchronized boolean releaseIfIdle() {
+    scratch = null;
+    prepMs = 0;
+    if (recognizer == null) return false;
+    recognizer.release();
+    recognizer = null;
+    return true;
+  }
+
+  public void releaseIfIdleForTest() { releaseIfIdle(); }
 
   synchronized OfflineRecognizerResult decode(float[] pcm) {
     float peak = 0;
     for (float x : pcm) peak = Math.max(peak, Math.abs(x));
+    return decode(pcm, peak);
+  }
+
+  private OfflineRecognizerResult decode(float[] pcm, float peak) {
     if (pcm.length < 2000 || peak < .0005f) return null;
     if (peak < .25f) {
       float gain = Math.min(12, .5f / peak);
@@ -73,7 +125,7 @@ public final class Engine {
       c.getModelConfig().setTransducer(t);
       c.getModelConfig().setModelType("nemo_transducer");
       c.getModelConfig().setTokens(prefix + "tokens.txt");
-      c.getModelConfig().setNumThreads(2);
+      c.getModelConfig().setNumThreads(Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors())));
       recognizer = new OfflineRecognizer(assets, c);
       prepMs = SystemClock.elapsedRealtime() - start;
     }
