@@ -10,6 +10,14 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 public class SpeechPipelineTest {
+  @Test
+  public void recognizerThreadCountReservesACoreWithinBounds() {
+    assertEquals(2, Engine.optimalThreads(1));
+    assertEquals(2, Engine.optimalThreads(2));
+    assertEquals(3, Engine.optimalThreads(4));
+    assertEquals(4, Engine.optimalThreads(8));
+  }
+
   @Rule public TemporaryFolder tmp = new TemporaryFolder();
 
   @Test

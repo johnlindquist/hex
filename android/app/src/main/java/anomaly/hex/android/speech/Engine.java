@@ -116,6 +116,10 @@ public final class Engine {
     }
   }
 
+  static int optimalThreads(int availableProcessors) {
+    return Math.max(2, Math.min(4, availableProcessors - 1));
+  }
+
   private void load() {
     if (recognizer == null) {
       long start = SystemClock.elapsedRealtime();
@@ -133,7 +137,7 @@ public final class Engine {
       c.getModelConfig().setTransducer(t);
       c.getModelConfig().setModelType("nemo_transducer");
       c.getModelConfig().setTokens(prefix + "tokens.txt");
-      c.getModelConfig().setNumThreads(Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors())));
+      c.getModelConfig().setNumThreads(optimalThreads(Runtime.getRuntime().availableProcessors()));
       recognizer = new OfflineRecognizer(assets, c);
       prepMs = SystemClock.elapsedRealtime() - start;
     }
