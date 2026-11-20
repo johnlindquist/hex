@@ -9,6 +9,12 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class CorePipelineTest {
+    @Test public void historyLikePatternMatchesLiteralSearchText() {
+        assertEquals("%word%",HexHistory.likePattern("word"));
+        assertEquals("%50\\%\\_off\\\\%",HexHistory.likePattern("50%_off\\"));
+        assertEquals("%\\\\\\%%",HexHistory.likePattern("\\%"));
+    }
+
     // Exercise the real persistence keys/revision paths without booting an emulator.
     private static final class Memory extends ContextWrapper {
         private final Map<String,SharedPreferences> files=new HashMap<>();

@@ -20,7 +20,9 @@ public final class HexHistory {
         }
     }
     private static final class Store extends SQLiteOpenHelper {
-        Store(Context ctx) { super(ctx,"hex_history.db",null,1); }
+        private long lastPruneMs;
+        private HistoryRetention lastRetention;
+        Store(Context ctx) { super(ctx,"hex_history.db",null,1); setWriteAheadLoggingEnabled(true); }
         @Override public void onCreate(SQLiteDatabase db) {
             db.execSQL("CREATE TABLE entries(id INTEGER PRIMARY KEY AUTOINCREMENT,raw TEXT NOT NULL,final TEXT NOT NULL,style TEXT NOT NULL,duration INTEGER NOT NULL,created INTEGER NOT NULL,bytes INTEGER NOT NULL)");
             db.execSQL("CREATE INDEX history_age ON entries(created)");
@@ -67,25 +69,48 @@ public final class HexHistory {
             db.setTransactionSuccessful(); return id;
         } finally { db.endTransaction(); }
     }
+    static String likePattern(String q) {
+        return "%"+q.replace("\\","\\\\").replace("%","\\%").replace("_","\\_")+"%";
+    }
     public synchronized List<Entry> list(String query,int limit) {
-        pruneExpired(settings.historyRetention());
+        pruneOnRead();
         int max=Math.min(200,Math.max(0,limit)); List<Entry> result=new ArrayList<>();
         String q=query==null?"":query.strip().toLowerCase(Locale.ROOT);
-        try (Cursor c=store.getReadableDatabase().rawQuery("SELECT id,raw,final,style,duration,created FROM entries ORDER BY id DESC",null)) {
-            while (result.size()<max && c.moveToNext()) {
-                Entry e=new Entry(c);
-                if (q.isEmpty() || e.rawText.toLowerCase(Locale.ROOT).contains(q) || e.finalText.toLowerCase(Locale.ROOT).contains(q)) result.add(e);
-            }
+        String sql="SELECT id,raw,final,style,duration,created FROM entries";
+        String[] args={Integer.toString(max)};
+        if (!q.isEmpty()) {
+            String pattern=likePattern(q);
+            sql+=" WHERE lower(raw) LIKE ? ESCAPE '\\' OR lower(final) LIKE ? ESCAPE '\\'";
+            args=new String[]{pattern,pattern,args[0]};
+        }
+        try (Cursor c=store.getReadableDatabase().rawQuery(sql+" ORDER BY id DESC LIMIT ?",args)) {
+            while (c.moveToNext()) result.add(new Entry(c));
         }
         return result;
     }
     private static int prune(SQLiteDatabase db,HistoryRetention retention,long now) {
         return retention==HistoryRetention.OFF?0:db.delete("entries","created < ?",new String[]{Long.toString(now-(retention==null?HistoryRetention.DAYS_7:retention).millis())});
     }
-    public synchronized int pruneExpired(HistoryRetention retention) { return prune(store.getWritableDatabase(),retention,System.currentTimeMillis()); }
+    private void pruneOnRead() {
+        synchronized (store) {
+            HistoryRetention retention=settings.historyRetention();
+            long elapsed=System.currentTimeMillis()-store.lastPruneMs;
+            if (retention==store.lastRetention && elapsed>=0 && elapsed<60_000) return;
+            pruneExpired(retention);
+        }
+    }
+    public int pruneExpired(HistoryRetention retention) {
+        synchronized (store) {
+            long now=System.currentTimeMillis();
+            int removed=prune(store.getWritableDatabase(),retention,now);
+            store.lastPruneMs=now;
+            store.lastRetention=retention;
+            return removed;
+        }
+    }
     public synchronized int clearAll() { return store.getWritableDatabase().delete("entries",null,null); }
     public synchronized int count() {
-        pruneExpired(settings.historyRetention());
+        pruneOnRead();
         return (int)DatabaseUtils.longForQuery(store.getReadableDatabase(),"SELECT n FROM totals",null);
     }
 }
