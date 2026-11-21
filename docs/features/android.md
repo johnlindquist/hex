@@ -4,10 +4,10 @@ Internal ARM64 debug app, Android 13+. The Android settings and Accessibility se
 
 ```ts
 Prepare Hex on the phone                              // android.setup
-├── Install the debug APK → push the verified Parakeet files into private storage
+├── Install the debug APK → tap Download in Setup for a pinned, SHA-256-verified Parakeet TDT model
 ├── Open Hex → grant Microphone and enable dictation in Android Accessibility
 ├── Try Hex or General → tap the scratchpad to test with your current keyboard
-├── Dictation setup → import the four offline model files from Android’s document picker instead of using ADB
+├── Dictation setup → import the four offline model files from Android’s document picker as an offline fallback
 ├── General → check readiness, copy or clear scratchpad text
 ├── Audio & language → choose Auto or a Parakeet language for formatting, not recognition
 ├── Always use phone microphone → prefer built-in input when available

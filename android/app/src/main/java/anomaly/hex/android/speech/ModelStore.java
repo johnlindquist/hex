@@ -108,6 +108,8 @@ public final class ModelStore {
     return new Info(State.READY_EXTERNAL, dir, bytes);
   }
 
+  public static synchronized void invalidateCache() { cached = null; }
+
   private static Info cached;
   private static File cachedDir;
   private static long cachedAt, cachedModified;

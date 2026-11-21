@@ -22,6 +22,8 @@ import android.widget.*;
 import anomaly.hex.android.core.*;
 import anomaly.hex.android.service.HexBubbleService;
 import anomaly.hex.android.speech.ModelStore;
+import anomaly.hex.android.speech.ModelDownloader;
+import java.util.function.Consumer;
 
 public final class HexHomeActivity extends Activity {
   private HexSettings settings;
@@ -39,6 +41,17 @@ public final class HexHomeActivity extends Activity {
   private final String[] tabs = {"General", "Output", "History", "Labs"};
   private final Handler handler = new Handler(Looper.getMainLooper());
   private boolean modelAvailable, draftPending;
+  private final ModelDownloader downloader = ModelDownloader.INSTANCE;
+  private ModelDownloader.Progress progress;
+  private TextView downloadLabel;
+  private ProgressBar downloadBar;
+  private final Consumer<ModelDownloader.Progress> listener =
+      next -> handler.postAtTime(() -> {
+        boolean changed = progress.active != next.active || !Objects.equals(progress.error, next.error);
+        progress = next;
+        if (next.complete) modelAvailable = true;
+        if (changed) render(); else updateDownload();
+      }, downloader, SystemClock.uptimeMillis());
   private final Runnable persistDraft = () -> {
     draftPending = false;
     SharedPreferences.Editor edit = getPreferences(MODE_PRIVATE).edit();
@@ -82,12 +95,15 @@ public final class HexHomeActivity extends Activity {
   @Override
   public void onResume() {
     super.onResume();
+    progress = downloader.subscribe(listener);
     modelAvailable = ModelStore.inspect(this).state != ModelStore.State.MISSING;
     render();
     handler.post(poll);
   }
   @Override
   public void onPause() {
+    downloader.unsubscribe(listener);
+    handler.removeCallbacksAndMessages(downloader);
     handler.removeCallbacks(poll);
     if (draftPending) {
       handler.removeCallbacks(persistDraft);
@@ -229,6 +245,8 @@ public final class HexHomeActivity extends Activity {
     }
   }
   private void render() {
+    downloadLabel = null;
+    downloadBar = null;
     if (practice != null) {
       scratch = practice.getText().toString();
       practice = null;
@@ -474,15 +492,48 @@ public final class HexHomeActivity extends Activity {
         () -> requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 1));
     setupRow("Accessibility", service ? "Connected" : "Disconnected", service,
         service ? null : "Settings", this::accessibility);
-    setupRow("Speech model",
-        installed ? "Parakeet 0.6B" : "Select encoder, decoder, joiner and tokens files", installed,
-        "Import",
-        ()
-            -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                                          .addCategory(Intent.CATEGORY_OPENABLE)
-                                          .setType("*/*")
-                                          .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true),
-                21));
+    if (installed) {
+      setupRow("Speech model", "Parakeet TDT · Ready on device", true, null, null);
+      return;
+    }
+    divider(group);
+    LinearLayout r = row(group);
+    r.setMinimumHeight(d(62));
+    r.addView(glyph("pending", 18, FAINT), d(18), d(18));
+    LinearLayout stack = labels("Speech model", null);
+    stack.setPadding(d(10), d(6), d(6), d(6));
+    flexible(r, stack);
+    downloadLabel = text(this, progress.error != null ? progress.error :
+        "Parakeet TDT (~639 MB) · Downloads once for offline dictation", 12,
+        progress.error != null ? DANGER : MUTED);
+    add(stack, downloadLabel, 3);
+    if (progress.active) {
+      downloadBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+      downloadBar.setBackground(shape(this, 0x1cffffff, 2, 0));
+      downloadBar.setProgressDrawable(new android.graphics.drawable.ScaleDrawable(
+          shape(this, SUCCESS, 2, 0), Gravity.LEFT, 1f, -1f));
+      downloadBar.setMax(1000);
+      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, d(3));
+      lp.topMargin = d(4);
+      stack.addView(downloadBar, lp);
+      updateDownload();
+      r.addView(smallButton(this, "Cancel", downloader::cancel));
+    } else {
+      r.addView(smallButton(this, "Download", () -> downloader.start(getApplicationContext())));
+      TextView fallback = text(this, "Import files", 12, TEXT);
+      fallback.setOnClickListener(v -> importModel());
+      add(stack, fallback, 4);
+    }
+  }
+  private void updateDownload() {
+    if (downloadBar == null) return;
+    downloadLabel.setText(progress.detail);
+    downloadBar.setProgress(Math.round(progress.fraction * 1000));
+  }
+  private void importModel() {
+    startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+        .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+        .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), 21);
   }
   private void linkRow(String name, boolean external, Runnable run) {
     actionRow(name, null, null, external ? "external" : "link", run);
