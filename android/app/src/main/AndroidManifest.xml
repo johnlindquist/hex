@@ -26,6 +26,12 @@
         android:name=".ui.HexRecoveryActivity"
         android:exported="false"/>
 
+    <service android:name=".keyboard.HexInputMethodService" android:label="Hex Keyboard"
+        android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true">
+      <intent-filter><action android:name="android.view.InputMethod"/></intent-filter>
+      <meta-data android:name="android.view.im" android:resource="@xml/hex_ime"/>
+    </service>
+
     <service
         android:name=".service.HexBubbleService"
         android:label="@string/service_dictation_label"

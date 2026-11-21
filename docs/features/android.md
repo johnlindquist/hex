@@ -22,6 +22,8 @@ Tap the floating mic                                  // android.dictate
 └── Change editor → do not redirect pending words to the new field
 ```
 
+**Optional Hex Keyboard** (`android.keyboard`): In General, open Keyboard settings to enable Hex in Android, then Switch keyboard to select it. Full keyboard offers seven layouts (Automatic follows the device language), space-triggered autocorrect, key pop-ups, haptics and local dictation. Dictation bar replaces the letter keys with voice and editing controls. Labs › Emoji keyboard adds the searchable emoji panel and contextual suggestions; it starts off. The floating MicStrip hides while Hex Keyboard is visible and remains available with your system keyboard. Neither enabling the keyboard nor switching modes starts recording.
+
 General’s **Dictate & copy** and the Quick Settings tile offer dictation without a focused text field. Finish to copy; cancel to leave the clipboard unchanged. An ongoing dictation notification provides controls while recording.
 
 Sources: [manifest and permission boundary](../../android/app/src/main/AndroidManifest.xml), [dictation service configuration](../../android/app/src/main/res/xml/bubble.xml), [speech dependencies and build target](../../android/app/build.gradle). The [push script](../../android/scripts/push-model.sh) checks SHA-256 on the host and device. Those checks establish file identity, not that a particular phone can load the model or that a particular app accepted its output.

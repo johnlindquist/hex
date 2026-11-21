@@ -15,6 +15,8 @@ import anomaly.hex.android.speech.SpeechLanguage;
 import java.io.*;
 import java.util.*;
 import android.view.*;
+import android.view.inputmethod.InputMethodManager;
+import anomaly.hex.android.keyboard.*;
 import android.widget.*;
 import anomaly.hex.android.core.*;
 import anomaly.hex.android.service.HexBubbleService;
@@ -412,6 +414,7 @@ public final class HexHomeActivity extends Activity {
     act("Speech language: " + languageLabel(language.selectedId()), false, () -> pickLanguage(language));
     toggleRow("Always use phone microphone", "Keeps Bluetooth music playing and starts faster",
         settings.preferBuiltInMic(), settings::setPreferBuiltInMic);
+    keyboardCard();
     card("Feedback");
     toggleRow("Haptic feedback", "Vibrate when dictation starts and stops.",
         settings.hapticsEnabled(), settings::setHapticsEnabled);
@@ -422,6 +425,41 @@ public final class HexHomeActivity extends Activity {
     act("Privacy Policy", false, () -> openLink("https://anoma.ly/hex/privacy"));
     act("Support", false, () -> openLink("https://anoma.ly/hex/support"));
     act("Open-source notices", false, this::showNotices);
+  }
+  private TextView keyboardStatus;
+  @Override public void onWindowFocusChanged(boolean focused) {
+    super.onWindowFocusChanged(focused);
+    if (focused && keyboardStatus != null && keyboardStatus.isAttachedToWindow()) refreshKeyboardStatus();
+  }
+  private void refreshKeyboardStatus() {
+    ComponentName component = new ComponentName(this, HexInputMethodService.class);
+    String current = Settings.Secure.getString(getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
+    boolean enabled = getSystemService(InputMethodManager.class).getEnabledInputMethodList().stream()
+        .anyMatch(i -> component.equals(i.getComponent()));
+    keyboardStatus.setText(component.equals(ComponentName.unflattenFromString(current == null ? "" : current))
+        ? "Active" : enabled ? "Enabled" : "Off (using system keyboard)");
+  }
+  private void keyboardCard() {
+    card("Optional Hex Keyboard");
+    KeyboardSettings kb = new KeyboardSettings(this);
+    InputMethodManager imm = getSystemService(InputMethodManager.class);
+    keyboardStatus = text(this, "", 15, MUTED);
+    add(group, keyboardStatus, 8);
+    refreshKeyboardStatus();
+    act("Keyboard settings", false, () -> startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)));
+    act("Switch keyboard", false, imm::showInputMethodPicker);
+    radioRow("Full keyboard", null, kb.isFullKeyboard(), () -> kb.setFullKeyboard(true));
+    radioRow("Dictation bar", null, !kb.isFullKeyboard(), () -> kb.setFullKeyboard(false));
+    if (!kb.isFullKeyboard()) return;
+    List<String> codes = new ArrayList<>(List.of("auto"));
+    for (KeyboardLanguage lang : KeyboardLanguage.values()) codes.add(lang.code());
+    String[] labels = codes.stream().map(code -> code.equals("auto") ? "Automatic" : Locale.forLanguageTag(code).getDisplayLanguage()).toArray(String[]::new);
+    int index = Math.max(0, codes.indexOf(kb.layoutLanguage()));
+    act("Keyboard layout: " + labels[index], false, () -> new AlertDialog.Builder(this).setTitle("Keyboard layout")
+        .setSingleChoiceItems(labels, index, (dialog, i) -> { kb.setLayoutLanguage(codes.get(i)); dialog.dismiss(); render(); }).show());
+    toggleRow("Autocorrect", "Fixes typos when you press space", kb.autocorrect(), kb::setAutocorrect);
+    toggleRow("Key pop-ups", "Shows the letter above your finger", kb.keyPopups(), kb::setKeyPopups);
+    toggleRow("Keyboard haptics", "A light tap as you press Hex's keys", kb.haptics(), kb::setHaptics);
   }
   private void openLink(String url) {
     try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
@@ -639,6 +677,7 @@ public final class HexHomeActivity extends Activity {
               .show();
         } else {
           labs.setEnabledUnchecked(lab, on);
+          if (lab == LabId.EMOJI_KEYBOARD) new KeyboardSettings(this).setEmojiEnabled(on);
           HexBubbleService.refreshLabs();
           render();
         }
