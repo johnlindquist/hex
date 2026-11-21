@@ -18,6 +18,7 @@ public final class FullKeyboardView extends FrameLayout {
         void onEmojiPick(String emoji);
         void onUndoDictation();
         void onStartDictation();
+        void onLivePunctuation(String mark);
         void onStopDictation();
         void onCancelDictation();
         void onSwitchKeyboard();
@@ -27,12 +28,19 @@ public final class FullKeyboardView extends FrameLayout {
     private final SuggestionStripView strip;
     private final KeyPlaneView plane;
     private EmojiPanelView panel;
+    private PunctuationDrumsOverlay drums;
     private boolean emojiEnabled, emojiOpen;
 
     public FullKeyboardView(Context c, Host host) {
         super(c); this.host=host; setBackgroundColor(BACKDROP); setClipChildren(false); setClipToPadding(false);
         strip=new SuggestionStripView(c,host,this::toggleEmoji); plane=new KeyPlaneView(c,new PlaneHost(),this::toggleEmoji);
         addView(strip,new LayoutParams(-1,dp(c,plane.landscape()?42:50))); addView(plane,new LayoutParams(-1,-2));
+    }
+    void enableDrums(boolean enabled) {
+        if(enabled && drums==null) {
+            drums=new PunctuationDrumsOverlay(getContext(),host);
+            addView(drums,new LayoutParams(-1,-1));
+        } else if(!enabled && drums!=null) { removeView(drums); drums=null; }
     }
     private void toggleEmoji() {
         if(!emojiEnabled) { closeEmoji(); return; }
@@ -64,6 +72,11 @@ public final class FullKeyboardView extends FrameLayout {
     }
     public void setDictationState(String state,int[] meterLevels) {
         if("listening".equalsIgnoreCase(state)||"recording".equalsIgnoreCase(state)||"transcribing".equalsIgnoreCase(state)) closeEmoji();
+        if(drums!=null) {
+            boolean live="listening".equals(state)||"recording".equals(state);
+            drums.update(live,meterLevels);
+            plane.setImportantForAccessibility(live ? IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS : IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+        }
         strip.state(state,meterLevels);
     }
     public void setSuggestions(List<String> items) { setSuggestions(items, false); }
@@ -89,6 +102,7 @@ public final class FullKeyboardView extends FrameLayout {
     @Override protected void onMeasure(int w,int h) {
         plane.measure(w,MeasureSpec.makeMeasureSpec(0,MeasureSpec.UNSPECIFIED));
         strip.getLayoutParams().height=dp(getContext(),plane.landscape()?42:50);
+        if(drums!=null) ((LayoutParams)drums.getLayoutParams()).topMargin=strip.getLayoutParams().height;
         int lift=emojiOpen && panel.searching()?dp(getContext(),96)-strip.getLayoutParams().height:0;
         ((LayoutParams)plane.getLayoutParams()).topMargin=lift;
         super.onMeasure(w,MeasureSpec.makeMeasureSpec(resolveSize(plane.getMeasuredHeight()+lift,h),MeasureSpec.EXACTLY));

@@ -40,6 +40,8 @@ public final class HexInputMethodService extends InputMethodService implements F
   private String undoText, state = "idle";
   private int undoEnd;
   private SpeechSession session;
+  private InputConnection speechTarget;
+  private LivePunctuationSession live;
   private final Handler main = new Handler(Looper.getMainLooper());
   private final Runnable expireUndo = () -> setUndo(null, -1);
   private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{M}\\p{N}_'’]+\\z");
@@ -107,6 +109,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     action = (text && (type & InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0 || (info.imeOptions & EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0)
         ? EditorInfo.IME_ACTION_NONE : info.imeOptions & EditorInfo.IME_MASK_ACTION;
     if (fullView != null) {
+      fullView.enableDrums(labs.isEnabled(LabId.PUNCTUATION_DRUMS));
       fullView.setSettings(language, kbSettings.keyPopups(), kbSettings.haptics(), emojiEnabled && !privateField && !EditorDeletePolicy.raw(type));
       fullView.setFieldKind(kind, actionLabel());
     }
@@ -273,7 +276,26 @@ public final class HexInputMethodService extends InputMethodService implements F
   }
   public void onDictateToggle() { if (session == null) onStartDictation(); else onStopDictation(); }
   public void onCancel() { onCancelDictation(); }
-  public void onCancelDictation() { generation++; if (session != null) session.cancel(); session = null; drawState(idleState(),null); }
+  private boolean verifiedCursor(InputConnection target) {
+    SurroundingText s = target.getSurroundingText(0,0,0);
+    if (s != null && s.getOffset()>=0 && live.matches(s.getOffset()+s.getSelectionStart(),s.getOffset()+s.getSelectionEnd())) return true;
+    onCancelDictation(); notice("Dictation stopped: cursor moved"); return false;
+  }
+  public void onLivePunctuation(String mark) {
+    InputConnection c = ic();
+    if (session==null || c==null || c!=speechTarget || !(state.equals("listening") || state.equals("recording"))
+        || !labs.isEnabled(LabId.PUNCTUATION_DRUMS) || !verifiedCursor(c)) return;
+    var edit = live.tap(mark,before(256));
+    c.beginBatchEdit();
+    try {
+      if ((edit.trim()>0 && !c.deleteSurroundingText(edit.trim(),0)) || !c.commitText(edit.text(),1)) {
+        onCancelDictation(); notice("Editor could not insert punctuation"); return;
+      }
+      live.committed(edit,true); setUndo(null,-1); onKeyFeedback();
+    } finally { c.endBatchEdit(); }
+    refresh();
+  }
+  public void onCancelDictation() { generation++; live=null; speechTarget=null; if (session != null) session.cancel(); session = null; drawState(idleState(),null); }
   public void onStopDictation() { if (session != null) { session.finish(); drawState("transcribing",null); } }
   private void notice(String message) { notice(message, false); }
   private void notice(String message, boolean openApp) {
@@ -292,23 +314,22 @@ public final class HexInputMethodService extends InputMethodService implements F
     var fixStore = new DictationFixStore(this); Map<String,String> fixes = fixStore.isEnabled() ? fixStore.activeFixes() : Map.of();
     boolean spoken = labs.isEnabled(LabId.SPOKEN_CLEANUP); List<String> vocab = vocabulary;
     // Format each delivered phrase against its verified live cursor, not the cursor at mic start.
+    speechTarget = target; live = new LivePunctuationSession(anchor.getOffset()+anchor.getSelectionStart(),anchor.getOffset()+anchor.getSelectionEnd());
     session = new SpeechSession(this, Engine.get(this), () -> new Microphone(this,hexSettings.preferBuiltInMic()), raw -> raw, new SpeechSession.Sink() {
-      int start = anchor.getOffset() + anchor.getSelectionStart(), end = anchor.getOffset() + anchor.getSelectionEnd();
       void post(Runnable r) { main.post(() -> { if (generation == id && ic() == target) r.run(); }); }
-      public void onMeter(int[] levels) { post(() -> { if (state.equals("listening")) drawState(state,levels); }); }
+      public void onMeter(int[] levels) { post(() -> { if (state.equals("listening") || state.equals("recording")) drawState(state,levels); }); }
       public void onCheckpoint(byte[] pcm) { }
       public void onError(String code,String detail) { post(() -> notice("Dictation: " + detail)); }
       public void onStateChanged(String s) { post(() -> {
-        if (s.equals("finished") || s.equals("cancelled") || s.equals("error")) { session = null; drawState(idleState(),null); }
+        if (s.equals("finished") || s.equals("cancelled") || s.equals("error")) { session = null; speechTarget = null; live = null; drawState(idleState(),null); }
         else if (!state.equals("transcribing") || !s.equals("listening")) drawState(s,null);
       }); }
       public void onPhraseReady(String raw,String ignored,long ms) { post(() -> {
-        SurroundingText cursor = target.getSurroundingText(0,0,0);
-        if (cursor == null || cursor.getOffset()<0 || cursor.getOffset()+cursor.getSelectionStart()!=start
-            || cursor.getOffset()+cursor.getSelectionEnd()!=end) { onCancelDictation(); notice("Dictation stopped: cursor moved"); return; }
-        String text = TranscriptFormatter.applyPipeline(raw,style,vocab,spoken,before(128),fixes,lang);
+        if (!verifiedCursor(target)) return;
+        var edit = live.phrase(TranscriptFormatter.applyPipeline(raw,style,vocab,spoken,before(128),fixes,lang));
+        String text = edit.text();
         if (text.isBlank() || !target.commitText(text,1)) return;
-        start = end = Math.min(start,end) + text.length();
+        live.committed(edit,false); int end=live.end();
         SurroundingText s = target.getSurroundingText(text.length(),0,0);
         if (s != null && s.getOffset() >= 0 && s.getOffset()+s.getSelectionStart()==end && s.getSelectionStart()==s.getSelectionEnd() && s.getText().subSequence(0,s.getSelectionStart()).toString().endsWith(text))
           setUndo(text,end);
