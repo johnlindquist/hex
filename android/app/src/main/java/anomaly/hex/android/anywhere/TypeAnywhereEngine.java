@@ -24,6 +24,13 @@ public final class TypeAnywhereEngine {
                                    + "a an on to it does do i my me tell about and").split(" ")));
     return words;
   }
+  private static boolean isChromeNoise(String line) {
+    String t = line.trim();
+    if (t.length() <= 1) return true;
+    if (t.matches("\\d{1,2}:\\d{2}(\\s*[APMapm]{2})?")) return true;
+    if (t.matches("(?i)(q\\s+)?search(\\s+\\w+)?")) return true;
+    return false;
+  }
   public static String answerLocally(String screenText, String question) {
     String screen = bounded(screenText, 16000),
            q = bounded(question, 1000).toLowerCase(Locale.ROOT);
@@ -31,27 +38,47 @@ public final class TypeAnywhereEngine {
       return "No readable screen text. Paste or describe what you want to ask about.";
     List<String> lines = new ArrayList<>(
         new LinkedHashSet<>(Arrays.asList(screen.split("\\s*\\n\\s*|(?<=[.!?])\\s+"))));
+    lines.removeIf(String::isBlank);
+    List<String> content = new ArrayList<>();
+    for (String line : lines) if (!isChromeNoise(line)) content.add(line);
+    if (content.isEmpty()) content = lines;
     if (q.equals("summarize"))
-      return String.join(" ", lines.subList(0, Math.min(3, lines.size())));
+      return String.join(" · ", content.subList(0, Math.min(6, content.size())));
     if (q.equals("key points") || q.equals("extract key points"))
-      return "• " + String.join("\n• ", lines.subList(0, Math.min(5, lines.size())));
+      return "• " + String.join("\n• ", content.subList(0, Math.min(6, content.size())));
     if (q.equals("explain") || q.equals("explain this"))
       return "The screen highlights: "
-          + String.join(" ", lines.subList(0, Math.min(2, lines.size())));
+          + String.join(" · ", content.subList(0, Math.min(4, content.size())));
     if (q.equals("draft reply") || q.equals("reply to this"))
       return "Thanks for the update. Could you clarify the next step regarding “"
-          + bounded(lines.get(0), 120) + "”?";
+          + bounded(content.get(0), 120) + "”?";
     Set<String> query = terms(q);
-    Map<String, Integer> scores = new HashMap<>();
-    for (String line : lines) {
-      Set<String> overlap = terms(line);
+    List<Integer> matchedIdx = new ArrayList<>();
+    Map<Integer, Integer> scores = new HashMap<>();
+    for (int i = 0; i < lines.size(); i++) {
+      Set<String> overlap = terms(lines.get(i));
       overlap.retainAll(query);
-      scores.put(line, overlap.size());
+      if (!overlap.isEmpty()) {
+        matchedIdx.add(i);
+        scores.put(i, overlap.size());
+      }
     }
-    lines.removeIf(line -> scores.get(line) == 0);
-    lines.sort(Comparator.comparingInt((String line) -> scores.get(line)).reversed());
-    return lines.isEmpty() ? "I couldn’t find that in the screen text."
-                           : String.join("\n", lines.subList(0, Math.min(3, lines.size())));
+    if (matchedIdx.isEmpty()) return "I couldn’t find that in the screen text.";
+    matchedIdx.sort(Comparator.comparingInt((Integer i) -> scores.get(i)).reversed());
+    List<String> out = new ArrayList<>();
+    Set<Integer> used = new HashSet<>();
+    for (int i : matchedIdx) {
+      if (out.size() >= 3) break;
+      if (!used.add(i)) continue;
+      String entry = lines.get(i);
+      boolean looksLikeHeading = !entry.isEmpty() && ".!?".indexOf(entry.charAt(entry.length() - 1)) < 0 && entry.length() <= 40;
+      if (looksLikeHeading && i + 1 < lines.size() && !scores.containsKey(i + 1) && !isChromeNoise(lines.get(i + 1))
+          && lines.get(i + 1).length() <= 60 && used.add(i + 1)) {
+        entry = entry + " — " + lines.get(i + 1);
+      }
+      out.add(entry);
+    }
+    return String.join("\n", out);
   }
   public static String parseGeminiResponse(String json) {
     if (json == null || json.length() > 262144)

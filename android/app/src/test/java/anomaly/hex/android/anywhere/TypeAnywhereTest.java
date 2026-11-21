@@ -8,9 +8,18 @@ public class TypeAnywhereTest {
   private final String screen =
       "Team meeting at noon.\nBring the budget report.\nLunch after the meeting.\nParking is free.";
   @Test
-  public void summaryIsBoundedToThreeLines() {
-    assertEquals("Team meeting at noon. Bring the budget report. Lunch after the meeting.",
-        TypeAnywhereEngine.answerLocally(screen, "Summarize"));
+  public void summarySkipsChromeAndBoundsLines() {
+    String settings = "12:52\nS\nSettings\nQ Search settings\nNetwork & internet\nBattery\n100%\nStorage\nSound\nDisplay\nSecurity";
+    String s = TypeAnywhereEngine.answerLocally(settings, "Summarize");
+    assertFalse(s.contains("12:52"));
+    assertFalse(s.contains("Search settings"));
+    assertTrue(s.contains("Network & internet"));
+    assertTrue(s.contains("Battery"));
+  }
+  @Test
+  public void pairedHeadingAndValuePreserved() {
+    String settings = "Settings\nBattery\n100%\nStorage\n38% used";
+    assertEquals("Battery — 100%", TypeAnywhereEngine.answerLocally(settings, "battery"));
   }
   @Test
   public void keyPointsAreBullets() {
