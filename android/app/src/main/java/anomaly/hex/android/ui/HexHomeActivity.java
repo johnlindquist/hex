@@ -381,7 +381,7 @@ public final class HexHomeActivity extends Activity {
   }
   private void scratchpad(boolean actions) {
     card("Scratchpad");
-    practice = input(this, "Tap here and press the floating mic to test dictation…");
+    practice = input(this, scratchpadHint());
     practice.setGravity(Gravity.TOP | Gravity.START);
     practice.setMinHeight(d(110));
     practice.setText(scratch);
@@ -426,17 +426,21 @@ public final class HexHomeActivity extends Activity {
     act("Support", false, () -> openLink("https://anoma.ly/hex/support"));
     act("Open-source notices", false, this::showNotices);
   }
+  private String scratchpadHint() {
+    return KeyboardPresence.isHexKeyboardDefault(this) ? "Tap here and press the Hex key to test dictation..."
+        : "Tap here and press the floating mic to test dictation...";
+  }
   private TextView keyboardStatus;
   @Override public void onWindowFocusChanged(boolean focused) {
     super.onWindowFocusChanged(focused);
+    if (focused && practice != null && practice.isAttachedToWindow()) practice.setHint(scratchpadHint());
     if (focused && keyboardStatus != null && keyboardStatus.isAttachedToWindow()) refreshKeyboardStatus();
   }
   private void refreshKeyboardStatus() {
     ComponentName component = new ComponentName(this, HexInputMethodService.class);
-    String current = Settings.Secure.getString(getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
     boolean enabled = getSystemService(InputMethodManager.class).getEnabledInputMethodList().stream()
         .anyMatch(i -> component.equals(i.getComponent()));
-    keyboardStatus.setText(component.equals(ComponentName.unflattenFromString(current == null ? "" : current))
+    keyboardStatus.setText(KeyboardPresence.isHexKeyboardDefault(this)
         ? "Active" : enabled ? "Enabled" : "Off (using system keyboard)");
   }
   private void keyboardCard() {
@@ -448,13 +452,15 @@ public final class HexHomeActivity extends Activity {
     refreshKeyboardStatus();
     act("Keyboard settings", false, () -> startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)));
     act("Switch keyboard", false, imm::showInputMethodPicker);
-    radioRow("Full keyboard", null, kb.isFullKeyboard(), () -> kb.setFullKeyboard(true));
-    radioRow("Dictation bar", null, !kb.isFullKeyboard(), () -> kb.setFullKeyboard(false));
+    divider(group, 10);
+    radioRowContent("Full keyboard", "QWERTY letters, suggestions, and Hex key", kb.isFullKeyboard(), () -> kb.setFullKeyboard(true));
+    radioRow("Dictation bar", "Compact voice stage with space, delete, and return", !kb.isFullKeyboard(), () -> kb.setFullKeyboard(false));
     if (!kb.isFullKeyboard()) return;
     List<String> codes = new ArrayList<>(List.of("auto"));
     for (KeyboardLanguage lang : KeyboardLanguage.values()) codes.add(lang.code());
     String[] labels = codes.stream().map(code -> code.equals("auto") ? "Automatic" : Locale.forLanguageTag(code).getDisplayLanguage()).toArray(String[]::new);
     int index = Math.max(0, codes.indexOf(kb.layoutLanguage()));
+    divider(group, 10);
     act("Keyboard layout: " + labels[index], false, () -> new AlertDialog.Builder(this).setTitle("Keyboard layout")
         .setSingleChoiceItems(labels, index, (dialog, i) -> { kb.setLayoutLanguage(codes.get(i)); dialog.dismiss(); render(); }).show());
     toggleRow("Autocorrect", "Fixes typos when you press space", kb.autocorrect(), kb::setAutocorrect);
@@ -519,6 +525,9 @@ public final class HexHomeActivity extends Activity {
   }
   private void radioRow(String label, String summary, boolean checked, Runnable select) {
     divider(group);
+    radioRowContent(label, summary, checked, select);
+  }
+  private void radioRowContent(String label, String summary, boolean checked, Runnable select) {
     LinearLayout r = row(group);
     r.setPadding(0, d(10), 0, d(10));
     r.setMinimumHeight(d(52));

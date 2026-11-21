@@ -49,7 +49,8 @@ public final class HexInputMethodService extends InputMethodService implements F
     container.setBackgroundColor(KeyboardPalette.BACKDROP);
     container.setOnApplyWindowInsetsListener((v, insets) -> {
       int bottom = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
-      if (v.getPaddingBottom() != bottom) v.setPadding(0, 0, 0, bottom);
+      int safeBottom = bottom > 0 ? Math.max(bottom + KeyboardPalette.dp(this, 8), KeyboardPalette.dp(this, 36)) : KeyboardPalette.dp(this, 10);
+      if (v.getPaddingBottom() != safeBottom) v.setPadding(0, 0, 0, safeBottom);
       return insets;
     });
     Window w = getWindow() != null ? getWindow().getWindow() : null;
@@ -95,7 +96,11 @@ public final class HexInputMethodService extends InputMethodService implements F
       case EditorInfo.IME_ACTION_NEXT -> "Next"; default -> "↵";
     };
   }
-  private void meta() { if (barView != null) barView.setMeta(hexSettings.style().label(), speechLang.selectedId()); }
+  private void meta() {
+    if (barView == null) return;
+    String id = speechLang.selectedId();
+    barView.setMeta(hexSettings.style().label(), "auto".equalsIgnoreCase(id) ? "Auto" : id.toUpperCase(Locale.ROOT));
+  }
   private void resetEditor() { onCancelDictation(); setUndo(null, -1); editor = null; lastSpace = 0; }
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }

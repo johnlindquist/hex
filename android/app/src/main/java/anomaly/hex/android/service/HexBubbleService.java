@@ -6,7 +6,9 @@ import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.database.ContentObserver;
 import android.graphics.PixelFormat;
+import android.provider.Settings;
 import android.media.*;
 import android.os.*;
 import android.text.InputType;
@@ -29,6 +31,9 @@ public final class HexBubbleService extends AccessibilityService {
   public static volatile HexBubbleService active;
   public Placement placement;
   private final Handler main = new Handler(Looper.getMainLooper());
+  private final ContentObserver defaultImeObserver = new ContentObserver(main) {
+    @Override public void onChange(boolean selfChange) { main.post(HexBubbleService.this::render); }
+  };
   private HexSettings settings;
   private DictationFixStore fixStore;
   private HexLabs labs;
@@ -189,6 +194,7 @@ public final class HexBubbleService extends AccessibilityService {
   @Override
   protected void onServiceConnected() {
     if (!connected) {
+      getContentResolver().registerContentObserver(Settings.Secure.getUriFor(Settings.Secure.DEFAULT_INPUT_METHOD), false, defaultImeObserver);
       registerReceiver(screen, new IntentFilter(Intent.ACTION_SCREEN_OFF), RECEIVER_NOT_EXPORTED);
       getSystemService(AudioManager.class).addOnModeChangedListener(getMainExecutor(), mode);
     }
@@ -284,7 +290,8 @@ public final class HexBubbleService extends AccessibilityService {
       else if (state.equals("listening") || state.equals("transcribing")) notification.show(state.equals("listening"));
     }
     WindowManager wm = getSystemService(WindowManager.class);
-    if (!connected || !editor || !unlocked() || calling() || KeyboardPresence.isImeVisible()) {
+    if (!connected || !editor || !unlocked() || calling() || KeyboardPresence.isImeVisible()
+        || KeyboardPresence.isHexKeyboardDefault(this)) {
       main.removeCallbacks(imeWatch);
       lastImeBottom = -1;
       if (strip != null) {
@@ -735,6 +742,7 @@ public final class HexBubbleService extends AccessibilityService {
   public void onDestroy() {
     KeyboardPresence.setOnVisibilityChanged(null);
     if (connected) {
+      getContentResolver().unregisterContentObserver(defaultImeObserver);
       unregisterReceiver(screen);
       getSystemService(AudioManager.class).removeOnModeChangedListener(mode);
     }
