@@ -49,7 +49,7 @@ public final class KeyPlaneView extends View {
     private float density() { return getResources().getDisplayMetrics().density; }
     private void rebuild(int width) {
         layoutWidth=width; layoutWide=landscape();
-        layout = new KeyboardLayout(width/density(), layoutWide, layer, field, true, emoji, language==null?KeyboardLanguage.EN:language);
+        layout = new KeyboardLayout(width/density(), layoutWide, layer, field, false, emoji, language==null?KeyboardLanguage.EN:language);
         invalidate();
     }
     void settings(KeyboardLanguage lang, boolean popup, boolean haptic, boolean emojis) {
@@ -91,8 +91,9 @@ public final class KeyPlaneView extends View {
         paint.setStyle(Paint.Style.STROKE); paint.setColor(POPUP_BORDER); paint.setStrokeWidth(1f/density()); c.drawPath(p,paint);
         paint.setStyle(Paint.Style.FILL); paint.setTypeface(LIGHT); text(c,face(down),x+w/2,y+23,32,w); paint.setTypeface(null);
     }
-    private void box(Canvas c,float l,float t,float r,float b,int fill) {
-        paint.setColor(fill); c.drawRoundRect(l,t,r,b,layout.cornerRadius(),layout.cornerRadius(),paint);
+    private static final android.graphics.Typeface MEDIUM=android.graphics.Typeface.create("sans-serif-medium",0);
+    private void box(Canvas c,float l,float t,float r,float b,float radius,int fill) {
+        paint.setColor(fill); c.drawRoundRect(l,t,r,b,radius,radius,paint);
     }
     private void text(Canvas c,String s,float x,float y,float size,float maxWidth) {
         text(c,s,x,y,size,maxWidth,TEXT);
@@ -107,25 +108,60 @@ public final class KeyPlaneView extends View {
         if (layout == null) return;
         c.save(); c.scale(density(),density());
         boolean wide=landscape(), show=popups && !wide && variants==null && down!=null && down.kind()==KeyKind.CHAR;
+        int row0Index = 0;
         for (Key k : layout.keys()) {
+            int myRow0 = (layer == Layer.LETTERS && k.row() == 0 && k.kind() == KeyKind.CHAR) ? row0Index++ : -1;
             if(show && k==down) continue;
-            boolean primary = k.kind()==KeyKind.RETURN && !action.isBlank() && !dragging && !searching;
             boolean active = k==down;
-            box(c,k.left(),k.top(),k.right(),k.bottom(),primary ? (active?ACTION_PRESSED:ACTION_FILL) : (active?KEY_PRESSED:KEY_FILL));
+            boolean layerPill = k.kind()==KeyKind.LAYER && k.row()==3;
+            boolean returnPill = k.kind()==KeyKind.RETURN;
+            boolean modKey = k.kind()==KeyKind.SHIFT || k.kind()==KeyKind.DELETE
+                    || (k.kind()==KeyKind.LAYER && k.row()==2)
+                    || (k.kind()==KeyKind.CHAR && k.row()==3);
+            float radius = (layerPill || returnPill) ? (k.bottom() - k.top()) / 2f : layout.cornerRadius();
+            int fill;
+            if (returnPill) {
+                fill = (dragging || searching) ? KEY_FILL : (active ? RETURN_PILL_PRESSED : RETURN_PILL_FILL);
+            } else if (layerPill) {
+                fill = dragging ? KEY_FILL : (active ? LAYER_PILL_PRESSED : LAYER_PILL_FILL);
+            } else if (modKey) {
+                fill = dragging ? KEY_FILL : (active ? MOD_PRESSED : MOD_FILL);
+            } else {
+                fill = active ? KEY_PRESSED : KEY_FILL;
+            }
+            box(c,k.left(),k.top(),k.right(),k.bottom(),radius,fill);
             if(dragging) continue;
             String s = face(k);
             boolean lower=k.kind()==KeyKind.CHAR && Character.isLowerCase(s.codePointAt(0));
-            float size=k.kind()!=KeyKind.CHAR?(wide?14.5f:15.5f):lower?(wide?19:22.5f):(wide?18:21);
+            float size=k.kind()!=KeyKind.CHAR?(wide?13.5f:14.5f):lower?(wide?19:22):(wide?18:20.5f);
             float x=(k.left()+k.right())/2, y=(k.top()+k.bottom())/2;
             switch(k.kind()) {
                 case GLOBE -> KeyIcons.drawGlobe(c,x,y,20,TEXT);
-                case EMOJI -> KeyIcons.drawSmiley(c,x,y,20,TEXT);
-                case SHIFT -> KeyIcons.drawShift(c,x,y,20,shift.state(),TEXT);
-                case DELETE -> KeyIcons.drawDelete(c,x,y,20,TEXT);
-                case RETURN -> { if(s.equals("↵")) KeyIcons.drawReturn(c,x,y,20,TEXT); else text(c,s,x,y,size,k.right()-k.left()-3); }
-                case SPACE -> text(c,language==null?"space":switch(language){case EN->"English";case ES->"Español";case FR->"Français";case DE->"Deutsch";case IT->"Italiano";case PT->"Português";case NB->"Norsk";},x,y,wide?13:14.5f,k.right()-k.left()-3,TEXT_MUTED);
-                default -> { if(!(k==down && k.kind()==KeyKind.CHAR && (variants!=null || popups && !landscape())))
-                    text(c,s,x,y+(lower?(wide?-.5f:-1):0),size,k.right()-k.left()-3,TEXT); }
+                case EMOJI -> KeyIcons.drawSmiley(c,x,y,21,TEXT);
+                case SHIFT -> KeyIcons.drawShift(c,x,y,21,shift.state(),TEXT);
+                case DELETE -> KeyIcons.drawDelete(c,x,y,21,TEXT);
+                case RETURN -> {
+                    int fg = searching ? TEXT : ON_PILL_TEXT;
+                    if(s.equals("↵")) KeyIcons.drawReturn(c,x,y,20,fg);
+                    else { paint.setTypeface(MEDIUM); text(c,s,x,y,size,k.right()-k.left()-8,fg); paint.setTypeface(null); }
+                }
+                case LAYER -> {
+                    int fg = layerPill ? ON_PILL_TEXT : TEXT;
+                    paint.setTypeface(MEDIUM); text(c,s,x,y,size,k.right()-k.left()-6,fg); paint.setTypeface(null);
+                }
+                case SPACE -> {}
+                default -> {
+                    if(!(k==down && k.kind()==KeyKind.CHAR && (variants!=null || popups && !landscape()))) {
+                        text(c,s,x,y+(lower?(wide?-.5f:-.5f):0),size,k.right()-k.left()-3,TEXT);
+                        if (myRow0 >= 0 && myRow0 < 10 && !wide) {
+                            paint.setTextAlign(Paint.Align.RIGHT);
+                            paint.setColor(HINT_TEXT);
+                            paint.setTextSize(10f);
+                            c.drawText(String.valueOf((myRow0 + 1) % 10), k.right() - 4f, k.top() + 11.5f, paint);
+                            paint.setTextAlign(Paint.Align.CENTER);
+                        }
+                    }
+                }
             }
         }
         if(show) callout(c);
@@ -134,15 +170,35 @@ public final class KeyPlaneView extends View {
             paint.setColor(POPUP_FILL); c.drawRoundRect(l,t,l+w,t+52,12,12,paint);
             for(int i=0;i<variants.length;i++) {
                 float x=l+4+i*cell;
-                if(i==selection) {paint.setColor(ACTION_FILL); c.drawRoundRect(x,t+4,x+cell,t+48,8,8,paint);}
-                text(c,casing(variants[i]),x+cell/2,t+26,23,cell-2);
+                if(i==selection) {paint.setColor(RETURN_PILL_FILL); c.drawRoundRect(x,t+4,x+cell,t+48,8,8,paint);}
+                text(c,casing(variants[i]),x+cell/2,t+26,23,cell-2,i==selection?ON_PILL_TEXT:TEXT);
             }
         }
         c.restore();
     }
+    private String topRowDigit(Key k) {
+        if (layer != Layer.LETTERS || k.row() != 0 || k.kind() != KeyKind.CHAR) return null;
+        int idx = 0;
+        for (Key key : layout.keys()) {
+            if (key.row() == 0 && key.kind() == KeyKind.CHAR) {
+                if (key == k) return idx < 10 ? String.valueOf((idx + 1) % 10) : null;
+                idx++;
+            }
+        }
+        return null;
+    }
     private final Runnable accent = () -> {
         if (down==null) return;
-        String[] options = AccentTable.accentsFor(down.label(),language==null?KeyboardLanguage.EN:language);
+        String[] base = AccentTable.accentsFor(down.label(),language==null?KeyboardLanguage.EN:language);
+        String digit = topRowDigit(down);
+        String[] options;
+        if (digit != null) {
+            options = new String[base.length + 1];
+            options[0] = digit;
+            System.arraycopy(base, 0, options, 1, base.length);
+        } else {
+            options = base;
+        }
         if (options.length==0) return;
         variants=options; float width=getWidth()/density();
         cell=Math.min(Math.min(38,Math.max(28,down.right()-down.left())),(width-12)/options.length);
@@ -234,7 +290,7 @@ public final class KeyPlaneView extends View {
         switch(down.kind()) {
             case CHAR -> { String s=casing(variants==null?down.label():variants[selection]); shift.onCharacterInserted(); host.onCharacter(s); }
             case SPACE -> { if(!dragging) host.onSpace(); }
-            case LAYER -> { layer=switch(down.label()) { case "ABC" -> Layer.LETTERS; case "#+=" -> Layer.SYMBOLS; default -> Layer.NUMBERS; }; rebuild(getWidth()); }
+            case LAYER -> { layer=switch(down.label()) { case "ABC" -> Layer.LETTERS; case "=\\<", "#+=" -> Layer.SYMBOLS; default -> Layer.NUMBERS; }; rebuild(getWidth()); }
             case RETURN -> host.onReturn(); case EMOJI -> openEmoji.run(); case GLOBE -> host.onSwitchKeyboard();
             default -> {} // Shift and delete act on down.
         }

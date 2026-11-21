@@ -18,12 +18,12 @@ public final class KeyboardLayout {
     private record Face(KeyKind kind, String label, float left, float width) {}
     private final List<Key> keys;
     private final boolean landscape;
-    public float stripHeight() { return landscape ? 39 : 44; }
-    public float keyHeight() { return landscape ? 27.5f : 45; }
-    public float horizontalGap() { return 6; }
-    public float verticalGap() { return landscape ? 8 : 11; }
-    public float cornerRadius() { return landscape ? 7.5f : 8.5f; }
-    public float bottomInset() { return landscape ? 3 : 5; }
+    public float stripHeight() { return landscape ? 42 : 50; }
+    public float keyHeight() { return landscape ? 30 : 47; }
+    public float horizontalGap() { return 5.7f; }
+    public float verticalGap() { return landscape ? 8 : 12; }
+    public float cornerRadius() { return 6.0f; }
+    public float bottomInset() { return landscape ? 4 : 10; }
     public float totalHeight() { return stripHeight() + 4 * keyHeight() + 3 * verticalGap() + bottomInset(); }
     public List<Key> keys() { return keys; }
     public Key hitTest(float x, float y) {
@@ -36,12 +36,12 @@ public final class KeyboardLayout {
         this.landscape = landscape;
         List<String> letters = switch (layer) {
             case LETTERS -> language.letterRows();
-            case NUMBERS -> List.of("1234567890", "-/:;()$&@\"", ".,?!'");
-            case SYMBOLS -> List.of("[]{}#%^*+=", "_\\|~<>€£¥•", ".,?!'");
+            case NUMBERS -> List.of("1234567890", "@#$_&-+()/", "*\"':;!?");
+            case SYMBOLS -> List.of("~`|•√π÷×§Δ", "£¢€¥^°={}\\", "%©®™✓[]");
         };
-        float side = landscape ? 4 : width >= 390 ? 6.5f : width >= 370 ? 4.5f : 3;
+        float side = landscape ? 4 : 4.5f;
         float gap = horizontalGap(), inner = width - 2 * side;
-        float ref = (inner - 9 * gap) / 10, mod = ref * 1.34f;
+        float ref = (inner - 9 * gap) / 10, mod = 1.5f * ref + 0.5f * gap;
         int cols = Math.max(10, Math.max(letters.get(0).length(), letters.get(1).length()));
         float character = (inner - (cols - 1) * gap) / cols;
         List<Key> result = new ArrayList<>();
@@ -52,28 +52,25 @@ public final class KeyboardLayout {
                 float w = character;
                 if (row == 2) {
                     faces.add(new Face(layer == Layer.LETTERS ? KeyKind.SHIFT : KeyKind.LAYER,
-                            layer == Layer.LETTERS ? "shift" : layer == Layer.NUMBERS ? "#+=" : "123", side, mod));
-                    if (layer != Layer.LETTERS) w = (inner - 3 * (character + gap) - 4 * gap) / 5;
+                            layer == Layer.LETTERS ? "shift" : layer == Layer.NUMBERS ? "=\\<" : "?123", side, mod));
                 }
                 float x = (width - chars.length() * w - (chars.length() - 1) * gap) / 2;
                 for (int i = 0; i < chars.length(); i++, x += w + gap)
                     faces.add(new Face(KeyKind.CHAR, chars.substring(i, i + 1), x, w));
                 if (row == 2) faces.add(new Face(KeyKind.DELETE, "delete", width - side - mod, mod));
             } else {
-                boolean compact = globe || emoji || field != FieldKind.TEXT;
-                float switchW = compact ? mod : ref * 1.56f;
-                float returnW = compact ? ref * 2.18f : ref * 2.40f + gap;
-                faces.add(new Face(KeyKind.LAYER, layer == Layer.LETTERS ? "123" : "ABC", side, switchW));
-                float x = side + switchW + gap;
-                if (globe) { faces.add(new Face(KeyKind.GLOBE, "globe", x, mod)); x += mod + gap; }
-                if (emoji) { faces.add(new Face(KeyKind.EMOJI, "emoji", x, mod)); x += mod + gap; }
-                String extras = field == FieldKind.URL ? "./" : field == FieldKind.EMAIL ? "@." : "";
-                float returnX = width - side - returnW;
-                float extrasX = returnX - extras.length() * (ref + gap);
-                faces.add(new Face(KeyKind.SPACE, "space", x, extrasX - gap - x));
-                for (int i = 0; i < extras.length(); i++, extrasX += ref + gap)
-                    faces.add(new Face(KeyKind.CHAR, extras.substring(i, i + 1), extrasX, ref));
-                faces.add(new Face(KeyKind.RETURN, "return", returnX, returnW));
+                faces.add(new Face(KeyKind.LAYER, layer == Layer.LETTERS ? "?123" : "ABC", side, mod));
+                float x = side + mod + gap;
+                String leftPunct = layer == Layer.SYMBOLS ? "<" : field == FieldKind.EMAIL ? "@" : field == FieldKind.URL ? "/" : ",";
+                faces.add(new Face(KeyKind.CHAR, leftPunct, x, ref)); x += ref + gap;
+                if (globe) { faces.add(new Face(KeyKind.GLOBE, "globe", x, ref)); x += ref + gap; }
+                if (emoji) { faces.add(new Face(KeyKind.EMOJI, "emoji", x, ref)); x += ref + gap; }
+                float returnX = width - side - mod;
+                float rightPunctX = returnX - gap - ref;
+                faces.add(new Face(KeyKind.SPACE, "space", x, rightPunctX - gap - x));
+                String rightPunct = layer == Layer.SYMBOLS ? ">" : ".";
+                faces.add(new Face(KeyKind.CHAR, rightPunct, rightPunctX, ref));
+                faces.add(new Face(KeyKind.RETURN, "return", returnX, mod));
             }
             float top = stripHeight() + row * (keyHeight() + verticalGap());
             float bottom = top + keyHeight();

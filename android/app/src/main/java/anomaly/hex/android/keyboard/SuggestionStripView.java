@@ -33,7 +33,7 @@ public final class SuggestionStripView extends FrameLayout {
 
     SuggestionStripView(Context c, FullKeyboardView.Host host) {
         super(c); this.host=host;
-        typing=row(c); typing.setPadding(dp(c,6.5f),0,0,0); addView(typing); center=new FrameLayout(c); typing.addView(center, weight());
+        typing=row(c); typing.setPadding(dp(c,4.5f),0,dp(c,6f),0); addView(typing); center=new FrameLayout(c); typing.addView(center, weight());
         slots=row(c); center.addView(slots);
         undo=row(c); undo.setBackground(pill(CHIP_FILL)); undo.setPadding(dp(c,10),0,dp(c,10),0);
         View arrow=new View(c){protected void onDraw(android.graphics.Canvas canvas){KeyIcons.drawUndoArrow(canvas,getWidth()/2f,getHeight()/2f,dp(c,16),TEXT_MUTED);}};
@@ -42,13 +42,15 @@ public final class SuggestionStripView extends FrameLayout {
         center.addView(undo,new LayoutParams(-2,dp(c,30),Gravity.CENTER));
         noticeBar=row(c); noticeBar.setBackground(pill(CHIP_FILL)); noticeBar.setPadding(dp(c,10),0,dp(c,6),0);
         noticeText=label(c,"",13); noticeText.setTextColor(TEXT); noticeBar.addView(noticeText);
-        noticeAction=label(c,"Open",13); noticeAction.setTextColor(0xFFFFFFFF);
-        noticeAction.setBackground(pill(ACTION_FILL)); noticeAction.setPadding(dp(c,9),0,dp(c,9),0);
+        noticeAction=label(c,"Open",13); noticeAction.setTextColor(ON_PILL_TEXT);
+        noticeAction.setBackground(pill(RETURN_PILL_FILL)); noticeAction.setPadding(dp(c,9),0,dp(c,9),0);
         LinearLayout.LayoutParams nap=new LinearLayout.LayoutParams(-2,dp(c,22)); nap.leftMargin=dp(c,8);
         noticeAction.setOnClickListener(v->{ showNotice(null,false); host.onOpenApp(); });
         noticeBar.addView(noticeAction,nap); noticeBar.setVisibility(GONE);
         center.addView(noticeBar,new LayoutParams(-2,dp(c,30),Gravity.CENTER)); setUndo(false);
-        mark=new HexMarkView(c); typing.addView(mark,new LinearLayout.LayoutParams(dp(c,44),-1));
+        mark=new HexMarkView(c); mark.setBackground(pill(CHIP_FILL));
+        LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(dp(c,34),dp(c,34)); mp.leftMargin=dp(c,4);
+        typing.addView(mark,mp);
         mark.setOnClickListener(v->host.onStartDictation());
         recording=row(c); recording.setPadding(dp(c,6.5f),0,dp(c,6.5f),0); addView(recording);
         LinearLayout well=row(c); well.setBackground(pill(WELL_FILL)); well.setClipToOutline(true);
@@ -68,7 +70,7 @@ public final class SuggestionStripView extends FrameLayout {
             protected void onDraw(android.graphics.Canvas canvas) {
                 float x=getWidth()/2f,y=getHeight()/2f,s=dp(c,20);
                 if(!isEnabled()) {paint.setColor(TEXT_MUTED); for(int i=-1;i<=1;i++) canvas.drawCircle(x+i*s/4,y,s/14,paint);}
-                else if(check) KeyIcons.drawCheckmark(canvas,x,y,s,TEXT);
+                else if(check) KeyIcons.drawCheckmark(canvas,x,y,s,ON_PILL_TEXT);
                 else KeyIcons.drawCancel(canvas,x,y,s,TEXT);
             }
         }; b.setContentDescription(desc); b.setBackground(pill(color));
@@ -108,7 +110,7 @@ public final class SuggestionStripView extends FrameLayout {
             if(i>0) {
                 View line=new View(c);
                 if(!correction && !words[i-1].isEmpty() && !words[i].isEmpty()) line.setBackgroundColor(SEPARATOR);
-                slots.addView(line,1,dp(c,20));
+                slots.addView(line,dp(c,1),dp(c,24));
             }
             String value=values[i], word=words[i];
             boolean emoji=word.equals(emojiContext);

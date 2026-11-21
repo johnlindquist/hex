@@ -32,7 +32,7 @@ public final class FullKeyboardView extends FrameLayout {
     public FullKeyboardView(Context c, Host host) {
         super(c); this.host=host; setBackgroundColor(BACKDROP); setClipChildren(false); setClipToPadding(false);
         strip=new SuggestionStripView(c,host); plane=new KeyPlaneView(c,new PlaneHost(),this::toggleEmoji);
-        addView(strip,new LayoutParams(-1,dp(c,plane.landscape()?39:44))); addView(plane,new LayoutParams(-1,-2));
+        addView(strip,new LayoutParams(-1,dp(c,plane.landscape()?42:50))); addView(plane,new LayoutParams(-1,-2));
     }
     private void toggleEmoji() {
         if(!emojiEnabled) { closeEmoji(); return; }
@@ -87,7 +87,7 @@ public final class FullKeyboardView extends FrameLayout {
     }
     @Override protected void onMeasure(int w,int h) {
         plane.measure(w,MeasureSpec.makeMeasureSpec(0,MeasureSpec.UNSPECIFIED));
-        strip.getLayoutParams().height=dp(getContext(),plane.landscape()?39:44);
+        strip.getLayoutParams().height=dp(getContext(),plane.landscape()?42:50);
         int lift=emojiOpen && panel.searching()?dp(getContext(),88)-strip.getLayoutParams().height:0;
         ((LayoutParams)plane.getLayoutParams()).topMargin=lift;
         super.onMeasure(w,MeasureSpec.makeMeasureSpec(resolveSize(plane.getMeasuredHeight()+lift,h),MeasureSpec.EXACTLY));

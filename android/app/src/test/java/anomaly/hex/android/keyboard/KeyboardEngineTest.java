@@ -35,11 +35,11 @@ public class KeyboardEngineTest {
 
     @Test public void punctuationAndFieldExtras() {
         var n = new KeyboardLayout(390, false, Layer.NUMBERS, FieldKind.URL, false, false, NB);
-        assertEquals("1234567890", row(n, 0)); assertEquals("-/:;()$&@\"", row(n, 1));
-        assertEquals(".,?!'", row(n, 2)); assertEquals("./", row(n, 3));
+        assertEquals("1234567890", row(n, 0)); assertEquals("@#$_&-+()/", row(n, 1));
+        assertEquals("*\"':;!?", row(n, 2)); assertEquals("/.", row(n, 3));
         var s = new KeyboardLayout(390, true, Layer.SYMBOLS, FieldKind.EMAIL, true, true, FR);
-        assertEquals("[]{}#%^*+=", row(s, 0)); assertEquals("_\\|~<>€£¥•", row(s, 1));
-        assertEquals(".,?!'", row(s, 2)); assertEquals("@.", row(s, 3));
+        assertEquals("~`|•√π÷×§Δ", row(s, 0)); assertEquals("£¢€¥^°={}\\", row(s, 1));
+        assertEquals("%©®™✓[]", row(s, 2)); assertEquals("<>", row(s, 3));
         assertTrue(s.keys().stream().anyMatch(k -> k.kind() == KeyKind.EMOJI));
         assertTrue(s.keys().stream().anyMatch(k -> k.kind() == KeyKind.GLOBE));
     }
@@ -47,13 +47,13 @@ public class KeyboardEngineTest {
     @Test public void framesTileAcrossOrientationsWidthsAndLanguages() {
         for (boolean wide : List.of(false, true)) for (int width : List.of(320,375,390,640)) for (KeyboardLanguage lang : values()) {
             var layout = new KeyboardLayout(width, wide, Layer.LETTERS, FieldKind.EMAIL, true, true, lang);
-            assertEquals(wide ? 176 : 262, layout.totalHeight(), 0);
-            assertEquals(wide ? 39 : 44, layout.stripHeight(), 0);
+            assertEquals(wide ? 190 : 284, layout.totalHeight(), 0);
+            assertEquals(wide ? 42 : 50, layout.stripHeight(), 0);
             assertNull(layout.hitTest(0, layout.stripHeight()-1)); assertNull(layout.hitTest(width, 60));
             assertNull(layout.hitTest(0, layout.totalHeight()));
             Key prev = null;
             for (Key k : layout.keys()) {
-                assertTrue(k.right() > k.left()); assertEquals(wide ? 27.5 : 45, k.bottom()-k.top(), 0);
+                assertTrue(k.right() > k.left()); assertEquals(wide ? 30 : 47, k.bottom()-k.top(), 0);
                 assertSame(k, layout.hitTest(k.hitLeft(), k.hitTop()));
                 assertSame(k, layout.hitTest((k.left()+k.right())/2, (k.top()+k.bottom())/2));
                 if (prev == null || prev.row() != k.row()) {
