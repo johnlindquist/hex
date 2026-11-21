@@ -82,6 +82,7 @@ public final class FullKeyboardView extends FrameLayout {
         }
         strip.state(state,meterLevels);
     }
+    public void flashDrum(String label) { if(drums!=null) drums.flashDrum(label); }
     public void setSuggestions(List<String> items) { setSuggestions(items, false); }
     public void setSuggestions(List<String> items, boolean autoReplace) { strip.suggestions(items==null?List.of():items, autoReplace); }
     public void setUndoVisible(boolean visible) { strip.setUndo(visible); }

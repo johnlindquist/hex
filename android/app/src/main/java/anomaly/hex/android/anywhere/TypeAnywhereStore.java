@@ -33,6 +33,7 @@ public final class TypeAnywhereStore {
     } catch (RuntimeException | OutOfMemoryError e) {
       return;
     }
+    ScreenshotHistory.saveJpeg(c, item.capturedAt, jpeg.toByteArray());
     save(c, item, jpeg);
   }
   private static synchronized void save(

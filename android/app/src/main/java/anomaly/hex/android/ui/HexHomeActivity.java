@@ -1009,9 +1009,44 @@ public final class HexHomeActivity extends Activity {
       String date = java.text.DateFormat
                         .getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
                         .format(new java.util.Date(e.createdAtMs));
-      flexible(r, text(this, date + " · " + TranscriptStyle.fromId(e.style).label(), 13, FAINT));
+      String dur = e.durationMs >= 1000 ? " · " + formatDuration(e.durationMs) : "";
+      flexible(r, text(this, date + dur + " · " + TranscriptStyle.fromId(e.style).label(), 13, FAINT));
+      if (e.audioPath != null && new File(e.audioPath).isFile()) {
+        Button retranscribe = smallButton(this, "Re-transcribe", () -> {});
+        retranscribe.setOnClickListener(v -> {
+          retranscribe.setEnabled(false);
+          retranscribe.setText("…");
+          new Thread(() -> {
+            try {
+              String raw = anomaly.hex.android.speech.RecordingStore.retranscribeWav(this, new File(e.audioPath));
+              if (raw.isEmpty()) throw new IllegalStateException("No speech detected");
+              String lang = SpeechLanguage.resolveLocale(new SpeechLanguage(this).selectedId(), java.util.Locale.getDefault()).toLanguageTag();
+              var fixStore = new DictationFixStore(this);
+              var fixes = fixStore.isEnabled() ? fixStore.activeFixes() : java.util.Map.<String, String>of();
+              String formatted = TranscriptFormatter.applyPipeline(
+                  raw, TranscriptStyle.fromId(e.style), new CustomVocabulary(this).terms(),
+                  labs.isEnabled(LabId.SPOKEN_CLEANUP), "", fixes, lang).trim();
+              history.updateTranscript(e.id, raw, formatted);
+              runOnUiThread(() -> historyResults(results));
+            } catch (Exception ex) {
+              runOnUiThread(() -> {
+                retranscribe.setEnabled(true);
+                retranscribe.setText("Re-transcribe");
+                Toast.makeText(this, "Re-transcribe failed: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+              });
+            }
+          }, "hex-retranscribe").start();
+        });
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-2, -2);
+        rlp.rightMargin = d(6);
+        r.addView(retranscribe, rlp);
+      }
       r.addView(smallButton(this, "Copy", () -> copy(e.finalText)));
     }
+  }
+  private static String formatDuration(long ms) {
+    long totalSec = Math.max(1, ms / 1000);
+    return (totalSec / 60) + ":" + String.format(java.util.Locale.US, "%02d", totalSec % 60);
   }
   private void configureAnywhereKey() {
     SharedPreferences prefs = getSharedPreferences("hex_settings", MODE_PRIVATE);

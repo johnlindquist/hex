@@ -18,7 +18,9 @@ public final class AnywhereIcons {
     COPY,
     CHECK,
     SEND,
-    CLOSE
+    CLOSE,
+    HISTORY,
+    TRASH
   }
 
   public static IconButton button(
@@ -146,6 +148,18 @@ public final class AnywhereIcons {
         p.setStrokeWidth(1.9f);
         c.drawLine(-4.5f, -4.5f, 4.5f, 4.5f, p);
         c.drawLine(4.5f, -4.5f, -4.5f, 4.5f, p);
+      }
+      case HISTORY -> {
+        c.drawArc(-7f, -7f, 7f, 7f, -155f, 290f, false, p);
+        line(c, p, path, -7.5f, -5.5f, -6.5f, -1.5f, -2.5f, -2.5f);
+        line(c, p, path, 0f, -3.5f, 0f, 0.5f, 3f, 2.5f);
+      }
+      case TRASH -> {
+        c.drawLine(-6f, -4.5f, 6f, -4.5f, p);
+        c.drawLine(-2.5f, -4.5f, -2f, -6.8f, p);
+        c.drawLine(2.5f, -4.5f, 2f, -6.8f, p);
+        c.drawLine(-2f, -6.8f, 2f, -6.8f, p);
+        line(c, p, path, -4.8f, -4.5f, -4f, 6.5f, 4f, 6.5f, 4.8f, -4.5f);
       }
     }
     c.restore();

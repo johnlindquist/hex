@@ -9,14 +9,20 @@ import static anomaly.hex.android.keyboard.KeyboardPalette.*;
 
 /** Occupies only the key rows, leaving the recording bar and its controls untouched. */
 final class PunctuationDrumsOverlay extends LinearLayout {
+    private final TextView hint;
+    private final Runnable resetHint;
     PunctuationDrumsOverlay(Context c, FullKeyboardView.Host host) {
         super(c); setOrientation(VERTICAL); setBackgroundColor(BACKDROP);
         setClickable(true); setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
         setPadding(0, dp(c, 4), 0, dp(c, 6));
         setVisibility(GONE);
-        TextView hint = label(c, "Tap punctuation while speaking", 13);
+        hint = label(c, "Listening · tap a pad to punctuate live", 13);
         hint.setTextColor(TEXT_MUTED);
         addView(hint, -1, dp(c, 26));
+        resetHint = () -> {
+            hint.setText("Listening · tap a pad to punctuate live");
+            hint.setTextColor(TEXT_MUTED);
+        };
         String[] marks = {",", ".", "?", "!", "\n", "\n\n"};
         String[] glyphs = {",", ".", "?", "!", null, "¶"};
         String[] names = {"Comma", "Period", "Question", "Exclamation", "New line", "Paragraph"};
@@ -48,7 +54,20 @@ final class PunctuationDrumsOverlay extends LinearLayout {
         }
     }
 
-    void update(boolean live, int[] levels) { setVisibility(live ? VISIBLE : GONE); }
+    void update(boolean live, int[] levels) {
+        setVisibility(live ? VISIBLE : GONE);
+        if (!live) {
+            removeCallbacks(resetHint);
+            resetHint.run();
+        }
+    }
+
+    void flashDrum(String label) {
+        removeCallbacks(resetHint);
+        hint.setText("✓ " + label + " queued");
+        hint.setTextColor(0xFFFF9500);
+        postDelayed(resetHint, 1200);
+    }
 
     private static final class DrumPad extends View {
         private final String glyph, sub;

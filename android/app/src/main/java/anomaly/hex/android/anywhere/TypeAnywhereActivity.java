@@ -21,11 +21,12 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 public final class TypeAnywhereActivity extends Activity {
   public static volatile boolean visible;
   private TypeAnywhereStore capture;
+  private ImageView thumbView;
   private TextView status, badge, answer;
-  private IconButton copy;
-  private LinearLayout card;
+  private IconButton copy, historyBtn;
+  private LinearLayout card, historyTray;
   private EditText input;
-  private boolean reading, busy;
+  private boolean reading, busy, historyOpen;
   private String pending, rawAnswer = "";
   private int generation;
 
@@ -130,6 +131,7 @@ public final class TypeAnywhereActivity extends Activity {
     sheet.addView(top);
 
     ImageView thumb = new ImageView(this);
+    thumbView = thumb;
     thumb.setContentDescription("Captured screen");
     thumb.setTooltipText("Captured screen");
     thumb.setBackground(HexTheme.shape(this, KEY_FILL, 8, 0x22FFFFFF));
@@ -155,9 +157,23 @@ public final class TypeAnywhereActivity extends Activity {
     statusLp.rightMargin = dp(6);
     top.addView(status, statusLp);
 
+    historyOpen = false;
+    historyBtn = AnywhereIcons.button(
+        this, Glyph.HISTORY, "Screenshot history", 34, 16, KEY_FILL, TEXT_MUTED, 0, this::toggleHistory);
+    LinearLayout.LayoutParams histLp = new LinearLayout.LayoutParams(dp(34), dp(34));
+    histLp.rightMargin = dp(6);
+    top.addView(historyBtn, histLp);
+
     IconButton close = AnywhereIcons.button(
         this, Glyph.CLOSE, "Close", 34, 15, KEY_FILL, TEXT_MUTED, 0, this::finish);
     top.addView(close, new LinearLayout.LayoutParams(dp(34), dp(34)));
+
+    // Collapsible horizontal screenshot history tray
+    historyTray = column();
+    LinearLayout.LayoutParams trayLp = new LinearLayout.LayoutParams(-1, -2);
+    trayLp.topMargin = dp(8);
+    sheet.addView(historyTray, trayLp);
+    historyTray.setVisibility(View.GONE);
 
     // Markdown-formatted answer card
     card = column();
@@ -255,6 +271,103 @@ public final class TypeAnywhereActivity extends Activity {
     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(36), dp(36));
     lp.rightMargin = dp(8);
     parent.addView(b, lp);
+  }
+
+  private void toggleHistory() {
+    historyOpen = !historyOpen;
+    historyBtn.setGlyph(Glyph.HISTORY, historyOpen ? HexTheme.MIC : TEXT_MUTED, "Screenshot history");
+    if (!historyOpen) {
+      historyTray.setVisibility(View.GONE);
+      return;
+    }
+    populateHistoryTray();
+    historyTray.setVisibility(View.VISIBLE);
+  }
+
+  private void populateHistoryTray() {
+    historyTray.removeAllViews();
+    var items = ScreenshotHistory.list(this);
+    if (items.isEmpty()) {
+      TextView empty = text("No saved screenshots yet.", 12, TEXT_MUTED);
+      empty.setPadding(dp(4), dp(6), dp(4), dp(6));
+      historyTray.addView(empty);
+      return;
+    }
+    HorizontalScrollView scroll = new HorizontalScrollView(this);
+    scroll.setHorizontalScrollBarEnabled(false);
+    LinearLayout strip = row();
+    scroll.addView(strip);
+    long now = System.currentTimeMillis();
+    for (var item : items) {
+      FrameLayout tile = new FrameLayout(this);
+      tile.setBackground(HexTheme.shape(this, KEY_FILL, 10, 0x22FFFFFF));
+      tile.setClipToOutline(true);
+      ImageView iv = new ImageView(this);
+      iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+      var bm = ScreenshotHistory.decodeThumb(item.file, dp(56));
+      if (bm != null) iv.setImageBitmap(bm);
+      tile.addView(iv, new FrameLayout.LayoutParams(dp(46), dp(64)));
+
+      TextView age = text(relativeAge(now - item.capturedAt), 9, TEXT);
+      age.setBackgroundColor(0xAA000000);
+      age.setPadding(dp(4), dp(1), dp(4), dp(1));
+      tile.addView(age, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START));
+
+      tile.setContentDescription("Load screenshot from " + relativeAge(now - item.capturedAt));
+      tile.setTooltipText("Tap to load · long-press to delete");
+      tile.setOnClickListener(v -> loadHistoricalScreenshot(item));
+      tile.setOnLongClickListener(v -> {
+        ScreenshotHistory.delete(item.file);
+        populateHistoryTray();
+        return true;
+      });
+      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(46), dp(64));
+      lp.rightMargin = dp(8);
+      strip.addView(tile, lp);
+    }
+    IconButton clearAll = AnywhereIcons.button(
+        this, Glyph.TRASH, "Clear screenshot history", 34, 15, KEY_FILL, HexTheme.DANGER, 0x22FFFFFF, () -> {
+          ScreenshotHistory.clearAll(this);
+          populateHistoryTray();
+        });
+    strip.addView(clearAll, new LinearLayout.LayoutParams(dp(34), dp(34)));
+    historyTray.addView(scroll, new LinearLayout.LayoutParams(-1, -2));
+  }
+
+  private void loadHistoricalScreenshot(ScreenshotHistory.Item item) {
+    var bmp = ScreenshotHistory.decodeFull(item.file);
+    if (bmp == null) return;
+    int ticket = ++generation;
+    capture = TypeAnywhereStore.put(this, bmp);
+    if (thumbView != null) thumbView.setImageBitmap(bmp);
+    historyOpen = false;
+    historyBtn.setGlyph(Glyph.HISTORY, TEXT_MUTED, "Screenshot history");
+    historyTray.setVisibility(View.GONE);
+    card.setVisibility(View.GONE);
+    busy = false;
+    reading = true;
+    status.setText("…");
+    TextRecognizer ocr = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
+    try {
+      ocr.process(InputImage.fromBitmap(bmp, 0)).addOnCompleteListener(task -> {
+        ocr.close();
+        if (ticket != generation || isFinishing()) return;
+        readDone(task.isSuccessful() ? task.getResult().getText() : null);
+      });
+    } catch (RuntimeException e) {
+      ocr.close();
+      readDone(null);
+    }
+  }
+
+  private static String relativeAge(long diffMs) {
+    long sec = Math.max(0, diffMs / 1000);
+    if (sec < 60) return "now";
+    long min = sec / 60;
+    if (min < 60) return min + "m";
+    long hr = min / 60;
+    if (hr < 24) return hr + "h";
+    return (hr / 24) + "d";
   }
 
   private void readDone(String s) {

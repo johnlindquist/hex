@@ -14,7 +14,7 @@ public final class SpeechSession {
       CTX = 16000,
       PAUSE = 8960,
       SETTLE = 24000,
-      QUEUE_BUDGET = 60 * RATE; // Undelivered core audio, not a recording time limit.
+      QUEUE_BUDGET = 120 * RATE; // 2 min decode backlog headroom for 10+ min takes.
 
   public interface Input {
     int read(short[] buf, int offset, int len);
@@ -42,6 +42,8 @@ public final class SpeechSession {
     void onError(String code, String detail);
 
     void onCheckpoint(byte[] pcmBytes);
+
+    default void onPunctuationReady(String mark) {}
   }
 
   interface Decode {
@@ -95,6 +97,7 @@ public final class SpeechSession {
 
   private final ArrayDeque<Piece> staged =
       new ArrayDeque<>(); // Decoder-owned; holds text, never a growing session waveform.
+  private final ConcurrentLinkedQueue<String> drumMarks = new ConcurrentLinkedQueue<>();
   private static final short[] EMPTY = new short[0];
 
   public SpeechSession(
@@ -128,6 +131,13 @@ public final class SpeechSession {
 
   public void finish() {
     stop = true;
+  }
+
+  /** Seals the live phrase on the capture loop so speech before the tap decodes BEFORE the mark. */
+  public void insertPunctuation(String mark) {
+    if (running && !stop && !discard && mark != null && !mark.isEmpty()) {
+      drumMarks.offer(mark);
+    }
   }
 
   public synchronized void cancel() {
@@ -171,6 +181,7 @@ public final class SpeechSession {
     int attempted = -1;
     volatile boolean sealed;
     volatile OfflineRecognizerResult guess;
+    String drumMark;
 
     Part(short[] prefix) {
       left = prefix;
@@ -251,6 +262,7 @@ public final class SpeechSession {
           total += n;
           try {
             accept(frame, n, from, energy);
+            drainDrumMarks();
           } catch (Exception ex) {
             failure = "draft_limit".equals(ex.getMessage()) ? "draft_limit" : "storage_error";
             break;
@@ -300,6 +312,45 @@ public final class SpeechSession {
                 discard ? "cancelled" : interruption.isEmpty() ? "finished" : "error");
           }
         });
+  }
+
+  private void drainDrumMarks() throws Exception {
+    String mark;
+    while ((mark = drumMarks.poll()) != null) {
+      if (current != null && current.n >= 1600) {
+        Part p = current;
+        p.sealed = true;
+        p.natural = true;
+        p.drumMark = mark;
+        p.flush();
+        current = null;
+        inPause = false;
+        if (waiting != null) {
+          waiting.right = Arrays.copyOf(p.pcm, Math.min(p.n, CTX));
+          submit(waiting);
+          waiting = null;
+        }
+        submit(p);
+      } else {
+        if (waiting != null) {
+          submit(waiting);
+          waiting = null;
+        }
+        final String m = mark;
+        decoder.execute(() -> {
+          try {
+            if (!discard && interruption.isEmpty()) {
+              deliver(true, true);
+              synchronized (this) {
+                if (!discard && interruption.isEmpty()) sink.onPunctuationReady(m);
+              }
+            }
+          } catch (Exception e) {
+            fail("model_or_storage_error");
+          }
+        });
+      }
+    }
   }
 
   private void accept(short[] frame, int n, long from, double energy) throws Exception {
@@ -407,7 +458,8 @@ public final class SpeechSession {
       out.append(piece.text);
     }
     String all = out.toString();
-    int cut = flush ? all.length() : SentenceEnds.last(all, terminal);
+    boolean forceLong = staged.size() >= 3;
+    int cut = (flush || forceLong) ? all.length() : SentenceEnds.last(all, terminal);
     if (cut == 0) return;
     String send = all.substring(0, cut);
     long durationSamples = 0;
@@ -461,6 +513,12 @@ public final class SpeechSession {
               s = retry == null ? "" : retry.getText().trim();
             }
             if (s.isEmpty()) {
+              if (p.drumMark != null && !discard && interruption.isEmpty()) {
+                deliver(true, true);
+                synchronized (this) {
+                  if (!discard && interruption.isEmpty()) sink.onPunctuationReady(p.drumMark);
+                }
+              }
               if (!p.voice || p.n < 2000 || result != null && !result.getText().trim().isEmpty()) {
                 return;
               }
@@ -484,7 +542,14 @@ public final class SpeechSession {
             staged.add(new Piece(p, s));
             heldPieces = staged.size();
             handed = true;
-            deliver(false, supportedEnd);
+            if (p.drumMark != null) {
+              deliver(true, true);
+              synchronized (this) {
+                if (!discard && interruption.isEmpty()) sink.onPunctuationReady(p.drumMark);
+              }
+            } else {
+              deliver(false, supportedEnd);
+            }
           } catch (Exception | LinkageError e) {
             fail("model_or_storage_error");
           } finally {
