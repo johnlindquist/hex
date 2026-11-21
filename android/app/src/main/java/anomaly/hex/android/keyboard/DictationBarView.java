@@ -1,6 +1,11 @@
 package anomaly.hex.android.keyboard;
 
 import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.Typeface;
+import android.os.SystemClock;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.text.TextUtils;
@@ -26,7 +31,11 @@ public final class DictationBarView extends LinearLayout {
   }
 
   private static final int KEY = 0x1BFFFFFF, PRESSED = 0x30FFFFFF;
-  private final TextView meta, status, cancel, done, undo;
+  private static final int TEXT_MUTED = 0x8FFFFFFF, CHIP_FILL = 0x1CFFFFFF;
+  private final TextView meta, status, done, undo;
+  private final View cancel;
+  private long started;
+  private final Runnable clock = this::updateClock;
   private final LinearLayout dictate;
   private final DotScopeView scope;
   private boolean listening, transcribing, undoable;
@@ -35,25 +44,27 @@ public final class DictationBarView extends LinearLayout {
     super(context);
     setOrientation(VERTICAL);
     setBackgroundColor(0xFF17181A);
-    setPadding(dp(10), dp(4), dp(10), dp(6));
+    setPadding(dp(10), dp(4), dp(10), dp(12));
     LinearLayout top = row(28, 0);
-    TextView open = key("Hex", "Open Hex", host::onOpenApp, 0, 12);
-    top.addView(open, cell(42, 28, 0));
-    meta = key("", "", host::onStyleCycle, KEY, 14);
-    top.addView(meta, cell(0, 26, 6));
-    setMeta("Polished", "EN");
+    HexMarkView open = new HexMarkView(context);
+    action(open, "Open Hex", host::onOpenApp, 0, 12);
+    top.addView(open, cell(22, 24, 0));
     status = label("Ready", 12);
-    status.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-    status.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
-    top.addView(status, cell(-2, 28, 8));
-    undo = key("Undo dictation", "Undo dictation", host::onUndo, KEY, 14);
+    status.setTextColor(TEXT_MUTED);
+    top.addView(status, cell(-2, 28, 6));
+    undo = key("Undo dictation", "Undo dictation", host::onUndo, CHIP_FILL, 13);
     top.addView(undo, cell(-2, 26, 6));
+    top.addView(new View(context), cell(0, 1, 0));
+    meta = key("", "", host::onStyleCycle, 0x17FFFFFF, 13);
+    meta.setTextSize(12);
+    meta.setPadding(dp(10), 0, dp(10), 0);
+    top.addView(meta, cell(-2, 26, 6));
+    setMeta("Polished", "Auto");
 
     LinearLayout stage = row(48, 8);
     stage.setPadding(dp(6), 0, dp(6), 0);
     stage.setBackground(shape(0x0EFFFFFF, 24));
-    cancel = key("×", "Cancel dictation", host::onCancel, 0x17FFFFFF, 18);
-    cancel.setTextSize(22);
+    cancel = icon(Glyph.CANCEL, "Cancel dictation", host::onCancel, 0x17FFFFFF, 18);
     stage.addView(cancel, cell(36, 36, 0));
     scope = new DotScopeView(context);
     stage.addView(scope, cell(0, 38, 0));
@@ -63,23 +74,29 @@ public final class DictationBarView extends LinearLayout {
     View dot = new View(context);
     dot.setBackground(shape(0xFFFF9500, 4));
     dictate.addView(dot, cell(8, 8, 0));
-    dictate.addView(label("Dictate", 15), cell(-2, 34, 6));
+    TextView dictateText = label("Dictate", 15);
+    Typeface medium = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+    dictateText.setTypeface(medium);
+    dictate.addView(dictateText, cell(-2, 34, 6));
     stage.addView(dictate, cell(94, 34, 6));
     done = key("Done", "Finish dictation", host::onDictateToggle, 0xFF007AFF, 17);
+    done.setTypeface(medium);
     stage.addView(done, cell(68, 34, 6));
 
     LinearLayout bottom = row(44, 8);
-    bottom.addView(key("🌐", "Switch keyboard", host::onSwitchKeyboard, KEY, 8.5f), cell(46, 44, 0));
-    bottom.addView(key("space", "Space", host::onSpace, KEY, 8.5f), cell(0, 44, 6));
-    TextView delete = key("⌫", "Delete", host::onDelete, KEY, 8.5f);
+    bottom.addView(icon(Glyph.GLOBE, "Switch keyboard", host::onSwitchKeyboard, KEY, 8.5f), cell(46, 44, 0));
+    TextView space = key("space", "Space", host::onSpace, KEY, 8.5f);
+    space.setTextColor(TEXT_MUTED);
+    bottom.addView(space, cell(0, 44, 6));
+    View delete = icon(Glyph.DELETE, "Delete", host::onDelete, KEY, 8.5f);
     bottom.addView(delete, cell(54, 44, 6));
     installRepeat(delete);
-    bottom.addView(key("↵", "Return", host::onReturn, KEY, 8.5f), cell(58, 44, 6));
+    bottom.addView(icon(Glyph.RETURN, "Return", host::onReturn, KEY, 8.5f), cell(58, 44, 6));
     refresh();
   }
 
   public void setMeta(String styleLabel, String langLabel) {
-    meta.setText(styleLabel + " · " + langLabel);
+    meta.setText(styleLabel + " · " + ("auto".equalsIgnoreCase(langLabel) ? "Auto" : langLabel) + " ▾");
     meta.setContentDescription(meta.getText() + ", cycle style");
   }
 
@@ -87,6 +104,7 @@ public final class DictationBarView extends LinearLayout {
     boolean live = "listening".equals(state), busy = "transcribing".equals(state);
     scope.update(live, meterLevels);
     if (live == listening && busy == transcribing) return;
+    if (live) started = SystemClock.elapsedRealtime();
     listening = live;
     transcribing = busy;
     refresh();
@@ -100,7 +118,9 @@ public final class DictationBarView extends LinearLayout {
 
   private void refresh() {
     boolean idle = !listening && !transcribing;
-    status.setText(listening ? "Listening…" : transcribing ? "Transcribing…" : "Ready");
+    removeCallbacks(clock);
+    if (listening) updateClock();
+    else status.setText(transcribing ? "Transcribing…" : "Ready");
     status.setVisibility(idle && undoable ? GONE : VISIBLE);
     undo.setVisibility(idle && undoable ? VISIBLE : GONE);
     cancel.setVisibility(idle ? GONE : VISIBLE);
@@ -112,7 +132,57 @@ public final class DictationBarView extends LinearLayout {
     done.setBackground(button(transcribing ? KEY : 0xFF007AFF, 17));
   }
 
-  private void installRepeat(TextView key) {
+  private void updateClock() {
+    long elapsed = SystemClock.elapsedRealtime() - started, sec = elapsed / 1000;
+    status.setText("Listening… " + sec / 60 + ":" + (sec % 60 < 10 ? "0" : "") + sec % 60);
+    if (isAttachedToWindow()) postDelayed(clock, 1000 - elapsed % 1000);
+  }
+  @Override protected void onAttachedToWindow() {
+    super.onAttachedToWindow();
+    if (listening) updateClock();
+  }
+  @Override protected void onDetachedFromWindow() {
+    removeCallbacks(clock);
+    super.onDetachedFromWindow();
+  }
+
+  private enum Glyph { CANCEL, GLOBE, DELETE, RETURN }
+  private View icon(Glyph glyph, String name, Runnable run, int fill, float radius) {
+    View key = new Icon(getContext(), glyph);
+    action(key, name, run, fill, radius);
+    return key;
+  }
+  private static final class Icon extends View {
+    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path path = new Path();
+    private final float density;
+    Icon(Context c, Glyph glyph) {
+      super(c);
+      density = getResources().getDisplayMetrics().density;
+      paint.setColor(0xFFFFFFFF); paint.setStyle(Paint.Style.STROKE);
+      paint.setStrokeWidth(1.6f); paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeJoin(Paint.Join.ROUND);
+      switch (glyph) {
+        case CANCEL:
+          line(-5,-5,5,5); line(-5,5,5,-5); break;
+        case GLOBE:
+          path.addCircle(0,0,9,Path.Direction.CW); path.addOval(-4,-9,4,9,Path.Direction.CW);
+          line(-8,-3,8,-3); line(-8,3,8,3); break;
+        case DELETE:
+          path.moveTo(-10,0); path.lineTo(-4,-7); path.lineTo(10,-7); path.lineTo(10,7);
+          path.lineTo(-4,7); path.close(); line(-1,-3,5,3); line(-1,3,5,-3); break;
+        case RETURN:
+          path.moveTo(9,-6); path.lineTo(9,2); path.lineTo(-8,2);
+          path.moveTo(-3,-3); path.lineTo(-8,2); path.lineTo(-3,7); break;
+      }
+    }
+    private void line(float x, float y, float endX, float endY) { path.moveTo(x,y); path.lineTo(endX,endY); }
+    @Override protected void onDraw(Canvas c) {
+      c.save(); c.translate(getWidth() / 2f, getHeight() / 2f); c.scale(density, density);
+      c.drawPath(path, paint); c.restore();
+    }
+  }
+
+  private void installRepeat(View key) {
     key.setOnTouchListener(new OnTouchListener() {
       boolean held, repeated;
       final Runnable repeat = new Runnable() {
@@ -179,7 +249,7 @@ public final class DictationBarView extends LinearLayout {
     v.setGravity(Gravity.CENTER);
     v.setSingleLine();
     v.setEllipsize(TextUtils.TruncateAt.END);
-    v.setTextColor(0xFFF2F2F7);
+    v.setTextColor(0xFFFFFFFF);
     v.setTextSize(size);
     v.setText(text);
     return v;
