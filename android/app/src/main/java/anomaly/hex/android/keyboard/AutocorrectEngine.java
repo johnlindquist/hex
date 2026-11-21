@@ -36,14 +36,21 @@ public final class AutocorrectEngine {
             + "whether which while white whole whose will wish with within without word words work working world worry worth would "
             + "write wrong year years yesterday your yourself").split(" "));
     private final boolean english;
+    private final WordDictionary dictionary;
+    private final PersonalAutocorrectStore store;
+    private final boolean allowLearning;
     private final Map<String, String> fixes = new HashMap<>();
     private final LinkedHashSet<String> suppressed = new LinkedHashSet<>();
     private Correction pending;
     private String undoContext;
 
-    public AutocorrectEngine() { this(KeyboardLanguage.EN); }
-    public AutocorrectEngine(KeyboardLanguage language) {
+    public AutocorrectEngine() { this(KeyboardLanguage.EN, null, null, false); }
+    public AutocorrectEngine(KeyboardLanguage language) { this(language, null, null, false); }
+    public AutocorrectEngine(KeyboardLanguage language, WordDictionary dictionary, PersonalAutocorrectStore store, boolean allowLearning) {
         english = language == KeyboardLanguage.EN;
+        this.dictionary = dictionary;
+        this.store = store;
+        this.allowLearning = allowLearning;
         String data = switch (language) {
             case EN -> "teh:the thw:the adn:and dont:don't cant:can't wont:won't im:I'm ive:I've "
                     + "recieve:receive seperate:separate definately:definitely becuase:because widht:width "
@@ -71,14 +78,58 @@ public final class AutocorrectEngine {
         }
     }
 
-    private Correction lookup(String word) {
+    private Correction lookup(String word, List<String> spellSuggestions) {
         if (word.isEmpty()) return null;
         String lower = word.toLowerCase(Locale.ROOT);
-        String fix = fixes.get(lower);
-        if (fix == null || word.equals(fix) || suppressed.contains(lower)) return null;
+        if (suppressed.contains(lower)) return null;
+        if (allowLearning && store != null && store.isKept(lower)) return null;
         boolean title = !word.equals(lower);
         if (title && !word.equals(capitalize(lower))) return null;
-        return new Correction(word, fix, title ? capitalize(fix) : fix);
+
+        // 1. User-learned replacement (explicitly accepted earlier)
+        if (allowLearning && store != null) {
+            String learned = store.lookupLearned(lower);
+            if (learned != null && !word.equals(learned)) {
+                return new Correction(word, learned, matchCase(word, title, learned));
+            }
+        }
+
+        // 2. Curated typo & contraction map
+        String fix = fixes.get(lower);
+        if (fix != null && !word.equals(fix)) {
+            return new Correction(word, fix, matchCase(word, title, fix));
+        }
+
+        // 3. Full 30k English frequency dictionary + QWERTY spatial-proximity 1-edit
+        if (english && dictionary != null && dictionary.size() > 0 && lower.length() >= 3 && isPlainWord(word)) {
+            if (!dictionary.contains(lower)) {
+                List<WordDictionary.Candidate> edits = dictionary.bestEdits(lower, 1);
+                if (!edits.isEmpty()) {
+                    WordDictionary.Candidate top = edits.get(0);
+                    if (top.rank() < 31000 && (top.cost() <= 14 || lower.length() >= 5)) {
+                        return new Correction(word, top.word(), matchCase(word, title, top.word()));
+                    }
+                }
+            } else {
+                return null; // Valid known English word: never replace on space.
+            }
+        }
+
+        // 4. System SpellCheckerSession recommendation (e.g. 2-edit typos or non-English locales)
+        if (spellSuggestions != null && !spellSuggestions.isEmpty() && lower.length() >= 3 && isPlainWord(word)) {
+            String best = spellSuggestions.get(0);
+            if (best != null && !best.isBlank() && !best.equalsIgnoreCase(word)
+                    && (dictionary == null || !english || !dictionary.contains(lower))) {
+                return new Correction(word, best, matchCase(word, title, best));
+            }
+        }
+        return null;
+    }
+
+    private static String matchCase(String original, boolean title, String replacement) {
+        if (replacement.isEmpty()) return replacement;
+        if (!title) return replacement;
+        return Character.isUpperCase(replacement.charAt(0)) ? replacement : capitalize(replacement);
     }
 
     private static String capitalize(String word) {
@@ -86,11 +137,15 @@ public final class AutocorrectEngine {
     }
 
     public Correction correctOnSpace(String textBeforeCursor) {
+        return correctOnSpace(textBeforeCursor, List.of());
+    }
+
+    public Correction correctOnSpace(String textBeforeCursor, List<String> spellSuggestions) {
         clearUndo();
         if (textBeforeCursor == null) return null;
         Matcher token = TOKEN.matcher(textBeforeCursor);
         if (!token.find()) return null;
-        pending = lookup(token.group());
+        pending = lookup(token.group(), spellSuggestions);
         if (pending != null) {
             // A bounded suffix also works when the editor gives a sliding window of context.
             int start = Math.max(0, token.start() - 32);
@@ -110,8 +165,22 @@ public final class AutocorrectEngine {
     public Correction checkBackspaceUndo(String textBeforeCursor) {
         Correction undo = pending != null && textBeforeCursor != null && textBeforeCursor.endsWith(undoContext) ? pending : null;
         clearUndo();
-        if (undo != null) suppress(undo.original);
+        if (undo != null) {
+            suppress(undo.original);
+            if (allowLearning && store != null) store.recordRejected(undo.original, false);
+        }
         return undo;
+    }
+
+    /** Record user's explicit choice from the suggestion bar (slot 0 verbatim = reject, slot 1/2 = learn). */
+    public void onSuggestionPicked(String typedWord, String pickedWord) {
+        if (typedWord == null || typedWord.isBlank() || pickedWord == null || pickedWord.isBlank()) return;
+        if (typedWord.equalsIgnoreCase(pickedWord)) {
+            suppress(typedWord);
+            if (allowLearning && store != null) store.recordRejected(typedWord, true);
+        } else if (allowLearning && store != null && isPlainWord(typedWord)) {
+            store.recordAccepted(typedWord, pickedWord);
+        }
     }
 
     public void suppress(String original) {
@@ -122,24 +191,56 @@ public final class AutocorrectEngine {
     }
 
     public List<String> suggestions(String currentWord, List<String> customVocab) {
+        return suggestions(currentWord, customVocab, List.of());
+    }
+
+    public List<String> suggestions(String currentWord, List<String> customVocab, List<String> spellSuggestions) {
         if (currentWord == null || currentWord.isBlank()) return List.of();
         List<String> result = new ArrayList<>(3);
         result.add("“" + currentWord + "”");
-        Correction fix = lookup(currentWord);
+        Correction fix = lookup(currentWord, spellSuggestions);
         if (fix != null) result.add(fix.caseMatched);
         for (String word : customVocab) {
             if (result.size() == 3) break;
             if (word != null && word.length() > currentWord.length() && word.regionMatches(true, 0, currentWord, 0, currentWord.length()) && !result.contains(word)) result.add(word);
         }
-        if (english && currentWord.length() >= 4 && !suppressed.contains(currentWord.toLowerCase(Locale.ROOT))
+        String lower = currentWord.toLowerCase(Locale.ROOT);
+        boolean title = !currentWord.equals(lower) && currentWord.equals(capitalize(lower));
+        // Secondary dictionary edits or prefix completions
+        if (english && dictionary != null && dictionary.size() > 0 && isPlainWord(currentWord) && result.size() < 3) {
+            if (!dictionary.contains(lower) && lower.length() >= 3) {
+                for (WordDictionary.Candidate c : dictionary.bestEdits(lower, 3)) {
+                    if (result.size() == 3) break;
+                    String m = matchCase(currentWord, title, c.word());
+                    if (!result.contains(m)) result.add(m);
+                }
+            }
+            if (result.size() < 3 && lower.length() >= 2) {
+                for (String w : dictionary.prefixCompletions(lower, 3)) {
+                    if (result.size() == 3) break;
+                    String m = matchCase(currentWord, title, w);
+                    if (!result.contains(m)) result.add(m);
+                }
+            }
+        }
+        // System SpellChecker extra suggestions
+        if (spellSuggestions != null && result.size() < 3) {
+            for (String s : spellSuggestions) {
+                if (result.size() == 3) break;
+                if (s != null && !s.isBlank() && !s.equalsIgnoreCase(currentWord)) {
+                    String m = matchCase(currentWord, title, s);
+                    if (!result.contains(m)) result.add(m);
+                }
+            }
+        }
+        if (english && currentWord.length() >= 4 && !suppressed.contains(lower)
                 && isPlainWord(currentWord) && result.size() < 3) {
-            String lower = currentWord.toLowerCase(Locale.ROOT);
             for (String word : customVocab) {
                 if (result.size() == 3) break;
                 if (word != null && Math.abs(word.length() - lower.length()) <= 1
                         && oneEdit(lower, word.toLowerCase(Locale.ROOT)) && !result.contains(word)) result.add(word);
             }
-            if (result.size() < 3 && !COMMON.contains(lower)) {
+            if (dictionary == null && result.size() < 3 && !COMMON.contains(lower)) {
                 for (String word : COMMON) {
                     if (result.size() == 3) break;
                     if (!oneEdit(lower, word)) continue;

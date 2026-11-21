@@ -27,6 +27,9 @@ public final class HexInputMethodService extends InputMethodService implements F
   private HexLabs labs;
   private HexHistory history;
   private AutocorrectEngine autocorrect;
+  private PersonalAutocorrectStore personalStore;
+  private SystemSpellChecker spellChecker;
+  private volatile WordDictionary englishDictionary;
   private SpeechLanguage speechLang;
   private List<String> vocabulary = List.of();
   private EditorInfo editor;
@@ -44,6 +47,19 @@ public final class HexInputMethodService extends InputMethodService implements F
     super.onCreate();
     kbSettings = new KeyboardSettings(this); hexSettings = new HexSettings(this);
     labs = new HexLabs(this); history = new HexHistory(this); speechLang = new SpeechLanguage(this);
+    personalStore = new PersonalAutocorrectStore(this);
+    spellChecker = new SystemSpellChecker(this::refresh);
+    new Thread(() -> {
+      englishDictionary = WordDictionary.loadEnglish(this);
+      main.post(() -> {
+        if (editor != null && autocorrect != null) {
+          KeyboardLanguage lang = KeyboardLanguage.resolve(kbSettings.layoutLanguage(), Locale.getDefault());
+          boolean allowLearn = !privateField && (editor.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
+          autocorrect = new AutocorrectEngine(lang, englishDictionary, personalStore, allowLearn);
+          refresh();
+        }
+      });
+    }, "hex-dict-load").start();
   }
   @Override public View onCreateInputView() {
     container = new FrameLayout(this);
@@ -80,7 +96,10 @@ public final class HexInputMethodService extends InputMethodService implements F
     words = text && !privateField && kind == KeyboardLayout.FieldKind.TEXT && (type & InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS) == 0;
     emojiEnabled = labs.isEnabled(LabId.EMOJI_KEYBOARD);
     KeyboardLanguage language = KeyboardLanguage.resolve(kbSettings.layoutLanguage(), Locale.getDefault());
-    autocorrect = new AutocorrectEngine(language);
+    boolean allowLearn = !privateField && (info.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
+    autocorrect = new AutocorrectEngine(language, englishDictionary, personalStore, allowLearn);
+    if (words && kbSettings.autocorrect()) spellChecker.open(this, Locale.forLanguageTag(language.code()));
+    else spellChecker.close();
     CustomVocabulary vocab = new CustomVocabulary(this); vocabulary = vocab.isEnabled() ? vocab.terms() : List.of();
     action = (text && (type & InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0 || (info.imeOptions & EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0)
         ? EditorInfo.IME_ACTION_NONE : info.imeOptions & EditorInfo.IME_MASK_ACTION;
@@ -112,7 +131,7 @@ public final class HexInputMethodService extends InputMethodService implements F
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
   @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); super.onWindowHidden(); }
-  @Override public void onDestroy() { KeyboardPresence.setImeVisible(false); resetEditor(); main.removeCallbacksAndMessages(null); super.onDestroy(); }
+  @Override public void onDestroy() { KeyboardPresence.setImeVisible(false); if (spellChecker != null) spellChecker.close(); resetEditor(); main.removeCallbacksAndMessages(null); super.onDestroy(); }
   @Override public void onTrimMemory(int level) { super.onTrimMemory(level); if (session == null && level >= TRIM_MEMORY_BACKGROUND) Engine.get(this).releaseIfIdle(); }
   private InputConnection ic() { return editor == null ? null : getCurrentInputConnection(); }
   private String before(int n) {
@@ -125,7 +144,9 @@ public final class HexInputMethodService extends InputMethodService implements F
     int capFlags = explicitCap != 0 ? editor.inputType : (words ? (editor.inputType | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES) : editor.inputType);
     fullView.setAutoCap(!privateField && c.getCursorCapsMode(capFlags) != 0);
     String context = words ? before(256) : "";
-    List<String> suggestions = new ArrayList<>(autocorrect.suggestions(word(context), vocabulary));
+    String current = word(context);
+    List<String> spellSugs = words && kbSettings.autocorrect() && spellChecker != null ? spellChecker.lookupOrQuery(current) : List.of();
+    List<String> suggestions = new ArrayList<>(autocorrect.suggestions(current, vocabulary, spellSugs));
     String emoji = emojiEnabled ? EmojiCatalog.suggestForContext(context) : null;
     if (emoji != null) { if (suggestions.size() == 3) suggestions.remove(2); suggestions.add(emoji); }
     fullView.setSuggestions(suggestions); fullView.setEmojiContext(context);
@@ -147,13 +168,21 @@ public final class HexInputMethodService extends InputMethodService implements F
   }
   public void onCharacter(String s) { if (ic() != null) { editing(); replace(0, s); } }
   public void onEmojiPick(String s) { onCharacter(s); }
-  public void onSuggestionPick(String s) { if (ic() != null && words) { editing(); replace(word(before(256)).length(), s + " "); } }
+  public void onSuggestionPick(String s) {
+    if (ic() != null && words) {
+      String typed = word(before(256));
+      autocorrect.onSuggestionPicked(typed, s);
+      editing();
+      replace(typed.length(), s + " ");
+    }
+  }
   public void onSpace() {
     if (ic() == null) return; setUndo(null,-1);
     long now = SystemClock.uptimeMillis(); String s = words ? before(256) : "";
     if (lastSpace != 0 && now - lastSpace < 350 && s.endsWith(" ")) { editing(); replace(1, ". "); return; }
     lastSpace = now;
-    var fix = words && kbSettings.autocorrect() ? autocorrect.correctOnSpace(s) : null;
+    List<String> spellSugs = words && kbSettings.autocorrect() && spellChecker != null ? spellChecker.lookupOrQuery(word(s)) : List.of();
+    var fix = words && kbSettings.autocorrect() ? autocorrect.correctOnSpace(s, spellSugs) : null;
     replace(fix == null ? 0 : fix.original().length(), fix == null ? " " : fix.caseMatched() + " ");
   }
   public void onDelete() { onDeleteChar(); }
