@@ -9,7 +9,8 @@ import static anomaly.hex.android.keyboard.KeyboardPalette.*;
 
 public final class SuggestionStripView extends FrameLayout {
     private final FullKeyboardView.Host host;
-    private final LinearLayout typing, recording, slots;
+    private final LinearLayout typing, recording, slots, toolbar;
+    private final View emojiTool;
     private final FrameLayout center;
     private final LinearLayout undo, noticeBar;
     private final TextView clock, noticeText, noticeAction;
@@ -31,9 +32,12 @@ public final class SuggestionStripView extends FrameLayout {
     private boolean tracking, held;
     private final Runnable hold = this::holdElapsed;
 
-    SuggestionStripView(Context c, FullKeyboardView.Host host) {
+    SuggestionStripView(Context c, FullKeyboardView.Host host, Runnable toggleEmoji) {
         super(c); this.host=host;
         typing=row(c); typing.setPadding(dp(c,4.5f),0,dp(c,6f),0); addView(typing); center=new FrameLayout(c); typing.addView(center, weight());
+        toolbar=row(c); center.addView(toolbar);
+        emojiTool=addTool(true,"Emoji picker",toggleEmoji); emojiTool.setVisibility(GONE);
+        addTool(false,"Open Hex",host::onOpenApp);
         slots=row(c); center.addView(slots);
         undo=row(c); undo.setBackground(pill(CHIP_FILL)); undo.setPadding(dp(c,10),0,dp(c,10),0);
         View arrow=new View(c){protected void onDraw(android.graphics.Canvas canvas){KeyIcons.drawUndoArrow(canvas,getWidth()/2f,getHeight()/2f,dp(c,16),TEXT_MUTED);}};
@@ -62,6 +66,37 @@ public final class SuggestionStripView extends FrameLayout {
         finish=round(true,"Finish dictation",ACTION_FILL); finish.setOnClickListener(v->host.onStopDictation());
         recording.setVisibility(GONE); renderSlots();
     }
+    private View addTool(boolean emoji,String description,Runnable action) {
+        Context c=getContext();
+        View button=new View(c) {
+            protected void onDraw(android.graphics.Canvas canvas) {
+                float x=getWidth()/2f,y=getHeight()/2f,s=dp(c,19);
+                if(emoji) KeyIcons.drawSmiley(canvas,x,y,s,TEXT_MUTED);
+                else KeyIcons.drawOpenApp(canvas,x,y,s,TEXT_MUTED);
+            }
+        };
+        button.setContentDescription(description); button.setOnClickListener(v->action.run());
+        button.setBackground(pressable(0));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(c,34),dp(c,34)); p.leftMargin=dp(c,6);
+        toolbar.addView(button,p); return button;
+    }
+    private static android.graphics.drawable.StateListDrawable pressable(int fill) {
+        var states=new android.graphics.drawable.StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed},pill(KEY_PRESSED));
+        states.addState(new int[0],pill(fill)); return states;
+    }
+    void setEmojiEnabled(boolean enabled) { emojiTool.setVisibility(enabled?VISIBLE:GONE); }
+    private void updateContent() {
+        boolean available=undo.getVisibility()!=VISIBLE && noticeBar.getVisibility()!=VISIBLE;
+        boolean idle=items.isEmpty() && emojiContext==null;
+        showContent(toolbar,available && idle); showContent(slots,available && !idle);
+    }
+    private void showContent(View view,boolean show) {
+        if((view.getVisibility()==VISIBLE)==show) return;
+        view.animate().cancel(); view.setVisibility(show?VISIBLE:GONE);
+        if(show && isShown()) { view.setAlpha(0f); view.animate().alpha(1f).setDuration(100).start(); }
+        else view.setAlpha(1f);
+    }
     private LinearLayout row(Context c) { LinearLayout r=new LinearLayout(c); r.setGravity(Gravity.CENTER_VERTICAL); return r; }
     private static LinearLayout.LayoutParams weight() { return new LinearLayout.LayoutParams(0,-1,1); }
     private View round(boolean check,String desc,int color) {
@@ -80,32 +115,39 @@ public final class SuggestionStripView extends FrameLayout {
     void setUndo(boolean visible) {
         if(visible) showNotice(null,false);
         undo.setVisibility(visible?VISIBLE:GONE);
-        slots.setVisibility(visible||noticeBar.getVisibility()==VISIBLE?GONE:VISIBLE);
+        updateContent();
     }
     void showNotice(String message, boolean openApp) {
         timer.removeCallbacks(clearNotice);
         if(message==null || message.isBlank()) {
             noticeBar.setVisibility(GONE);
-            slots.setVisibility(undo.getVisibility()==VISIBLE?GONE:VISIBLE);
+            updateContent();
             return;
         }
-        undo.setVisibility(GONE); slots.setVisibility(GONE);
+        undo.setVisibility(GONE);
         noticeText.setText(message); noticeAction.setVisibility(openApp?VISIBLE:GONE);
-        noticeBar.setVisibility(VISIBLE); timer.postDelayed(clearNotice,4000);
+        noticeBar.setVisibility(VISIBLE); updateContent(); timer.postDelayed(clearNotice,4000);
     }
-    void suggestions(List<String> values) { items=List.copyOf(values); renderSlots(); }
+    void suggestions(List<String> values) {
+        if(!items.equals(values)) { items=List.copyOf(values); renderSlots(); }
+    }
     void contextEmoji(String value) { if(!java.util.Objects.equals(value,emojiContext)){emojiContext=value; renderSlots();} }
     private void renderSlots() {
         Context c=getContext(); slots.removeAllViews();
         String first=items.isEmpty()?"":items.get(0);
         boolean lone=emojiContext!=null && (items.isEmpty() || items.size()==1 && first.equals(emojiContext));
         boolean correction=isQuoted(first) && items.size()>1 && !items.get(1).isBlank() && !items.get(1).equals(emojiContext)
-                && !items.get(1).equals(first.substring(1,first.length()-1));
+                // Vocabulary completions extend the verbatim prefix (case-insensitively).
+                && !items.get(1).regionMatches(true,0,first,1,first.length()-2);
         String[] values=new String[3]; String[] words=new String[3];
         for(int i=0;i<3;i++) {
             values[i]=lone?(i==1?emojiContext:""):i<items.size()?items.get(i):"";
             words[i]=isQuoted(values[i])?values[i].substring(1,values[i].length()-1):values[i];
         }
+        if(!lone && emojiContext!=null && emojiContext.equals(values[1])) {
+            words[1]=values[1]=""; words[2]=values[2]=emojiContext;
+        }
+        updateContent();
         for(int i=0;i<3;i++) {
             if(i>0) {
                 View line=new View(c);
@@ -118,9 +160,10 @@ public final class SuggestionStripView extends FrameLayout {
             TextView slot=label(c,i==0 && !word.isEmpty() && !emoji?"“"+word+"”":value,emoji?23:16);
             slot.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
             var p=new LayoutParams(-1,dp(c,34),Gravity.CENTER); p.leftMargin=p.rightMargin=dp(c,4);
-            if(i==1 && correction) { var bg=pill(SELECT_FILL); bg.setCornerRadius(dp(c,10)); slot.setBackground(bg);
+            if(!word.isEmpty()) { slot.setDuplicateParentStateEnabled(true); slot.setBackground(pressable(i==1 && correction?SELECT_FILL:0)); }
+            if(i==1 && correction) {
                 slot.setTextSize(16.5f); slot.setTypeface(android.graphics.Typeface.create("sans-serif-medium",0)); }
-            if(i==0) slot.setTextColor(0xE0FFFFFF); cell.addView(slot,p);
+            cell.addView(slot,p);
             if(!word.isEmpty()) { cell.setContentDescription(slot.getText()); cell.setOnClickListener(v->{if(emoji) host.onEmojiPick(word); else host.onSuggestionPick(word);}); }
         }
     }

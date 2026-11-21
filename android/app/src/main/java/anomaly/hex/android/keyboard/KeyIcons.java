@@ -26,6 +26,10 @@ final class KeyIcons {
         begin(c,x,y,s,color); c.drawCircle(0,0,8.5f,p); c.drawArc(-5,-4,5,5,25,130,false,p);
         p.setStyle(Paint.Style.FILL); c.drawCircle(-3,-2,1,p); c.drawCircle(3,-2,1,p); c.restore();
     }
+    static void drawOpenApp(Canvas c,float x,float y,float s,int color) {
+        begin(c,x,y,s,color); line(c,-1,-7,-7,-7,-7,7,7,7,7,1);
+        line(c,1,-8,8,-8,8,-1); line(c,-1,1,8,-8); c.restore();
+    }
     static void drawShift(Canvas c,float x,float y,float s,ShiftStateMachine.State state,int color) {
         begin(c,x,y,s,color); boolean lock=state==ShiftStateMachine.State.CAPS_LOCK;
         if(state!=ShiftStateMachine.State.OFF) p.setStyle(Paint.Style.FILL);

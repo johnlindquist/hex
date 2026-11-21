@@ -31,7 +31,7 @@ public final class FullKeyboardView extends FrameLayout {
 
     public FullKeyboardView(Context c, Host host) {
         super(c); this.host=host; setBackgroundColor(BACKDROP); setClipChildren(false); setClipToPadding(false);
-        strip=new SuggestionStripView(c,host); plane=new KeyPlaneView(c,new PlaneHost(),this::toggleEmoji);
+        strip=new SuggestionStripView(c,host,this::toggleEmoji); plane=new KeyPlaneView(c,new PlaneHost(),this::toggleEmoji);
         addView(strip,new LayoutParams(-1,dp(c,plane.landscape()?42:50))); addView(plane,new LayoutParams(-1,-2));
     }
     private void toggleEmoji() {
@@ -72,7 +72,7 @@ public final class FullKeyboardView extends FrameLayout {
     public void setFieldKind(KeyboardLayout.FieldKind kind,String returnLabel) { closeEmoji(); plane.field(kind,returnLabel); }
     public void setAutoCap(boolean value) { plane.autoCap(value); }
     public void setSettings(KeyboardLanguage language,boolean keyPopups,boolean haptics,boolean emojiEnabled) {
-        this.emojiEnabled=emojiEnabled;
+        this.emojiEnabled=emojiEnabled; strip.setEmojiEnabled(emojiEnabled);
         if(!emojiEnabled) { closeEmoji(); emojiContext=null; strip.contextEmoji(null); }
         plane.settings(language,keyPopups,haptics,emojiEnabled);
     }
