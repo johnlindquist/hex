@@ -34,7 +34,8 @@ public final class TypeAnywhereActivity extends Activity {
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
+        | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
     open();
   }
   @Override
@@ -53,8 +54,17 @@ public final class TypeAnywhereActivity extends Activity {
   @Override
   public void onWindowFocusChanged(boolean focus) {
     super.onWindowFocusChanged(focus);
-    if (focus && input != null && input.hasFocus())
-      input.post(() -> getWindow().getInsetsController().show(WindowInsets.Type.ime()));
+    if (focus && input != null) {
+      input.requestFocus();
+      Runnable showIme = () -> {
+        if (isFinishing() || input == null) return;
+        getWindow().getInsetsController().show(WindowInsets.Type.ime());
+        var imm = getSystemService(android.view.inputmethod.InputMethodManager.class);
+        if (imm != null) imm.showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+      };
+      input.post(showIme);
+      input.postDelayed(showIme, 150);
+    }
   }
   private int dp(int n) {
     return HexTheme.dp(this, n);
@@ -105,6 +115,7 @@ public final class TypeAnywhereActivity extends Activity {
     LinearLayout header = row();
     sheet.addView(header);
     ImageView thumb = new ImageView(this);
+    thumb.setContentDescription("Captured screen preview");
     thumb.setBackground(HexTheme.shape(this, KEY_FILL, 8, 0));
     thumb.setClipToOutline(true);
     thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -131,30 +142,35 @@ public final class TypeAnywhereActivity extends Activity {
     for (String label : new String[] {"Summarize", "Explain", "Key points", "Draft reply"}) {
       LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
       lp.rightMargin = dp(5);
-      chips.addView(button(label, () -> {
-        input.setText(label);
-        ask(label);
-      }), lp);
+      chips.addView(button(label, () -> ask(label)), lp);
     }
     card = column();
     card.setBackground(HexTheme.shape(this, KEY_FILL, 14, 0));
-    pad(card, 12, 4);
-    sheet.addView(card);
+    pad(card, 12, 8);
+    LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, -2);
+    cardLp.bottomMargin = dp(6);
+    sheet.addView(card, cardLp);
     card.setVisibility(View.GONE);
     LinearLayout bar = row();
     card.addView(bar);
     badge = text("", 13, TEXT_MUTED);
     bar.addView(badge, new LinearLayout.LayoutParams(0, -2, 1));
-    copy = button("Copy",
-        ()
-            -> getSystemService(ClipboardManager.class)
-                .setPrimaryClip(ClipData.newPlainText("Answer", answer.getText())));
+    copy = button("Copy", () -> {
+      getSystemService(ClipboardManager.class)
+          .setPrimaryClip(ClipData.newPlainText("Answer", answer.getText()));
+      copy.setText("Copied");
+      copy.postDelayed(() -> copy.setText("Copy"), 1500);
+    });
     bar.addView(copy);
-    ScrollView body = new ScrollView(this);
+    ScrollView body = new ScrollView(this) {
+      @Override protected void onMeasure(int w, int h) {
+        super.onMeasure(w, MeasureSpec.makeMeasureSpec(dp(120), MeasureSpec.AT_MOST));
+      }
+    };
     answer = text("", 15, TEXT);
     answer.setTextIsSelectable(true);
     body.addView(answer);
-    card.addView(body, -1, dp(90));
+    card.addView(body, -1, -2);
     if (!TypeAnywhereAiClient.key(this).isEmpty())
       sheet.addView(text("Ask sends this screen and question to Gemini.", 13, TEXT_MUTED));
     LinearLayout composer = row();
@@ -231,6 +247,7 @@ public final class TypeAnywhereActivity extends Activity {
       finish();
       return;
     }
+    input.setText("");
     card.setVisibility(View.VISIBLE);
     copy.setVisibility(View.GONE);
     answer.setText("");
