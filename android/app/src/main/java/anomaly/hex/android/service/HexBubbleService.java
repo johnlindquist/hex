@@ -1,7 +1,8 @@
 package anomaly.hex.android.service;
 import android.Manifest;
-import android.accessibilityservice.AccessibilityButtonController;
 import android.graphics.Bitmap;
+import android.graphics.Insets;
+import android.graphics.Rect;
 import android.hardware.HardwareBuffer;
 import anomaly.hex.android.anywhere.*;
 import android.accessibilityservice.AccessibilityService;
@@ -51,6 +52,7 @@ public final class HexBubbleService extends AccessibilityService {
   private WindowManager.LayoutParams params;
   private AnywhereHandleView anywhereHandle;
   private WindowManager.LayoutParams anywhereParams;
+  private int anywhereStartX, anywhereStartY;
   private AlertDialog review;
   private Take take;
   private SpeechSession last;
@@ -197,13 +199,6 @@ public final class HexBubbleService extends AccessibilityService {
       }
     };
   }
-  private final AccessibilityButtonController.AccessibilityButtonCallback anywhereButton =
-      new AccessibilityButtonController.AccessibilityButtonCallback() {
-        @Override public void onClicked(AccessibilityButtonController button) {
-          if (labs.isEnabled(LabId.TYPE_ANYWHERE))
-            launchTypeAnywhere();
-        }
-      };
   private int captureRequest;
   public void launchTypeAnywhere() {
     if (!connected || !unlocked() || !labs.isEnabled(LabId.TYPE_ANYWHERE))
@@ -259,7 +254,6 @@ public final class HexBubbleService extends AccessibilityService {
   @Override
   protected void onServiceConnected() {
     if (!connected) {
-      getAccessibilityButtonController().registerAccessibilityButtonCallback(anywhereButton, main);
       getContentResolver().registerContentObserver(
           Settings.Secure.getUriFor(Settings.Secure.DEFAULT_INPUT_METHOD), false,
           defaultImeObserver);
@@ -352,6 +346,18 @@ public final class HexBubbleService extends AccessibilityService {
       main.postDelayed(this, fastImeTicks > 0 ? 100 : 500);
     }
   };
+  private Rect anywhereSafeArea(WindowManager wm, int winSize) {
+    WindowMetrics m = wm.getCurrentWindowMetrics();
+    Rect b = m.getBounds();
+    Insets in = m.getWindowInsets().getInsetsIgnoringVisibility(
+        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+    int pad = HexTheme.dp(this, 4);
+    int minX = in.left + pad;
+    int maxX = Math.max(minX, b.width() - in.right - winSize - pad);
+    int minY = in.top + HexTheme.dp(this, 12);
+    int maxY = Math.max(minY, b.height() - in.bottom - winSize - HexTheme.dp(this, 12));
+    return new Rect(minX, minY, maxX, maxY);
+  }
   private void renderAnywhereHandle(WindowManager wm) {
     boolean show = connected && unlocked() && !calling()
         && labs.isEnabled(LabId.TYPE_ANYWHERE) && !TypeAnywhereActivity.visible;
@@ -362,50 +368,67 @@ public final class HexBubbleService extends AccessibilityService {
       }
       return;
     }
+    int sizeDp = settings.anywhereButtonSizeDp();
+    SharedPreferences prefs = getSharedPreferences("hex_settings", MODE_PRIVATE);
     if (anywhereHandle != null) {
       if (anywhereHandle.getVisibility() != View.VISIBLE) anywhereHandle.setVisibility(View.VISIBLE);
+      if (anywhereHandle.visualSizeDp() != sizeDp && anywhereParams != null) {
+        int oldWin = anywhereHandle.windowSizePx();
+        anywhereHandle.setVisualSizeDp(sizeDp);
+        int newWin = anywhereHandle.windowSizePx();
+        anywhereParams.width = newWin;
+        anywhereParams.height = newWin;
+        int shift = (oldWin - newWin) / 2;
+        Rect safe = anywhereSafeArea(wm, newWin);
+        anywhereParams.x = Math.max(safe.left, Math.min(safe.right, anywhereParams.x + shift));
+        anywhereParams.y = Math.max(safe.top, Math.min(safe.bottom, anywhereParams.y + shift));
+        try { wm.updateViewLayout(anywhereHandle, anywhereParams); } catch (RuntimeException ignored) {}
+      }
       return;
     }
-    var bounds = wm.getCurrentWindowMetrics().getBounds();
-    int pad = HexTheme.dp(this, 6);
-    int size = HexTheme.dp(this, 28);
-    SharedPreferences prefs = getSharedPreferences("hex_settings", MODE_PRIVATE);
-    boolean left = prefs.getBoolean("anywhere_edge_left", false);
-    float yRatio = prefs.getFloat("anywhere_y_ratio", 0.42f);
-    anywhereParams = new WindowManager.LayoutParams(size, size,
-        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-        PixelFormat.TRANSLUCENT);
-    anywhereParams.gravity = Gravity.TOP | Gravity.START;
-    anywhereParams.x = left ? pad : Math.max(pad, bounds.width() - size - pad);
-    anywhereParams.y = Math.max(HexTheme.dp(this, 60),
-        Math.min(bounds.height() - size - HexTheme.dp(this, 80), Math.round(bounds.height() * yRatio)));
-    anywhereParams.setTitle("Hex Type anywhere");
-    anywhereHandle = new AnywhereHandleView(this, new AnywhereHandleView.Listener() {
+    anywhereHandle = new AnywhereHandleView(this, sizeDp, new AnywhereHandleView.Listener() {
       @Override public void onTap() {
         if (anywhereHandle != null) anywhereHandle.setVisibility(View.INVISIBLE);
         main.postDelayed(HexBubbleService.this::launchTypeAnywhere, 60);
       }
-      @Override public void onDrag(float rawX, float rawY, boolean done) {
+      @Override public void onDragStart() {
+        if (anywhereParams == null) return;
+        anywhereStartX = anywhereParams.x;
+        anywhereStartY = anywhereParams.y;
+      }
+      @Override public void onDragMove(float dx, float dy) {
         if (anywhereHandle == null || anywhereParams == null) return;
-        var b = wm.getCurrentWindowMetrics().getBounds();
-        int maxY = Math.max(HexTheme.dp(HexBubbleService.this, 60), b.height() - size - HexTheme.dp(HexBubbleService.this, 80));
-        int ny = Math.max(HexTheme.dp(HexBubbleService.this, 60), Math.min(maxY, Math.round(rawY - size * 0.5f)));
-        int nx = done
-            ? (rawX < b.width() * 0.5f ? pad : Math.max(pad, b.width() - size - pad))
-            : Math.max(pad, Math.min(b.width() - size - pad, Math.round(rawX - size * 0.5f)));
-        anywhereParams.x = nx;
-        anywhereParams.y = ny;
+        Rect safe = anywhereSafeArea(wm, anywhereHandle.windowSizePx());
+        anywhereParams.x = Math.max(safe.left, Math.min(safe.right, Math.round(anywhereStartX + dx)));
+        anywhereParams.y = Math.max(safe.top, Math.min(safe.bottom, Math.round(anywhereStartY + dy)));
         try { wm.updateViewLayout(anywhereHandle, anywhereParams); } catch (RuntimeException ignored) {}
-        if (done) {
-          prefs.edit()
-              .putBoolean("anywhere_edge_left", rawX < b.width() * 0.5f)
-              .putFloat("anywhere_y_ratio", Math.max(0.1f, Math.min(0.85f, ny / (float) Math.max(1, b.height()))))
-              .apply();
-        }
+      }
+      @Override public void onDragEnd() {
+        if (anywhereHandle == null || anywhereParams == null) return;
+        Rect safe = anywhereSafeArea(wm, anywhereHandle.windowSizePx());
+        float xr = safe.width() > 0 ? (anywhereParams.x - safe.left) / (float) safe.width() : 1f;
+        float yr = safe.height() > 0 ? (anywhereParams.y - safe.top) / (float) safe.height() : 0.42f;
+        prefs.edit()
+            .putFloat("anywhere_x_ratio", Math.max(0f, Math.min(1f, xr)))
+            .putFloat("anywhere_y_ratio", Math.max(0f, Math.min(1f, yr)))
+            .apply();
       }
     });
+    int winSize = anywhereHandle.windowSizePx();
+    Rect safe = anywhereSafeArea(wm, winSize);
+    float xRatio = prefs.getFloat("anywhere_x_ratio", 1f);
+    float yRatio = prefs.getFloat("anywhere_y_ratio", 0.42f);
+    anywhereParams = new WindowManager.LayoutParams(winSize, winSize,
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+        PixelFormat.TRANSLUCENT);
+    anywhereParams.gravity = Gravity.TOP | Gravity.START;
+    anywhereParams.setFitInsetsTypes(0);
+    anywhereParams.x = safe.left + Math.round(safe.width() * Math.max(0f, Math.min(1f, xRatio)));
+    anywhereParams.y = safe.top + Math.round(safe.height() * Math.max(0f, Math.min(1f, yRatio)));
+    anywhereParams.setTitle("Hex Type anywhere");
     try { wm.addView(anywhereHandle, anywhereParams); } catch (RuntimeException ignored) { anywhereHandle = null; }
   }
   private void render() {
@@ -866,8 +889,11 @@ public final class HexBubbleService extends AccessibilityService {
   @Override
   public void onDestroy() {
     KeyboardPresence.setOnVisibilityChanged(null);
+    if (anywhereHandle != null) {
+      try { getSystemService(WindowManager.class).removeView(anywhereHandle); } catch (RuntimeException ignored) {}
+      anywhereHandle = null;
+    }
     if (connected) {
-      getAccessibilityButtonController().unregisterAccessibilityButtonCallback(anywhereButton);
       getContentResolver().unregisterContentObserver(defaultImeObserver);
       unregisterReceiver(screen);
       getSystemService(AudioManager.class).removeOnModeChangedListener(mode);

@@ -1076,7 +1076,8 @@ public final class HexHomeActivity extends Activity {
       });
 
       if (lab == LabId.TYPE_ANYWHERE && labs.isEnabled(lab)) {
-        act("Configure accessibility button", false, this::accessibility);
+        anywhereSizeRow();
+        act("Open accessibility settings", false, this::accessibility);
         act("Hex API proxy (Gemini 4 Hydrogen)", false, this::configureAnywhereKey);
       }
       if (lab == LabId.WORDS_ON_SCREEN && labs.isEnabled(lab))
@@ -1090,5 +1091,40 @@ public final class HexHomeActivity extends Activity {
       settings.setOnboardingCompleted(false);
       page(0);
     });
+  }
+  private void anywhereSizeRow() {
+    divider(group);
+    LinearLayout box = new LinearLayout(this);
+    box.setOrientation(LinearLayout.VERTICAL);
+    box.setPadding(d(16), d(12), d(16), d(12));
+    LinearLayout head = row(box);
+    flexible(head, text(this, "Button size", 15, TEXT));
+    int current = settings.anywhereButtonSizeDp();
+    TextView value = text(this, current + " dp", 13, MUTED);
+    head.addView(value);
+
+    SeekBar slider = new SeekBar(this);
+    slider.setMax(HexSettings.ANYWHERE_SIZE_MAX_DP - HexSettings.ANYWHERE_SIZE_MIN_DP);
+    slider.setProgress(current - HexSettings.ANYWHERE_SIZE_MIN_DP);
+    slider.setThumbTintList(android.content.res.ColorStateList.valueOf(MIC));
+    slider.setProgressTintList(android.content.res.ColorStateList.valueOf(MIC));
+    slider.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(BORDER));
+    slider.setContentDescription("Type anywhere button size");
+    slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+      @Override public void onProgressChanged(SeekBar s, int progress, boolean fromUser) {
+        int dpSize = HexSettings.ANYWHERE_SIZE_MIN_DP + progress;
+        value.setText(dpSize + " dp");
+        if (fromUser) {
+          settings.setAnywhereButtonSizeDp(dpSize);
+          HexBubbleService.refreshLabs();
+        }
+      }
+      @Override public void onStartTrackingTouch(SeekBar s) {}
+      @Override public void onStopTrackingTouch(SeekBar s) {}
+    });
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+    lp.topMargin = d(8);
+    box.addView(slider, lp);
+    group.addView(box);
   }
 }

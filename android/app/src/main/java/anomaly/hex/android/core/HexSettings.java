@@ -6,6 +6,9 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 public final class HexSettings {
+    public static final int ANYWHERE_SIZE_MIN_DP = 20;
+    public static final int ANYWHERE_SIZE_MAX_DP = 56;
+    public static final int ANYWHERE_SIZE_DEFAULT_DP = 28;
     private static final Object LOCK = new Object();
     private final SharedPreferences p;
     public HexSettings(Context ctx) { p = ctx.getSharedPreferences("hex_settings", Context.MODE_PRIVATE); }
@@ -45,6 +48,19 @@ public final class HexSettings {
             if (preferBuiltInMic() != value) p.edit().putBoolean("preferBuiltInMic", value).putLong("revision", revision()+1).apply();
         }
     }
+    public synchronized int anywhereButtonSizeDp() {
+        return clampAnywhereSize(p.getInt("anywhereButtonSizeDp", ANYWHERE_SIZE_DEFAULT_DP));
+    }
+    public synchronized void setAnywhereButtonSizeDp(int value) {
+        int clamped = clampAnywhereSize(value);
+        synchronized (LOCK) {
+            if (anywhereButtonSizeDp() != clamped)
+                p.edit().putInt("anywhereButtonSizeDp", clamped).putLong("revision", revision() + 1).apply();
+        }
+    }
+    public static int clampAnywhereSize(int value) {
+        return Math.max(ANYWHERE_SIZE_MIN_DP, Math.min(ANYWHERE_SIZE_MAX_DP, value));
+    }
     public synchronized long revision() { return p.getLong("revision", 0); }
     public synchronized JSONObject toJson() {
         synchronized (LOCK) {
@@ -55,7 +71,8 @@ public final class HexSettings {
                     .put("onboardingCompleted", onboardingCompleted())
                     .put("onboardingPage", onboardingPage())
                     .put("hapticsEnabled", hapticsEnabled())
-                    .put("preferBuiltInMic", preferBuiltInMic());
+                    .put("preferBuiltInMic", preferBuiltInMic())
+                    .put("anywhereButtonSizeDp", anywhereButtonSizeDp());
             } catch (JSONException impossible) { throw new IllegalStateException(impossible); }
         }
     }

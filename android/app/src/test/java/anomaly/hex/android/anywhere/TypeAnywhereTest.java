@@ -54,4 +54,12 @@ public class TypeAnywhereTest {
     for (String json : new String[] {null, "broken", "{}", "{\"candidates\":[]}"})
       assertEquals("", TypeAnywhereEngine.parseGeminiResponse(json));
   }
+  @Test
+  public void anywhereButtonSizeClampsToRange() {
+    assertEquals(anomaly.hex.android.core.HexSettings.ANYWHERE_SIZE_MIN_DP,
+        anomaly.hex.android.core.HexSettings.clampAnywhereSize(8));
+    assertEquals(36, anomaly.hex.android.core.HexSettings.clampAnywhereSize(36));
+    assertEquals(anomaly.hex.android.core.HexSettings.ANYWHERE_SIZE_MAX_DP,
+        anomaly.hex.android.core.HexSettings.clampAnywhereSize(120));
+  }
 }
