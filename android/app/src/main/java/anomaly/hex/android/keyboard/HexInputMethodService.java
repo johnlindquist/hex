@@ -6,6 +6,8 @@ import android.inputmethodservice.InputMethodService;
 import android.os.*;
 import android.text.InputType;
 import android.view.View;
+import android.view.Window;
+import android.view.WindowInsets;
 import android.view.inputmethod.*;
 import android.widget.*;
 import anomaly.hex.android.core.*;
@@ -43,7 +45,18 @@ public final class HexInputMethodService extends InputMethodService implements F
     labs = new HexLabs(this); history = new HexHistory(this); speechLang = new SpeechLanguage(this);
   }
   @Override public View onCreateInputView() {
-    container = new FrameLayout(this); fullView = null; barView = null; attachMode(); return container;
+    container = new FrameLayout(this);
+    container.setBackgroundColor(KeyboardPalette.BACKDROP);
+    container.setOnApplyWindowInsetsListener((v, insets) -> {
+      int bottom = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+      if (v.getPaddingBottom() != bottom) v.setPadding(0, 0, 0, bottom);
+      return insets;
+    });
+    Window w = getWindow() != null ? getWindow().getWindow() : null;
+    if (w != null) w.setNavigationBarColor(KeyboardPalette.BACKDROP);
+    fullView = null; barView = null; attachMode();
+    container.requestApplyInsets();
+    return container;
   }
   private void attachMode() {
     if (kbSettings.isFullKeyboard() ? fullView != null : barView != null) return;
