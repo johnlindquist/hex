@@ -5,6 +5,7 @@ import android.content.pm.PackageManager;
 import android.inputmethodservice.InputMethodService;
 import android.os.*;
 import android.text.InputType;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -158,13 +159,27 @@ public final class HexInputMethodService extends InputMethodService implements F
   public void onDelete() { onDeleteChar(); }
   public void onDeleteChar() {
     InputConnection c = ic(); if (c == null) return;
-    var fix = words ? autocorrect.checkBackspaceUndo(before(256)) : null; editing();
-    if (fix != null) replace(fix.caseMatched().length()+1, fix.original());
-    else { CharSequence selected = c.getSelectedText(0); if (selected != null && selected.length()>0) c.commitText("",1); else if (!c.deleteSurroundingTextInCodePoints(1,0)) c.deleteSurroundingText(1,0); refresh(); }
+    CharSequence selected = c.getSelectedText(0);
+    String context = EditorDeletePolicy.raw(editor.inputType) ? "" : before(words ? 256 : 1);
+    var fix = words ? autocorrect.checkBackspaceUndo(context) : null;
+    editing();
+    switch (EditorDeletePolicy.deletion(editor.inputType, selected, context)) {
+      case SELECTION -> c.commitText("", 1);
+      case KEY_EVENT -> sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL);
+      case SURROUNDING_TEXT -> {
+        if (fix != null) { replace(fix.caseMatched().length()+1, fix.original()); return; }
+        if (!c.deleteSurroundingTextInCodePoints(1, 0)) c.deleteSurroundingText(1, 0);
+      }
+    }
+    refresh();
   }
   public void onDeleteWord() {
     if (ic() == null) return; if (privateField) { onDeleteChar(); return; }
-    editing(); String s = before(2048); int i = s.length();
+    editing(); String s = EditorDeletePolicy.raw(editor.inputType) ? "" : before(2048);
+    if (EditorDeletePolicy.deletion(editor.inputType, null, s) == EditorDeletePolicy.Delete.KEY_EVENT) {
+      sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL); refresh(); return;
+    }
+    int i = s.length();
     while (i>0 && Character.isWhitespace(s.charAt(i-1))) i--;
     while (i>0 && !Character.isWhitespace(s.charAt(i-1))) i--;
     ic().deleteSurroundingText(s.length()-i,0); refresh();
@@ -174,7 +189,13 @@ public final class HexInputMethodService extends InputMethodService implements F
     ExtractedText t = c.getExtractedText(new ExtractedTextRequest(), 0); if (t == null || t.text == null) return;
     int p = t.startOffset + Math.max(0, Math.min(t.text.length(), t.selectionEnd + delta)); c.setSelection(p,p); refresh();
   }
-  public void onReturn() { if (ic() == null) return; editing(); if (actionLabel().isEmpty()) replace(0,"\n"); else ic().performEditorAction(action); }
+  public void onReturn() {
+    if (ic() == null) return;
+    editing(); String label = actionLabel();
+    if (EditorDeletePolicy.sendEnter(editor.inputType, label)) sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER);
+    else if (label.isEmpty()) replace(0,"\n");
+    else ic().performEditorAction(action);
+  }
   public void onSwitchKeyboard() { if (!switchToNextInputMethod(false)) getSystemService(InputMethodManager.class).showInputMethodPicker(); }
   public void onOpenApp() { startActivity(new Intent(this, HexHomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
   static String languageLabel(String id) {
