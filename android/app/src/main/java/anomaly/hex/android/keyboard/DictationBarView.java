@@ -95,6 +95,7 @@ public final class DictationBarView extends LinearLayout {
     cancel = icon(Glyph.CANCEL, "Cancel dictation", host::onCancel, 0x16FFFFFF, 17);
     stage.addView(cancel, cell(34, 34, 0));
     scope = new DotScopeView(c);
+    scope.setDrawPlate(false);
     stage.addView(scope, cell(0, 34, 0));
     dictate = compound(label("Dictate", 15, -1), Glyph.MIC, true, "Dictate", host::onDictateToggle, 0x17FFFFFF);
     stage.addView(dictate, cell(94, 34, 6));

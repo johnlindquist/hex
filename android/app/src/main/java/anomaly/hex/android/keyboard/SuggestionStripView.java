@@ -46,7 +46,7 @@ public final class SuggestionStripView extends FrameLayout {
         recording.addView(well,new LinearLayout.LayoutParams(0,dp(c,32),1));
         clock=label(c,"0:00",12); clock.setTypeface(android.graphics.Typeface.create("sans-serif-medium",0)); clock.setFontFeatureSettings("tnum"); clock.setTextColor(TEXT_MUTED);
         clock.setPadding(dp(c,10),0,dp(c,4),0); well.addView(clock,-2,-1); clock.setVisibility(GONE);
-        scope=new DotScopeView(c); well.addView(scope,weight());
+        scope=new DotScopeView(c); scope.setDrawPlate(false); well.addView(scope,weight());
         View cancel=round(false,"Cancel dictation",FUNCTION_FILL); cancel.setOnClickListener(v->host.onCancelDictation());
         finish=round(true,"Finish dictation",ACTION_FILL); finish.setOnClickListener(v->host.onStopDictation());
         recording.setVisibility(GONE); renderSlots();
