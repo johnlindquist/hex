@@ -2,7 +2,6 @@ package anomaly.hex.android.keyboard;
 
 import android.content.Context;
 import android.graphics.Canvas;
-import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
@@ -251,21 +250,19 @@ public final class DictationBarView extends LinearLayout {
 
   private final class Icon extends View {
     final Glyph glyph;
-    final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     Icon(Glyph glyph) { super(DictationBarView.this.getContext()); this.glyph = glyph; }
     @Override protected void onDraw(Canvas c) {
       c.save(); c.translate(getWidth()/2f, getHeight()/2f);
       float d = getResources().getDisplayMetrics().density;
       c.scale(d,d);
-      p.setStyle(Paint.Style.STROKE); p.setColor(MUTED); p.setStrokeWidth(1.5f); p.setStrokeCap(Paint.Cap.ROUND);
       switch (glyph) {
         case GLOBE -> KeyIcons.drawGlobe(c,0,0,20,-1);
         case DELETE -> KeyIcons.drawDelete(c,0,0,20,-1);
         case RETURN -> KeyIcons.drawReturn(c,0,0,20,-1);
         case CANCEL -> KeyIcons.drawCancel(c,0,0,18,MUTED);
-        case CHEVRON -> { c.drawLine(-3,-1.5f,0,1.5f,p); c.drawLine(0,1.5f,3,-1.5f,p); }
-        case MIC -> { c.drawRoundRect(-2.3f,-6,2.3f,1.5f,2.3f,2.3f,p); c.drawArc(-5,-5,5,4,0,180,false,p); c.drawLine(0,4,0,6,p); c.drawLine(-2,6,2,6,p); }
-        case UNDO -> { c.drawArc(-5,-3,5,5,-90,155,false,p); c.drawLine(0,-3,-5,-3,p); c.drawLine(-5,-3,-2,-6,p); c.drawLine(-5,-3,-2,0,p); }
+        case CHEVRON -> KeyIcons.drawChevronDown(c,0,0,12,MUTED);
+        case MIC -> KeyIcons.drawMic(c,0,0,18,-1);
+        case UNDO -> KeyIcons.drawUndoArrow(c,0,0,18,MUTED);
       }
       c.restore();
     }

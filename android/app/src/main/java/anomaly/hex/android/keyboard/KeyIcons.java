@@ -67,7 +67,7 @@ final class KeyIcons {
             case 3 -> { c.drawRoundRect(-8,-5,4,6,2,2,p); c.drawArc(1,-4,9,3,-90,180,false,p); line(c,-8,9,6,9); }
             case 4 -> { c.drawCircle(0,0,8,p); c.drawArc(-13,-8,-2,8,-65,130,false,p); c.drawArc(2,-8,13,8,115,130,false,p); line(c,-7,0,7,0); }
             case 5 -> { path.moveTo(0,9); path.cubicTo(-20,-13,20,-13,0,9); c.drawPath(path,p); c.drawCircle(0,-2,2,p); }
-            case 6 -> { c.drawArc(-6,-9,6,3,40,280,false,p); line(c,-4,1,-3,5,3,5,4,1); line(c,-2,8,2,8); }
+            case 6 -> { c.drawArc(-6,-9,6,3,140,260,false,p); line(c,-4,1,-3,5,3,5,4,1); line(c,-2,8,2,8); }
             case 7 -> { path.moveTo(0,8); path.cubicTo(-17,-3,-6,-13,0,-5); path.cubicTo(6,-13,17,-3,0,8); c.drawPath(path,p); }
             case 8 -> { line(c,-6,8,-6,-8); path.moveTo(-6,-7); path.cubicTo(0,-11,1,-4,7,-7); path.lineTo(7,1); path.cubicTo(1,5,0,-2,-6,2); c.drawPath(path,p); }
         }
