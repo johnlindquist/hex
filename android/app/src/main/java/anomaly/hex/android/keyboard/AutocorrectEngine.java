@@ -179,7 +179,17 @@ public final class AutocorrectEngine {
             suppress(typedWord);
             if (allowLearning && store != null) store.recordRejected(typedWord, true);
         } else if (allowLearning && store != null && isPlainWord(typedWord)) {
-            store.recordAccepted(typedWord, pickedWord);
+            String stored = pickedWord;
+            String typedLower = typedWord.toLowerCase(Locale.ROOT);
+            String pickedLower = pickedWord.toLowerCase(Locale.ROOT);
+            boolean typedTitle = !typedWord.equals(typedLower) && typedWord.equals(capitalize(typedLower));
+            boolean pickedTitle = !pickedWord.equals(pickedLower) && pickedWord.equals(capitalize(pickedLower));
+            // If sentence-start auto-cap capitalized both typed & picked for a regular dictionary word,
+            // store lowercase so mid-sentence reuse doesn't inject spurious capitals (while keeping proper nouns like "Kubernetes").
+            if (typedTitle && pickedTitle && dictionary != null && dictionary.contains(pickedLower)) {
+                stored = pickedLower;
+            }
+            store.recordAccepted(typedWord, stored);
         }
     }
 

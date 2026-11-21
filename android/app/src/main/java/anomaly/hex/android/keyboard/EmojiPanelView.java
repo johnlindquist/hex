@@ -31,6 +31,12 @@ public final class EmojiPanelView extends LinearLayout {
                 float x=getWidth()/2f,y=getHeight()/2f,s=dp(getContext(),20);
                 if(index==-1) KeyIcons.drawDelete(canvas,x,y,s,TEXT);
                 else if(index==-2) KeyIcons.drawSearch(canvas,x,y,s,TEXT_MUTED);
+                else if(index==-3) {
+                    indicator.setColor(MOD_FILL);
+                    canvas.drawCircle(x,y,dp(getContext(),10),indicator);
+                    indicator.setColor(CHIP_FILL);
+                    KeyIcons.drawCancel(canvas,x,y,dp(getContext(),11),TEXT);
+                }
                 else { if(index==active){android.graphics.Paint paint=indicator; canvas.drawCircle(x,y,dp(getContext(),15),paint);}
                     KeyIcons.drawEmojiCategory(canvas,index,x,y,s,index==active?TEXT:TEXT_MUTED); }
             }
@@ -44,9 +50,9 @@ public final class EmojiPanelView extends LinearLayout {
     EmojiPanelView(Context c,FullKeyboardView.Host host,Runnable close,Runnable toggleSearch) {
         super(c); this.host=host; this.close=close; this.toggleSearch=toggleSearch;
         recent=new EmojiCatalog.FrequentlyUsed(c); setOrientation(VERTICAL); setBackgroundColor(BACKDROP);
-        indicator.setColor(CHIP_FILL); int inset=dp(c,6.5f);
-        top=new LinearLayout(c); top.setGravity(Gravity.CENTER_VERTICAL); top.setPadding(inset,0,inset,0); addView(top,-1,dp(c,44));
-        field=new LinearLayout(c); field.setPadding(inset,0,inset,0); field.setGravity(Gravity.CENTER_VERTICAL); addView(field,-1,dp(c,44));
+        indicator.setColor(CHIP_FILL); int inset=dp(c,6.5f); int keyInset=dp(c,4.5f);
+        top=new LinearLayout(c); top.setGravity(Gravity.CENTER_VERTICAL); top.setPadding(inset,0,inset,0); addView(top,-1,dp(c,48));
+        field=new LinearLayout(c); field.setPadding(keyInset,0,keyInset,dp(c,6)); field.setGravity(Gravity.CENTER_VERTICAL); addView(field,-1,dp(c,48));
         scroll=new HorizontalScrollView(c); scroll.setHorizontalScrollBarEnabled(false); addView(scroll,new LayoutParams(-1,0,1));
         groups=new LinearLayout(c); scroll.addView(groups,new FrameLayout.LayoutParams(-2,-1));
         tabs=new LinearLayout(c); tabs.setPadding(inset,0,inset,0); tabs.setGravity(Gravity.CENTER_VERTICAL);
@@ -72,7 +78,7 @@ public final class EmojiPanelView extends LinearLayout {
         while(i>0 && !Character.isWhitespace(query.charAt(i-1))) i--;
         query.setLength(i); refreshTop();
     }
-    private void pick(String s) { recent.record(s); host.onEmojiPick(s); if(searching) toggleSearch.run(); else {populate(); refreshTop();} }
+    private void pick(String s) { recent.record(s); host.onEmojiPick(s); if(searching) close.run(); else {populate(); refreshTop();} }
     private void refreshTop() {
         top.removeAllViews(); Context c=getContext();
         field.setVisibility(searching?VISIBLE:GONE);
@@ -94,7 +100,7 @@ public final class EmojiPanelView extends LinearLayout {
         TextView value=label(c,query.length()==0?"Search emoji":query.toString(),16); value.setTextColor(query.length()==0?TEXT_MUTED:TEXT);
         View caret=new View(c); caret.setBackgroundColor(ACTION_FILL); if(query.length()==0) input.addView(caret,dp(c,2),dp(c,20));
         value.setMaxWidth(Math.max(dp(c,32),viewport-dp(c,100))); input.addView(value,-2,-1); if(query.length()>0) input.addView(caret,dp(c,2),dp(c,20));
-        TextView clear=label(c,"⊗",20); clear.setTextColor(TEXT_MUTED); clear.setContentDescription(query.length()==0?"Close emoji search":"Clear search");
+        View clear=icon(-3,query.length()==0?"Close emoji search":"Clear search");
         pill.addView(clear,dp(c,38),-1); clear.setOnClickListener(v->{if(query.length()==0) toggleSearch.run(); else {query.setLength(0); refreshTop();}});
     }
     @Override protected void onMeasure(int w,int h) {

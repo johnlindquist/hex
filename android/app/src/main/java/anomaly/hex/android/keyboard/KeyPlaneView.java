@@ -151,9 +151,10 @@ public final class KeyPlaneView extends View {
                 }
                 case SPACE -> {}
                 default -> {
-                    if(!(k==down && k.kind()==KeyKind.CHAR && (variants!=null || popups && !landscape()))) {
-                        text(c,s,x,y+(lower?(wide?-.5f:-.5f):0),size,k.right()-k.left()-3,TEXT);
-                        if (myRow0 >= 0 && myRow0 < 10 && !wide) {
+                    boolean dimBase = k==down && k.kind()==KeyKind.CHAR && variants!=null;
+                    if(dimBase || !(k==down && k.kind()==KeyKind.CHAR && popups && !landscape())) {
+                        text(c,s,x,y+(lower?(wide?-.5f:-.5f):0),size,k.right()-k.left()-3,dimBase?HINT_TEXT:TEXT);
+                        if (myRow0 >= 0 && myRow0 < 10 && !wide && !dimBase) {
                             paint.setTextAlign(Paint.Align.RIGHT);
                             paint.setColor(HINT_TEXT);
                             paint.setTextSize(10f);
@@ -167,7 +168,10 @@ public final class KeyPlaneView extends View {
         if(show) callout(c);
         if(variants!=null) {
             float l=pickerLeft,t=Math.max(1,down.top()-58),w=variants.length*cell+8;
-            paint.setColor(POPUP_FILL); c.drawRoundRect(l,t,l+w,t+52,12,12,paint);
+            paint.setColor(POPUP_FILL); paint.setShadowLayer(6,0,2,POPUP_SHADOW);
+            c.drawRoundRect(l,t,l+w,t+52,12,12,paint); paint.clearShadowLayer();
+            paint.setStyle(Paint.Style.STROKE); paint.setColor(POPUP_BORDER); paint.setStrokeWidth(1f/density());
+            c.drawRoundRect(l,t,l+w,t+52,12,12,paint); paint.setStyle(Paint.Style.FILL);
             for(int i=0;i<variants.length;i++) {
                 float x=l+4+i*cell;
                 if(i==selection) {paint.setColor(RETURN_PILL_FILL); c.drawRoundRect(x,t+4,x+cell,t+48,8,8,paint);}

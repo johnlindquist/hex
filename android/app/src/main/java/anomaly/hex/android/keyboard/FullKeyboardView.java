@@ -49,7 +49,7 @@ public final class FullKeyboardView extends FrameLayout {
         plane.setSearching(false); strip.setVisibility(INVISIBLE); plane.setVisibility(INVISIBLE);
     }
     private void toggleSearch() {
-        boolean search=!panel.searching(); panel.search(search); plane.letters(); plane.setSearching(search); plane.setVisibility(search?VISIBLE:INVISIBLE); requestLayout();
+        boolean search=!panel.searching(); panel.search(search); plane.letters(); plane.setSearching(search); if(search) plane.autoCap(false); plane.setVisibility(search?VISIBLE:INVISIBLE); requestLayout();
     }
     private void closeEmoji() {
         if(!emojiOpen) return;
@@ -70,7 +70,7 @@ public final class FullKeyboardView extends FrameLayout {
     public void setUndoVisible(boolean visible) { strip.setUndo(visible); }
     public void showNotice(String message, boolean openApp) { closeEmoji(); strip.showNotice(message, openApp); }
     public void setFieldKind(KeyboardLayout.FieldKind kind,String returnLabel) { closeEmoji(); plane.field(kind,returnLabel); }
-    public void setAutoCap(boolean value) { plane.autoCap(value); }
+    public void setAutoCap(boolean value) { if(!(emojiOpen && panel!=null && panel.searching())) plane.autoCap(value); }
     public void setSettings(KeyboardLanguage language,boolean keyPopups,boolean haptics,boolean emojiEnabled) {
         this.emojiEnabled=emojiEnabled; strip.setEmojiEnabled(emojiEnabled);
         if(!emojiEnabled) { closeEmoji(); emojiContext=null; strip.contextEmoji(null); }
@@ -88,7 +88,7 @@ public final class FullKeyboardView extends FrameLayout {
     @Override protected void onMeasure(int w,int h) {
         plane.measure(w,MeasureSpec.makeMeasureSpec(0,MeasureSpec.UNSPECIFIED));
         strip.getLayoutParams().height=dp(getContext(),plane.landscape()?42:50);
-        int lift=emojiOpen && panel.searching()?dp(getContext(),88)-strip.getLayoutParams().height:0;
+        int lift=emojiOpen && panel.searching()?dp(getContext(),96)-strip.getLayoutParams().height:0;
         ((LayoutParams)plane.getLayoutParams()).topMargin=lift;
         super.onMeasure(w,MeasureSpec.makeMeasureSpec(resolveSize(plane.getMeasuredHeight()+lift,h),MeasureSpec.EXACTLY));
     }

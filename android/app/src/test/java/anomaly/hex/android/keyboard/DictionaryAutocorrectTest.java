@@ -68,6 +68,13 @@ public class DictionaryAutocorrectTest {
         assertNotNull(learned);
         assertEquals("Kubernetes", learned.caseMatched());
 
+        // Sentence-start pick ("Repla" -> "Replay") learns lowercase "replay" for mid-sentence use,
+        // while preserving proper nouns ("Kuber" -> "Kubernetes")!
+        engine.onSuggestionPicked("Repla", "Replay");
+        var mid = new AutocorrectEngine(KeyboardLanguage.EN, dict, store, true);
+        assertEquals("replay", mid.correctOnSpace("repla").caseMatched());
+        assertEquals("Replay", mid.correctOnSpace("Repla").caseMatched());
+
         // User explicitly taps verbatim Slot 0 ("tpying") -> never auto-corrects "tpying" again
         next.onSuggestionPicked("tpying", "tpying");
         var afterReject = new AutocorrectEngine(KeyboardLanguage.EN, dict, store, true);

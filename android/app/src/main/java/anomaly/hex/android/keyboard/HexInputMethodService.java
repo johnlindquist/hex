@@ -104,7 +104,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     action = (text && (type & InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0 || (info.imeOptions & EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0)
         ? EditorInfo.IME_ACTION_NONE : info.imeOptions & EditorInfo.IME_MASK_ACTION;
     if (fullView != null) {
-      fullView.setSettings(language, kbSettings.keyPopups(), kbSettings.haptics(), emojiEnabled && !privateField);
+      fullView.setSettings(language, kbSettings.keyPopups(), kbSettings.haptics(), emojiEnabled && !privateField && !EditorDeletePolicy.raw(type));
       fullView.setFieldKind(kind, actionLabel());
     }
     meta(); drawState(idleState(), null); refresh(); Engine.get(this).prewarmAsync();
@@ -196,7 +196,22 @@ public final class HexInputMethodService extends InputMethodService implements F
       case SELECTION -> c.commitText("", 1);
       case KEY_EVENT -> sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL);
       case SURROUNDING_TEXT -> {
-        if (fix != null) { replace(fix.caseMatched().length()+1, fix.original()); return; }
+        if (fix != null) {
+          CharSequence after = c.getTextAfterCursor(1, 0);
+          if (after != null && after.length() > 0 && !Character.isWhitespace(after.charAt(0))) {
+            c.beginBatchEdit();
+            try {
+              if (c.deleteSurroundingText(fix.caseMatched().length() + 1, 0)) {
+                c.commitText(fix.original(), 1);
+                c.commitText(" ", 0);
+              }
+            } finally { c.endBatchEdit(); }
+            refresh();
+          } else {
+            replace(fix.caseMatched().length()+1, fix.original());
+          }
+          return;
+        }
         if (!c.deleteSurroundingTextInCodePoints(1, 0)) c.deleteSurroundingText(1, 0);
       }
     }
