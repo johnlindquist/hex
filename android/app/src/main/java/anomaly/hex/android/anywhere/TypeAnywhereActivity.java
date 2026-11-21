@@ -4,25 +4,25 @@ import static anomaly.hex.android.keyboard.KeyboardPalette.*;
 
 import android.app.Activity;
 import android.content.*;
-import android.graphics.Typeface;
 import android.os.Bundle;
 import android.view.*;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
+import anomaly.hex.android.anywhere.AnywhereIcons.Glyph;
+import anomaly.hex.android.anywhere.AnywhereIcons.IconButton;
 import anomaly.hex.android.core.*;
 import anomaly.hex.android.ui.HexTheme;
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.*;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
-/** Minimalist bottom-sheet composer for Type Anywhere: thumbnail, chips, formatted answer, input. */
+/** Icon-first minimalist bottom sheet for Type Anywhere with learn-over-time tooltips. */
 public final class TypeAnywhereActivity extends Activity {
   public static volatile boolean visible;
   private TypeAnywhereStore capture;
   private TextView status, badge, answer;
-  private Button copy;
-  private View chipsScroll;
+  private IconButton copy;
   private LinearLayout card;
   private EditText input;
   private boolean reading, busy;
@@ -101,22 +101,6 @@ public final class TypeAnywhereActivity extends Activity {
     return v;
   }
 
-  private Button chipButton(String s, Runnable action) {
-    Button b = new Button(this);
-    b.setAllCaps(false);
-    b.setText(s);
-    b.setTextSize(13);
-    b.setTextColor(TEXT);
-    b.setMinWidth(0);
-    b.setMinimumWidth(0);
-    b.setMinHeight(0);
-    b.setMinimumHeight(0);
-    b.setPadding(dp(12), dp(6), dp(12), dp(6));
-    b.setBackground(HexTheme.shape(this, KEY_FILL, 16, 0x22FFFFFF));
-    b.setOnClickListener(v -> action.run());
-    return b;
-  }
-
   private void pad(View v, int x, int y) { v.setPadding(dp(x), dp(y), dp(x), dp(y)); }
 
   private void open() {
@@ -136,50 +120,44 @@ public final class TypeAnywhereActivity extends Activity {
 
     LinearLayout sheet = column();
     sheet.setClickable(true);
-    pad(sheet, 14, 10);
+    pad(sheet, 12, 10);
     sheet.setBackground(HexTheme.shape(this, BACKDROP, 20, 0x1FFFFFFF));
     root.addView(sheet, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
     setContentView(root);
 
-    // Compact top strip: small screenshot thumbnail + subtle status pill + icon-only close
+    // Single compact top action bar: thumbnail + icon-only quick actions (with tooltips) + close
     LinearLayout top = row();
     sheet.addView(top);
 
     ImageView thumb = new ImageView(this);
-    thumb.setContentDescription("Captured screen preview");
+    thumb.setContentDescription("Captured screen");
+    thumb.setTooltipText("Captured screen");
     thumb.setBackground(HexTheme.shape(this, KEY_FILL, 8, 0x22FFFFFF));
     thumb.setClipToOutline(true);
     thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
-    top.addView(thumb, dp(34), dp(46));
+    top.addView(thumb, dp(30), dp(40));
     if (capture != null && capture.image != null) thumb.setImageBitmap(capture.image);
 
-    status = text("Reading…", 12, TEXT_MUTED);
+    LinearLayout actions = row();
+    LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(-2, -2);
+    actionsLp.leftMargin = dp(10);
+    top.addView(actions, actionsLp);
+
+    addQuickIcon(actions, Glyph.SUMMARIZE, "Summarize", "Summarize");
+    addQuickIcon(actions, Glyph.EXPLAIN, "Explain", "Explain");
+    addQuickIcon(actions, Glyph.KEY_POINTS, "Key points", "Key points");
+    addQuickIcon(actions, Glyph.REPLY, "Draft reply", "Draft reply");
+
+    status = text("", 11, TEXT_MUTED);
+    status.setSingleLine();
     LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(0, -2, 1);
-    statusLp.leftMargin = dp(10);
+    statusLp.leftMargin = dp(8);
+    statusLp.rightMargin = dp(6);
     top.addView(status, statusLp);
 
-    Button close = chipButton("✕", this::finish);
-    close.setContentDescription("Close Type anywhere");
-    close.setTextSize(14);
-    close.setTextColor(TEXT_MUTED);
-    close.setBackground(HexTheme.shape(this, KEY_FILL, 999, 0));
-    top.addView(close, dp(32), dp(32));
-
-    // Compact quick-prompt chips (collapse once an answer is shown)
-    HorizontalScrollView scroll = new HorizontalScrollView(this);
-    scroll.setHorizontalScrollBarEnabled(false);
-    chipsScroll = scroll;
-    LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(-1, -2);
-    scrollLp.topMargin = dp(8);
-    scrollLp.bottomMargin = dp(6);
-    sheet.addView(scroll, scrollLp);
-    LinearLayout chips = row();
-    scroll.addView(chips);
-    for (String label : new String[] {"Summarize", "Explain", "Key points", "Reply"}) {
-      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(32));
-      lp.rightMargin = dp(6);
-      chips.addView(chipButton(label, () -> ask(label.equals("Reply") ? "Draft reply" : label)), lp);
-    }
+    IconButton close = AnywhereIcons.button(
+        this, Glyph.CLOSE, "Close", 34, 15, KEY_FILL, TEXT_MUTED, 0, this::finish);
+    top.addView(close, new LinearLayout.LayoutParams(dp(34), dp(34)));
 
     // Markdown-formatted answer card
     card = column();
@@ -187,7 +165,6 @@ public final class TypeAnywhereActivity extends Activity {
     pad(card, 12, 8);
     LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, -2);
     cardLp.topMargin = dp(8);
-    cardLp.bottomMargin = dp(8);
     sheet.addView(card, cardLp);
     card.setVisibility(View.GONE);
 
@@ -195,15 +172,15 @@ public final class TypeAnywhereActivity extends Activity {
     card.addView(bar);
     badge = text("", 11, TEXT_MUTED);
     bar.addView(badge, new LinearLayout.LayoutParams(0, -2, 1));
-    copy = chipButton("Copy", () -> {
-      getSystemService(ClipboardManager.class)
-          .setPrimaryClip(ClipData.newPlainText("Answer", rawAnswer.isEmpty() ? answer.getText() : rawAnswer));
-      copy.setText("Copied");
-      copy.postDelayed(() -> copy.setText("Copy"), 1400);
-    });
-    copy.setTextSize(11);
-    copy.setPadding(dp(10), dp(4), dp(10), dp(4));
-    bar.addView(copy, new LinearLayout.LayoutParams(-2, dp(26)));
+
+    copy = AnywhereIcons.button(
+        this, Glyph.COPY, "Copy", 28, 14, 0x18FFFFFF, TEXT_MUTED, 0, () -> {
+          getSystemService(ClipboardManager.class).setPrimaryClip(
+              ClipData.newPlainText("Answer", rawAnswer.isEmpty() ? answer.getText() : rawAnswer));
+          copy.setGlyph(Glyph.CHECK, HexTheme.SUCCESS, "Copied");
+          copy.postDelayed(() -> copy.setGlyph(Glyph.COPY, TEXT_MUTED, "Copy"), 1400);
+        });
+    bar.addView(copy, new LinearLayout.LayoutParams(dp(28), dp(28)));
 
     ScrollView body = new ScrollView(this) {
       @Override protected void onMeasure(int w, int h) {
@@ -218,10 +195,10 @@ public final class TypeAnywhereActivity extends Activity {
     body.addView(answer);
     card.addView(body, bodyLp);
 
-    // Sleek bottom composer pill
+    // Compact bottom composer pill
     LinearLayout composer = row();
     LinearLayout.LayoutParams compLp = new LinearLayout.LayoutParams(-1, -2);
-    compLp.topMargin = dp(2);
+    compLp.topMargin = dp(8);
     sheet.addView(composer, compLp);
 
     input = new EditText(this);
@@ -240,13 +217,9 @@ public final class TypeAnywhereActivity extends Activity {
       return true;
     });
 
-    Button send = chipButton("↑", () -> ask(input.getText().toString()));
-    send.setContentDescription("Ask");
-    send.setTextSize(18);
-    send.setTypeface(null, Typeface.BOLD);
-    send.setBackground(HexTheme.shape(this, ACTION_FILL, 999, 0));
-    send.setTextColor(ON_PILL_TEXT);
-    send.setPadding(0, 0, 0, 0);
+    IconButton send = AnywhereIcons.button(
+        this, Glyph.SEND, "Send", 42, 18, ACTION_FILL, ON_PILL_TEXT, 0,
+        () -> ask(input.getText().toString()));
     LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(42), dp(42));
     sendParams.leftMargin = dp(8);
     composer.addView(send, sendParams);
@@ -262,6 +235,7 @@ public final class TypeAnywhereActivity extends Activity {
       return;
     }
     reading = true;
+    status.setText("…");
     TextRecognizer ocr = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
     try {
       ocr.process(InputImage.fromBitmap(capture.image, 0)).addOnCompleteListener(task -> {
@@ -275,10 +249,18 @@ public final class TypeAnywhereActivity extends Activity {
     }
   }
 
+  private void addQuickIcon(LinearLayout parent, Glyph glyph, String tooltip, String prompt) {
+    IconButton b = AnywhereIcons.button(
+        this, glyph, tooltip, 36, 17, KEY_FILL, TEXT, 0x1FFFFFFF, () -> ask(prompt));
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(36), dp(36));
+    lp.rightMargin = dp(8);
+    parent.addView(b, lp);
+  }
+
   private void readDone(String s) {
     reading = false;
     capture.text = s;
-    status.setText(s != null ? "" : "No text");
+    status.setText("");
     if (pending != null) {
       String q = pending;
       pending = null;
@@ -293,18 +275,18 @@ public final class TypeAnywhereActivity extends Activity {
       return;
     }
     input.setText("");
-    chipsScroll.setVisibility(View.GONE);
     card.setVisibility(View.VISIBLE);
     copy.setVisibility(View.GONE);
+    copy.setGlyph(Glyph.COPY, TEXT_MUTED, "Copy");
     answer.setText("");
     rawAnswer = "";
     if (reading) {
       pending = question;
-      badge.setText("Reading…");
+      badge.setText("…");
       return;
     }
     busy = true;
-    badge.setText("Thinking…");
+    badge.setText("…");
     int ticket = generation;
     float density = getResources().getDisplayMetrics().density;
     TypeAnywhereAiClient.ask(this, capture == null ? null : capture.image,
