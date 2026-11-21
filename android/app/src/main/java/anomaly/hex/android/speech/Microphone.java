@@ -11,6 +11,10 @@ public final class Microphone implements SpeechSession.Input {
   final AudioManager.AudioRecordingCallback cb;
 
   public Microphone(Context ctx) {
+    this(ctx, false);
+  }
+
+  public Microphone(Context ctx, boolean preferBuiltInMic) {
     int rate = SpeechSession.RATE;
     int min =
         AudioRecord.getMinBufferSize(
@@ -32,6 +36,15 @@ public final class Microphone implements SpeechSession.Input {
         };
     try {
       rec.registerAudioRecordingCallback(ctx.getMainExecutor(), cb);
+      if (preferBuiltInMic) {
+        AudioManager audio = ctx.getSystemService(AudioManager.class);
+        for (AudioDeviceInfo input : audio.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
+          if (input.getType() == AudioDeviceInfo.TYPE_BUILTIN_MIC) {
+            rec.setPreferredDevice(input); // Best effort; never start Bluetooth SCO.
+            break;
+          }
+        }
+      }
       rec.startRecording();
       if (rec.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
         throw new IllegalStateException();

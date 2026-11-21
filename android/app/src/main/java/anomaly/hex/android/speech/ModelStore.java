@@ -5,7 +5,12 @@ import android.content.res.AssetFileDescriptor;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 public final class ModelStore {
@@ -37,11 +42,67 @@ public final class ModelStore {
     return new File(ctx.getNoBackupFilesDir(), "models/" + ID);
   }
 
+  public static boolean isExpectedModelFile(String fileName) {
+    return Arrays.asList(FILES).contains(fileName);
+  }
+
+  public static final class ImportResult {
+    public final List<String> missingFiles;
+    public final boolean ready;
+
+    ImportResult(List<String> missing) {
+      missingFiles = Collections.unmodifiableList(missing);
+      ready = missing.isEmpty();
+    }
+  }
+
+  /** Files still needed for a complete external import, independent of bundled assets. */
+  public static List<String> missingFiles(Context ctx) {
+    return missingFiles(externalDir(ctx));
+  }
+
+  static List<String> missingFiles(File dir) {
+    List<String> missing = new ArrayList<>();
+    for (String name : FILES) {
+      if (!present(new File(dir, name))) missing.add(name);
+    }
+    return missing;
+  }
+
+  private static boolean present(File file) {
+    return file.isFile() && file.canRead() && file.length() > 0;
+  }
+
+  /** Copy off the UI thread. The caller owns the stream. Never replace a working file on error. */
+  public static ImportResult importModelFile(Context ctx, String fileName, InputStream in)
+      throws IOException {
+    return importModelFile(externalDir(ctx), fileName, in);
+  }
+
+  static ImportResult importModelFile(File dir, String fileName, InputStream in) throws IOException {
+    if (!isExpectedModelFile(fileName)) throw new IOException("Unexpected model filename");
+    Path folder = Files.createDirectories(dir.toPath());
+    Path tmp = Files.createTempFile(folder, fileName, ".tmp");
+    try {
+      if (Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING) == 0) {
+        throw new IOException("Model file is empty");
+      }
+      synchronized (ModelStore.class) {
+        Files.move(tmp, folder.resolve(fileName), StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING);
+        cached = null;
+        return new ImportResult(missingFiles(dir));
+      }
+    } finally {
+      Files.deleteIfExists(tmp);
+    }
+  }
+
   static Info external(File dir) {
     long bytes = 0;
     for (String name : FILES) {
       File f = new File(dir, name);
-      if (!f.isFile() || !f.canRead() || f.length() == 0) return null;
+      if (!present(f)) return null;
       bytes += f.length();
     }
     return new Info(State.READY_EXTERNAL, dir, bytes);

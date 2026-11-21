@@ -3,7 +3,12 @@ package anomaly.hex.android.speech;
 import static org.junit.Assert.*;
 
 import com.k2fsa.sherpa.onnx.OfflineRecognizerResult;
+import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
 import java.nio.file.Files;
 import org.junit.Rule;
 import org.junit.Test;
@@ -16,6 +21,50 @@ public class SpeechPipelineTest {
     assertEquals(2, Engine.optimalThreads(2));
     assertEquals(3, Engine.optimalThreads(4));
     assertEquals(4, Engine.optimalThreads(8));
+  }
+
+  @Test
+  public void formattingLocaleUsesSupportedDeviceLanguageOrEnglish() {
+    assertEquals(Locale.CANADA_FRENCH, SpeechLanguage.resolveLocale("auto", Locale.CANADA_FRENCH));
+    assertEquals(Locale.ENGLISH, SpeechLanguage.resolveLocale("auto", Locale.JAPAN));
+    assertEquals(Locale.GERMAN, SpeechLanguage.resolveLocale("de", Locale.CANADA_FRENCH));
+  }
+
+  @Test
+  public void recentsAreExplicitDistinctNewestFirstAndCappedAtFive() {
+    List<String> recent = Arrays.asList("en", "de", "es", "pl", "fr");
+    recent = SpeechLanguage.orderedRecent("sv", recent);
+    assertEquals(Arrays.asList("sv", "en", "de", "es", "pl"), recent);
+    recent = SpeechLanguage.orderedRecent("de", recent);
+    assertEquals(Arrays.asList("de", "sv", "en", "es", "pl"), recent);
+    assertEquals(recent, SpeechLanguage.orderedRecent("auto", recent));
+  }
+
+  @Test
+  public void importsOnlyAcceptExactKnownBasenames() {
+    for (String name : ModelStore.FILES) assertTrue(ModelStore.isExpectedModelFile(name));
+    for (String name : Arrays.asList(null, "", "encoder.onnx", "../tokens.txt", "/tokens.txt",
+        "sub/tokens.txt", "..\\tokens.txt", "TOKENS.txt")) assertFalse(ModelStore.isExpectedModelFile(name));
+  }
+
+  @Test
+  public void importsReportProgressAndPreserveExistingFileOnFailure() throws Exception {
+    File dir = tmp.newFolder();
+    int count = ModelStore.FILES.length;
+    for (String name : ModelStore.FILES) {
+      ModelStore.ImportResult result = ModelStore.importModelFile(dir, name,
+          new ByteArrayInputStream(new byte[] {42}));
+      assertEquals(--count, result.missingFiles.size());
+      assertFalse(result.missingFiles.contains(name));
+      assertEquals(count == 0, result.ready);
+    }
+    try {
+      ModelStore.importModelFile(dir, "tokens.txt", new ByteArrayInputStream(new byte[0]));
+      fail("Empty replacement must fail");
+    } catch (IOException expected) {
+      assertArrayEquals(new byte[] {42}, Files.readAllBytes(new File(dir, "tokens.txt").toPath()));
+      assertEquals(4, dir.list().length);
+    }
   }
 
   @Rule public TemporaryFolder tmp = new TemporaryFolder();
