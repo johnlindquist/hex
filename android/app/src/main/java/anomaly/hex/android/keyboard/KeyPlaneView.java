@@ -32,6 +32,8 @@ public final class KeyPlaneView extends View {
     private KeyboardLanguage language = KeyboardLanguage.EN;
     private String action = "";
     private KeyboardLayout layout;
+    private int layoutWidth;
+    private boolean layoutWide;
     private Key down;
     private long started;
     private int pointer = -1, heldShiftPointer = -1, selection;
@@ -46,7 +48,8 @@ public final class KeyPlaneView extends View {
     boolean landscape() { return getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE; }
     private float density() { return getResources().getDisplayMetrics().density; }
     private void rebuild(int width) {
-        layout = new KeyboardLayout(width/density(), landscape(), layer, field, true, emoji, language);
+        layoutWidth=width; layoutWide=landscape();
+        layout = new KeyboardLayout(width/density(), layoutWide, layer, field, true, emoji, language==null?KeyboardLanguage.EN:language);
         invalidate();
     }
     void settings(KeyboardLanguage lang, boolean popup, boolean haptic, boolean emojis) {
@@ -59,7 +62,7 @@ public final class KeyPlaneView extends View {
     void letters() { layer = Layer.LETTERS; reset(); rebuild(getWidth()); }
     void autoCap(boolean cap) { shift.applyAutoCap(cap); invalidate(); }
     @Override protected void onMeasure(int w, int h) {
-        int width = MeasureSpec.getSize(w); rebuild(width);
+        int width = MeasureSpec.getSize(w); if(layout==null || width!=layoutWidth || landscape()!=layoutWide) rebuild(width);
         setMeasuredDimension(width, resolveSize(dp(getContext(),layout.totalHeight()),h));
     }
     private String casing(String s) { return shift.isUppercase() ? s.toUpperCase(Locale.ROOT) : s; }
@@ -70,14 +73,30 @@ public final class KeyPlaneView extends View {
             default -> k.label();
         };
     }
+    private final android.graphics.Path balloon=new android.graphics.Path();
+    private static final android.graphics.Typeface LIGHT=android.graphics.Typeface.create("sans-serif-light",0);
+    private void callout(Canvas c) {
+        float l=down.left(),r=down.right(),b=down.bottom(),w=Math.min(getWidth()/density()-4,r-l+20);
+        float x=Math.max(2,Math.min(getWidth()/density()-2-w,(l+r-w)/2)), right=x+w;
+        float y=Math.max(0,down.top()-52), bottom=y+46, neck=6, stem=Math.max(down.top()+neck,bottom+neck);
+        float br=11,kr=8.5f, shoulder=Math.min(br,Math.max(0,right-r)),leftShoulder=Math.min(br,Math.max(0,l-x));
+        var p=balloon; p.rewind(); p.moveTo(x,y+br); p.quadTo(x,y,x+br,y); p.lineTo(right-br,y);
+        p.quadTo(right,y,right,y+br); p.lineTo(right,bottom-shoulder); p.quadTo(right,bottom,right-shoulder,bottom);
+        p.cubicTo(r,bottom,r,stem-neck/2,r,stem); p.lineTo(r,b-kr); p.quadTo(r,b,r-kr,b);
+        p.lineTo(l+kr,b); p.quadTo(l,b,l,b-kr); p.lineTo(l,stem); p.cubicTo(l,stem-neck/2,l,bottom,x+leftShoulder,bottom);
+        p.quadTo(x,bottom,x,bottom-leftShoulder); p.close();
+        paint.setColor(POPUP_FILL); paint.setShadowLayer(6,0,2,POPUP_SHADOW); c.drawPath(p,paint); paint.clearShadowLayer();
+        paint.setStyle(Paint.Style.STROKE); paint.setColor(POPUP_BORDER); paint.setStrokeWidth(1f/density()); c.drawPath(p,paint);
+        paint.setStyle(Paint.Style.FILL); paint.setTypeface(LIGHT); text(c,face(down),x+w/2,y+23,32,w); paint.setTypeface(null);
+    }
     private void box(Canvas c,float l,float t,float r,float b,int fill) {
-        paint.setColor(fill); c.drawRoundRect(l,t,r,b,8.5f,8.5f,paint);
+        paint.setColor(fill); c.drawRoundRect(l,t,r,b,layout.cornerRadius(),layout.cornerRadius(),paint);
     }
     private void text(Canvas c,String s,float x,float y,float size,float maxWidth) {
         text(c,s,x,y,size,maxWidth,TEXT);
     }
     private void text(Canvas c,String s,float x,float y,float size,float maxWidth,int color) {
-        paint.setColor(color); paint.setTextSize(size*getResources().getDisplayMetrics().scaledDensity/density());
+        paint.setColor(color); paint.setTextSize(size);
         float measured = paint.measureText(s);
         if (measured > maxWidth && maxWidth > 0) paint.setTextSize(paint.getTextSize()*maxWidth/measured);
         c.drawText(s,x,y-(paint.ascent()+paint.descent())/2,paint);
@@ -85,49 +104,53 @@ public final class KeyPlaneView extends View {
     @Override protected void onDraw(Canvas c) {
         if (layout == null) return;
         c.save(); c.scale(density(),density());
+        boolean wide=landscape(), show=popups && !wide && variants==null && down!=null && down.kind()==KeyKind.CHAR;
         for (Key k : layout.keys()) {
+            if(show && k==down) continue;
             boolean primary = k.kind()==KeyKind.RETURN && !action.isBlank();
-            boolean active = k==down || (k.kind()==KeyKind.SHIFT && shift.isUppercase());
-            box(c,k.left(),k.top(),k.right(),k.bottom(),k.kind()==KeyKind.SHIFT && shift.isUppercase() ? TEXT : primary ? (active?ACTION_PRESSED:ACTION_FILL) : (active?KEY_PRESSED:KEY_FILL));
+            boolean active = k==down;
+            box(c,k.left(),k.top(),k.right(),k.bottom(),primary ? (active?ACTION_PRESSED:ACTION_FILL) : (active?KEY_PRESSED:KEY_FILL));
+            if(dragging) continue;
             String s = face(k);
-            float size = k.kind()!=KeyKind.CHAR ? 18 : Character.isLowerCase(s.codePointAt(0)) ? 22.5f : 21;
+            boolean lower=k.kind()==KeyKind.CHAR && Character.isLowerCase(s.codePointAt(0));
+            float size=k.kind()!=KeyKind.CHAR?(wide?14.5f:15.5f):lower?(wide?19:22.5f):(wide?18:21);
             float x=(k.left()+k.right())/2, y=(k.top()+k.bottom())/2;
             switch(k.kind()) {
                 case GLOBE -> KeyIcons.drawGlobe(c,x,y,20,TEXT);
                 case EMOJI -> KeyIcons.drawSmiley(c,x,y,20,TEXT);
-                case SHIFT -> KeyIcons.drawShift(c,x,y,20,shift.state(),shift.isUppercase()?BACKDROP:TEXT);
+                case SHIFT -> KeyIcons.drawShift(c,x,y,20,shift.state(),TEXT);
                 case DELETE -> KeyIcons.drawDelete(c,x,y,20,TEXT);
                 case RETURN -> { if(s.equals("↵")) KeyIcons.drawReturn(c,x,y,20,TEXT); else text(c,s,x,y,size,k.right()-k.left()-3); }
+                case SPACE -> text(c,language==null?"space":switch(language){case EN->"English";case ES->"Español";case FR->"Français";case DE->"Deutsch";case IT->"Italiano";case PT->"Português";case NB->"Norsk";},x,y,wide?13:14.5f,k.right()-k.left()-3,TEXT_MUTED);
                 default -> { if(!(k==down && k.kind()==KeyKind.CHAR && (variants!=null || popups && !landscape())))
-                    text(c,s,x,y,size,k.right()-k.left()-3,k.kind()==KeyKind.SPACE?TEXT_MUTED:TEXT); }
+                    text(c,s,x,y+(lower?(wide?-.5f:-1):0),size,k.right()-k.left()-3,TEXT); }
             }
         }
-        if (down!=null && down.kind()==KeyKind.CHAR && (variants!=null || (popups && !landscape()))) {
-            float width = getWidth()/density();
-            float w = variants==null ? Math.min(width,down.right()-down.left()+20) : variants.length*cell;
-            float l = variants==null ? Math.max(0,Math.min(width-w,(down.left()+down.right()-w)/2)) : pickerLeft;
-            float t = Math.max(0,down.top()-49);
-            box(c,l,t,l+w,t+46,POPUP_FILL); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1);
-            box(c,l+.5f,t+.5f,l+w-.5f,t+45.5f,POPUP_BORDER); paint.setStyle(Paint.Style.FILL);
-            if (variants==null) text(c,face(down),l+w/2,t+23,28,w);
-            else for(int i=0;i<variants.length;i++) {
-                float x=l+i*cell;
-                if (i==selection) box(c,x+1,t+2,x+cell-1,t+44,ACTION_FILL);
-                text(c,casing(variants[i]),x+cell/2,t+23,23,cell-2);
+        if(show) callout(c);
+        if(variants!=null) {
+            float l=pickerLeft,t=Math.max(1,down.top()-58),w=variants.length*cell+8;
+            paint.setColor(POPUP_FILL); c.drawRoundRect(l,t,l+w,t+52,12,12,paint);
+            for(int i=0;i<variants.length;i++) {
+                float x=l+4+i*cell;
+                if(i==selection) {paint.setColor(ACTION_FILL); c.drawRoundRect(x,t+4,x+cell,t+48,8,8,paint);}
+                text(c,casing(variants[i]),x+cell/2,t+26,23,cell-2);
             }
         }
         c.restore();
     }
     private final Runnable accent = () -> {
         if (down==null) return;
-        String[] options = AccentTable.accentsFor(down.label(),language);
+        String[] options = AccentTable.accentsFor(down.label(),language==null?KeyboardLanguage.EN:language);
         if (options.length==0) return;
         variants=options; float width=getWidth()/density();
-        cell=Math.min(37,width/options.length);
-        pickerLeft=Math.max(0,Math.min(width-cell*options.length,origin-cell/2));
-        select(origin); invalidate();
+        cell=Math.min(Math.min(38,Math.max(28,down.right()-down.left())),(width-12)/options.length);
+        boolean left=(down.left()+down.right())/2>width*.52f;
+        if(left) java.util.Collections.reverse(java.util.Arrays.asList(options));
+        selection=left?options.length-1:0;
+        pickerLeft=Math.max(2,Math.min(width-cell*options.length-10,(down.left()+down.right())/2-4-(selection+.5f)*cell));
+        invalidate();
     };
-    private void select(float x) { selection=Math.max(0,Math.min(variants.length-1,(int)((x-pickerLeft)/cell))); }
+    private void select(float x) { selection=Math.max(0,Math.min(variants.length-1,(int)((x-pickerLeft-4)/cell))); }
     private final Runnable repeat = new Runnable() {
         public void run() {
             if(down==null || down.kind()!=KeyKind.DELETE) return;
@@ -176,7 +199,11 @@ public final class KeyPlaneView extends View {
             return true;
         }
         float x=e.getX(index)/density(), y=e.getY(index)/density();
-        if(variants!=null) select(x);
+        if(variants!=null) {
+            if(a==MotionEvent.ACTION_MOVE && Math.abs(x-origin)>1) {
+                int prev=selection; select(x); if(haptics && prev!=selection) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+            }
+        }
         else if(down.kind()==KeyKind.SPACE && (dragging || Math.abs(x-origin)>=10)) {
             dragging=true; int delta=(int)((x-cursor)/7.5f);
             if(delta!=0) { cursor+=delta*7.5f; host.onCursorMove(delta); }

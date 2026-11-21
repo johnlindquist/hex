@@ -11,7 +11,10 @@ public final class SuggestionStripView extends FrameLayout {
     private final FullKeyboardView.Host host;
     private final LinearLayout typing, recording, slots;
     private final FrameLayout center;
-    private final TextView undo, clock;
+    private final LinearLayout undo;
+    private final TextView clock;
+    private List<String> items=List.of();
+    private String emojiContext;
     private final View finish;
     private final android.os.Handler timer=new android.os.Handler(android.os.Looper.getMainLooper());
     private long started=-1;
@@ -29,22 +32,24 @@ public final class SuggestionStripView extends FrameLayout {
 
     SuggestionStripView(Context c, FullKeyboardView.Host host) {
         super(c); this.host=host;
-        typing=row(c); addView(typing); center=new FrameLayout(c); typing.addView(center, weight());
+        typing=row(c); typing.setPadding(dp(c,6.5f),0,0,0); addView(typing); center=new FrameLayout(c); typing.addView(center, weight());
         slots=row(c); center.addView(slots);
-        undo=label(c,"Undo dictation",15); undo.setBackground(pill(CHIP_FILL));
-        undo.setPadding(dp(c,16),0,dp(c,16),0); undo.setOnClickListener(v->host.onUndoDictation());
-        center.addView(undo,new LayoutParams(-2,dp(c,32),Gravity.CENTER)); setUndo(false);
+        undo=row(c); undo.setBackground(pill(CHIP_FILL)); undo.setPadding(dp(c,10),0,dp(c,10),0);
+        View arrow=new View(c){protected void onDraw(android.graphics.Canvas canvas){KeyIcons.drawUndoArrow(canvas,getWidth()/2f,getHeight()/2f,dp(c,16),TEXT_MUTED);}};
+        undo.addView(arrow,dp(c,20),-1); TextView undoLabel=label(c,"Undo dictation",14); undoLabel.setTextSize(13.5f); undoLabel.setTextColor(TEXT_MUTED);
+        undo.addView(undoLabel); undo.setContentDescription("Undo dictation"); undo.setOnClickListener(v->host.onUndoDictation());
+        center.addView(undo,new LayoutParams(-2,dp(c,30),Gravity.CENTER)); setUndo(false);
         mark=new HexMarkView(c); typing.addView(mark,new LinearLayout.LayoutParams(dp(c,44),-1));
         mark.setOnClickListener(v->host.onStartDictation());
-        recording=row(c); recording.setPadding(dp(c,6),0,dp(c,6),0); addView(recording);
+        recording=row(c); recording.setPadding(dp(c,6.5f),0,dp(c,6.5f),0); addView(recording);
         LinearLayout well=row(c); well.setBackground(pill(WELL_FILL)); well.setClipToOutline(true);
         recording.addView(well,new LinearLayout.LayoutParams(0,dp(c,32),1));
-        clock=label(c,"0:00",12); clock.setTypeface(android.graphics.Typeface.MONOSPACE); clock.setTextColor(TEXT_MUTED);
-        clock.setPadding(dp(c,9),0,dp(c,4),0); well.addView(clock,-2,-1); clock.setVisibility(GONE);
+        clock=label(c,"0:00",12); clock.setTypeface(android.graphics.Typeface.create("sans-serif-medium",0)); clock.setFontFeatureSettings("tnum"); clock.setTextColor(TEXT_MUTED);
+        clock.setPadding(dp(c,10),0,dp(c,4),0); well.addView(clock,-2,-1); clock.setVisibility(GONE);
         scope=new DotScopeView(c); well.addView(scope,weight());
         View cancel=round(false,"Cancel dictation",FUNCTION_FILL); cancel.setOnClickListener(v->host.onCancelDictation());
         finish=round(true,"Finish dictation",ACTION_FILL); finish.setOnClickListener(v->host.onStopDictation());
-        recording.setVisibility(GONE);
+        recording.setVisibility(GONE); renderSlots();
     }
     private LinearLayout row(Context c) { LinearLayout r=new LinearLayout(c); r.setGravity(Gravity.CENTER_VERTICAL); return r; }
     private static LinearLayout.LayoutParams weight() { return new LinearLayout.LayoutParams(0,-1,1); }
@@ -58,31 +63,31 @@ public final class SuggestionStripView extends FrameLayout {
                 else KeyIcons.drawCancel(canvas,x,y,s,TEXT);
             }
         }; b.setContentDescription(desc); b.setBackground(pill(color));
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(c,34),dp(c,34)); p.leftMargin=dp(c,6);
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(c,32),dp(c,32)); p.leftMargin=dp(c,6);
         recording.addView(b,p); return b;
     }
     void setUndo(boolean visible) { undo.setVisibility(visible?VISIBLE:GONE); slots.setVisibility(visible?GONE:VISIBLE); }
-    void suggestions(List<String> items) {
-        slots.removeAllViews(); String first=items.isEmpty()?"":items.get(0);
-        boolean literal=isQuoted(first);
-        slots.setPadding(items.isEmpty()?0:mark.getLayoutParams().width,0,0,0);
+    void suggestions(List<String> values) { items=List.copyOf(values); renderSlots(); }
+    void contextEmoji(String value) { if(!java.util.Objects.equals(value,emojiContext)){emojiContext=value; renderSlots();} }
+    private void renderSlots() {
+        Context c=getContext(); slots.removeAllViews();
+        String first=items.isEmpty()?"":items.get(0);
+        boolean lone=emojiContext!=null && (items.isEmpty() || items.size()==1 && first.equals(emojiContext));
+        boolean correction=isQuoted(first) && items.size()>1 && !items.get(1).isBlank() && !items.get(1).equals(emojiContext)
+                && !items.get(1).equals(first.substring(1,first.length()-1));
         for(int i=0;i<3;i++) {
-            String value=i<items.size()?items.get(i):"";
-            if(i>0 && !items.isEmpty()) {
-                View line=new View(getContext()); line.setBackgroundColor(SEPARATOR);
-                slots.addView(line,new LinearLayout.LayoutParams(1,dp(getContext(),18)));
-            }
-            boolean quoted=isQuoted(value);
-            String word=quoted?value.substring(1,value.length()-1):value;
-            TextView slot=label(getContext(),i==0 && !word.isEmpty()?"“"+word+"”":value,16);
-            slot.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-            FrameLayout cell=new FrameLayout(getContext()); slots.addView(cell,weight());
-            if(i==1 && !word.isEmpty() && literal && !word.equals(first.substring(1,first.length()-1))) {
-                var bg=pill(CHIP_FILL); bg.setCornerRadius(dp(getContext(),8.5f)); slot.setBackground(bg);
-                slot.setPadding(dp(getContext(),8),0,dp(getContext(),8),0);
-            }
-            cell.addView(slot,new LayoutParams(-2,dp(getContext(),32),Gravity.CENTER));
-            if(!word.isEmpty()) { cell.setContentDescription(slot.getText()); cell.setOnClickListener(v->host.onSuggestionPick(word)); }
+            if(i>0) { View line=new View(c); if(!correction) line.setBackgroundColor(SEPARATOR); slots.addView(line,1,dp(c,20)); }
+            String value=lone?(i==1?emojiContext:""):i<items.size()?items.get(i):"";
+            String word=isQuoted(value)?value.substring(1,value.length()-1):value;
+            boolean emoji=word.equals(emojiContext);
+            FrameLayout cell=new FrameLayout(c); slots.addView(cell,weight());
+            TextView slot=label(c,i==0 && !word.isEmpty() && !emoji?"“"+word+"”":value,emoji?23:16);
+            slot.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+            var p=new LayoutParams(-1,dp(c,34),Gravity.CENTER); p.leftMargin=p.rightMargin=dp(c,4);
+            if(i==1 && correction) { var bg=pill(SELECT_FILL); bg.setCornerRadius(dp(c,10)); slot.setBackground(bg);
+                slot.setTextSize(16.5f); slot.setTypeface(android.graphics.Typeface.create("sans-serif-medium",0)); }
+            if(i==0) slot.setTextColor(0xE0FFFFFF); cell.addView(slot,p);
+            if(!word.isEmpty()) { cell.setContentDescription(slot.getText()); cell.setOnClickListener(v->{if(emoji) host.onEmojiPick(word); else host.onSuggestionPick(word);}); }
         }
     }
     private static boolean isQuoted(String s) {

@@ -12,49 +12,52 @@ public final class EmojiPanelView extends LinearLayout {
     private final Runnable close, toggleSearch;
     private final EmojiCatalog.FrequentlyUsed recent;
     private final LinearLayout top, groups, tabs;
-    private final ScrollView scroll;
+    private final HorizontalScrollView scroll;
+    private final LinearLayout field;
+    private static final List<String> DEFAULTS=List.of("😂","❤️","👍","🔥","🎉","🙏","😊","✨");
     private final StringBuilder query=new StringBuilder();
     private String contextEmoji;
     private boolean searching;
-    private int columns;
+    private int viewport, rows;
     private final List<View> headers=new ArrayList<>();
     private int active;
     private android.graphics.drawable.GradientDrawable cap(int color) {
         var bg=pill(color); bg.setCornerRadius(dp(getContext(),8.5f)); return bg;
     }
+    private final android.graphics.Paint indicator=new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
     private View icon(int index,String name) {
         View b=new View(getContext()) {
             protected void onDraw(android.graphics.Canvas canvas) {
                 float x=getWidth()/2f,y=getHeight()/2f,s=dp(getContext(),20);
                 if(index==-1) KeyIcons.drawDelete(canvas,x,y,s,TEXT);
                 else if(index==-2) KeyIcons.drawSearch(canvas,x,y,s,TEXT_MUTED);
-                else KeyIcons.drawEmojiCategory(canvas,index,x,y,s,TEXT_MUTED);
+                else { if(index==active){android.graphics.Paint paint=indicator; canvas.drawCircle(x,y,dp(getContext(),15),paint);}
+                    KeyIcons.drawEmojiCategory(canvas,index,x,y,s,index==active?TEXT:TEXT_MUTED); }
             }
         }; b.setContentDescription(name); return b;
     }
     private void highlight(int which) {
         active=which;
-        for(int i=0;i<headers.size();i++) tabs.getChildAt(i+1).setBackground(i==active?cap(CHIP_FILL):null);
+        for(int i=0;i<headers.size();i++) tabs.getChildAt(i+1).invalidate();
     }
 
     EmojiPanelView(Context c,FullKeyboardView.Host host,Runnable close,Runnable toggleSearch) {
         super(c); this.host=host; this.close=close; this.toggleSearch=toggleSearch;
         recent=new EmojiCatalog.FrequentlyUsed(c); setOrientation(VERTICAL); setBackgroundColor(BACKDROP);
-        top=new LinearLayout(c); addView(top,-1,dp(c,44));
-        scroll=new ScrollView(c); addView(scroll,new LayoutParams(-1,0,1));
-        groups=new LinearLayout(c); groups.setOrientation(VERTICAL); scroll.addView(groups);
-        tabs=new LinearLayout(c); tabs.setGravity(Gravity.CENTER_VERTICAL); addView(tabs,-1,dp(c,49));
+        indicator.setColor(CHIP_FILL); int inset=dp(c,6.5f);
+        top=new LinearLayout(c); top.setGravity(Gravity.CENTER_VERTICAL); top.setPadding(inset,0,inset,0); addView(top,-1,dp(c,44));
+        field=new LinearLayout(c); field.setPadding(inset,0,inset,0); field.setGravity(Gravity.CENTER_VERTICAL); addView(field,-1,dp(c,44));
+        scroll=new HorizontalScrollView(c); scroll.setHorizontalScrollBarEnabled(false); addView(scroll,new LayoutParams(-1,0,1));
+        groups=new LinearLayout(c); scroll.addView(groups,new FrameLayout.LayoutParams(-2,-1));
+        tabs=new LinearLayout(c); tabs.setPadding(inset,0,inset,0); tabs.setGravity(Gravity.CENTER_VERTICAL);
+        LayoutParams bar=new LayoutParams(-1,dp(c,38)); bar.bottomMargin=dp(c,5); addView(tabs,bar);
         scroll.setOnScrollChangeListener((v,x,y,ox,oy)->{
-            int index=0; for(int i=1;i<headers.size();i++) if(headers.get(i).getTop()<=y) index=i;
+            int index=0; for(int i=1;i<headers.size();i++) if(headers.get(i).getLeft()<=x) index=i;
             if(index!=active) highlight(index);
         });
     }
-    private TextView button(LinearLayout row,String name,String glyph,int size,Runnable action) {
-        TextView b=label(getContext(),glyph,size); b.setContentDescription(name); b.setOnClickListener(v->action.run());
-        row.addView(b,new LayoutParams(0,-1,1)); return b;
-    }
     void open() { search(false); scroll.scrollTo(0,0); }
-    void contextEmoji(String value) { contextEmoji=value; if(isShown()) refreshTop(); }
+    void contextEmoji(String value) { if(!Objects.equals(contextEmoji,value)){contextEmoji=value; if(isShown()) refreshTop();} }
     boolean searching() { return searching; }
     void search(boolean value) {
         searching=value; query.setLength(0); refreshTop();
@@ -63,48 +66,58 @@ public final class EmojiPanelView extends LinearLayout {
     }
     void append(String s) { if(query.length()<64) query.append(s); refreshTop(); }
     void erase() { if(query.length()>0) query.delete(query.offsetByCodePoints(query.length(),-1),query.length()); refreshTop(); }
-    private void pick(String s) { recent.record(s); host.onEmojiPick(s); if(searching) toggleSearch.run(); else populate(); }
+    private void pick(String s) { recent.record(s); host.onEmojiPick(s); if(searching) toggleSearch.run(); else {populate(); refreshTop();} }
     private void refreshTop() {
         top.removeAllViews(); Context c=getContext();
-        View search=searching?label(c,"‹",24):icon(-2,"Search emoji"); search.setContentDescription(searching?"Close emoji search":"Search emoji");
-        top.addView(search,dp(c,44),-1); search.setOnClickListener(v->toggleSearch.run());
-        if(searching) {
-            TextView field=label(c,query.length()==0?"Search":query.toString(),15); field.setTextColor(TEXT_MUTED);
-            top.addView(field,dp(c,74),-1);
-        }
-        HorizontalScrollView rail=new HorizontalScrollView(c); rail.setHorizontalScrollBarEnabled(false); top.addView(rail,new LayoutParams(0,-1,1f));
-        LinearLayout results=new LinearLayout(c); rail.addView(results);
-        List<String> items=searching ? EmojiCatalog.search(query.toString()) : contextEmoji==null?List.of():List.of(contextEmoji);
-        for(String s:items) {
-            TextView b=label(c,s,26); results.addView(b,dp(c,44),-1); b.setOnClickListener(v->pick(s));
-        }
+        field.setVisibility(searching?VISIBLE:GONE);
+        if(!searching){View search=icon(-2,"Search emoji"); var bg=pill(CHIP_FILL); bg.setCornerRadius(dp(c,10)); search.setBackground(bg);
+            top.addView(search,dp(c,40),dp(c,34)); search.setOnClickListener(v->toggleSearch.run());}
+        HorizontalScrollView rail=new HorizontalScrollView(c); rail.setHorizontalScrollBarEnabled(false); top.addView(rail,new LayoutParams(0,-1,1));
+        LinearLayout results=new LinearLayout(c); rail.addView(results,new FrameLayout.LayoutParams(-2,-1));
+        LinkedHashSet<String> items=new LinkedHashSet<>();
+        if(searching && query.length()>0) items.addAll(EmojiCatalog.search(query.toString()));
+        else {if(contextEmoji!=null) items.add(contextEmoji); items.addAll(recent.list()); items.addAll(DEFAULTS);}
+        if(items.isEmpty()){ TextView none=label(c,"No emoji",14); none.setTextColor(TEXT_MUTED); results.addView(none,-2,-1); }
+        for(String s:items){TextView b=label(c,s,26); results.addView(b,dp(c,42),-1); b.setOnClickListener(v->pick(s));}
+        if(searching) renderField(c);
+    }
+    private void renderField(Context c) {
+        field.removeAllViews(); LinearLayout pill=new LinearLayout(c); pill.setGravity(Gravity.CENTER_VERTICAL); pill.setBackground(pill(CHIP_FILL));
+        field.addView(pill,-1,dp(c,36)); pill.addView(icon(-2,"Search"),dp(c,38),-1);
+        LinearLayout input=new LinearLayout(c); input.setGravity(Gravity.CENTER_VERTICAL); pill.addView(input,new LayoutParams(0,-1,1));
+        TextView value=label(c,query.length()==0?"Search emoji":query.toString(),16); value.setTextColor(query.length()==0?TEXT_MUTED:TEXT);
+        View caret=new View(c); caret.setBackgroundColor(ACTION_FILL); if(query.length()==0) input.addView(caret,dp(c,2),dp(c,20));
+        value.setMaxWidth(Math.max(dp(c,32),viewport-dp(c,100))); input.addView(value,-2,-1); if(query.length()>0) input.addView(caret,dp(c,2),dp(c,20));
+        TextView clear=label(c,"⊗",20); clear.setTextColor(TEXT_MUTED); clear.setContentDescription(query.length()==0?"Close emoji search":"Clear search");
+        pill.addView(clear,dp(c,38),-1); clear.setOnClickListener(v->{if(query.length()==0) toggleSearch.run(); else {query.setLength(0); refreshTop();}});
     }
     @Override protected void onMeasure(int w,int h) {
-        int count=Math.max(1,MeasureSpec.getSize(w)/dp(getContext(),43));
-        if(columns!=count || (!searching && groups.getChildCount()==0)) { columns=count; populate(); }
+        int count=getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE?3:4;
+        if(viewport!=MeasureSpec.getSize(w)||rows!=count){viewport=MeasureSpec.getSize(w);rows=count;if(!searching) populate();}
         super.onMeasure(w,h);
     }
     private void populate() {
-        if(columns==0) return;
+        if(rows==0) return;
         groups.removeAllViews(); tabs.removeAllViews(); Context c=getContext();
-        headers.clear(); TextView abc=label(c,"ABC",15); abc.setContentDescription("Back to letters");
-        abc.setBackground(cap(KEY_FILL)); abc.setOnClickListener(v->close.run()); tabs.addView(abc,dp(c,54),dp(c,45));
-        Map<String,List<String>> all=new LinkedHashMap<>(); all.put("Frequently used",recent.list()); all.putAll(EmojiCatalog.categories());
-        int i=0;
+        headers.clear(); TextView abc=label(c,"ABC",15); abc.setTextSize(15.5f); abc.setContentDescription("Back to letters");
+        abc.setBackground(cap(KEY_FILL)); abc.setOnClickListener(v->close.run()); tabs.addView(abc,dp(c,50),-1);
+        Map<String,List<String>> all=new LinkedHashMap<>(); List<String> used=recent.list(); all.put("Frequently used",used.isEmpty()?DEFAULTS:used); all.putAll(EmojiCatalog.categories());
+        int i=0,sectionWidth=0;
         for(var entry:all.entrySet()) {
-            String name=entry.getKey(); TextView header=label(c,name,13); header.setGravity(Gravity.CENTER_VERTICAL);
-            header.setPadding(dp(c,8),0,0,0); header.setTextColor(TEXT_MUTED); groups.addView(header,-1,dp(c,28));
-            int index=i++; headers.add(header); View tab=icon(index,name);
-            tabs.addView(tab,new LayoutParams(0,dp(c,36),1));
-            tab.setOnClickListener(v->{scroll.scrollTo(0,header.getTop()); highlight(index);});
-            int col=0; LinearLayout row=null;
-            for(String s:entry.getValue()) {
-                if(col==0) { row=new LinearLayout(c); row.setWeightSum(Math.max(columns,1)); groups.addView(row,-1,dp(c,42)); }
-                button(row,s,s,28,()->pick(s)); col=(col+1)%Math.max(1,columns);
-            }
+            String name=entry.getKey(); LinearLayout section=new LinearLayout(c); section.setOrientation(VERTICAL);
+            TextView header=label(c,name,12); header.setTypeface(android.graphics.Typeface.create("sans-serif-medium",0)); header.setGravity(Gravity.CENTER_VERTICAL);
+            header.setPadding(dp(c,6.5f),0,0,0); header.setTextColor(TEXT_MUTED); section.addView(header,-1,dp(c,20));
+            List<String> emojis=entry.getValue(); sectionWidth=Math.max((emojis.size()+rows-1)/rows*dp(c,42),dp(c,12)+(int)header.getPaint().measureText(name));
+            groups.addView(section,sectionWidth,-1); LinearLayout grid=new LinearLayout(c); section.addView(grid,-1,-1);
+            int index=i++; headers.add(section); View tab=icon(index,name); tabs.addView(tab,new LayoutParams(0,-1,1));
+            tab.setOnClickListener(v->{scroll.scrollTo(section.getLeft(),0); highlight(index);});
+            for(int start=0;start<emojis.size();start+=rows){ LinearLayout column=new LinearLayout(c); column.setOrientation(VERTICAL); column.setWeightSum(rows); grid.addView(column,dp(c,42),-1);
+                for(int j=start;j<Math.min(start+rows,emojis.size());j++){String s=emojis.get(j); TextView key=label(c,s,rows==3?23:28);key.setIncludeFontPadding(false);
+                    column.addView(key,new LayoutParams(-1,0,1)); key.setOnClickListener(v->pick(s));}}
         }
+        groups.addView(new View(c),Math.max(0,viewport-sectionWidth),1);
         highlight(active); View delete=icon(-1,"Delete"); delete.setBackground(cap(KEY_FILL));
-        tabs.addView(delete,dp(c,54),dp(c,45)); delete.setOnClickListener(v->host.onDeleteChar());
+        tabs.addView(delete,dp(c,50),-1); delete.setOnClickListener(v->host.onDeleteChar());
         Runnable repeat=new Runnable(){ public void run(){
             if(delete.isPressed() && delete.isShown()){host.onDeleteChar(); delete.postDelayed(this,75);}
         }};

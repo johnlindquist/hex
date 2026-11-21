@@ -44,6 +44,17 @@ final class KeyIcons {
     static void drawCancel(Canvas c,float x,float y,float s,int color) {
         begin(c,x,y,s,color); p.setStrokeWidth(2); line(c,-5,-5,5,5); line(c,5,-5,-5,5); c.restore();
     }
+    static void drawMic(Canvas c,float x,float y,float s,int color) {
+        begin(c,x,y,s,color); c.drawRoundRect(-3,-8,3,2,3,3,p); c.drawArc(-6,-5,6,7,0,180,false,p);
+        line(c,0,7,0,9); line(c,-3,9,3,9); c.restore();
+    }
+    static void drawChevronDown(Canvas c,float x,float y,float s,int color) {
+        begin(c,x,y,s,color); line(c,-7,-3,0,4,7,-3); c.restore();
+    }
+    static void drawUndoArrow(Canvas c,float x,float y,float s,int color) {
+        begin(c,x,y,s,color); line(c,-3,-8,-8,-3,-3,2); path.rewind(); path.moveTo(-7,-3);
+        path.lineTo(1,-3); path.cubicTo(10,-3,10,7,2,7); c.drawPath(path,p); c.restore();
+    }
     static void drawSearch(Canvas c,float x,float y,float s,int color) {
         begin(c,x,y,s,color); c.drawCircle(-2,-2,5.8f,p); line(c,2,2,8,8); c.restore();
     }
