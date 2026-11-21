@@ -15,14 +15,19 @@ import java.util.concurrent.*;
 import org.json.*;
 
 public final class TypeAnywhereAiClient {
+  public static final String DEFAULT_ENDPOINT = "https://hex-api-five.vercel.app/api/ask";
   public interface Callback {
     void onAnswer(String sourceLabel, String answer);
     void onError(String message);
   }
   private static final ExecutorService worker =
       new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new SynchronousQueue<>());
-  static String key(Context c) {
+  public static String key(Context c) {
     return c.getSharedPreferences("hex_settings", 0).getString("type_anywhere_api_key", "").trim();
+  }
+  public static String endpoint(Context c) {
+    String custom = c.getSharedPreferences("hex_settings", 0).getString("type_anywhere_endpoint", "").trim();
+    return custom.isEmpty() ? DEFAULT_ENDPOINT : custom;
   }
   static void ask(Context context, Bitmap image, String text, String question, Callback cb) {
     Context c = context.getApplicationContext();
@@ -33,80 +38,74 @@ public final class TypeAnywhereAiClient {
           main.post(() -> cb.onError("Type anywhere is off."));
           return;
         }
-        String key = key(c), prompt = TypeAnywhereEngine.buildPrompt(text, question);
+        String token = key(c), url = endpoint(c);
+        String prompt = TypeAnywhereEngine.buildPrompt(text, question);
         File model = new File(c.getNoBackupFilesDir(), "gemma-4-E2B-it.litertlm");
-        String label, answer;
         try {
-          if (!key.isEmpty()) {
-            label = "Gemini";
-            answer = gemini(key, prompt, image);
+          if (!token.isEmpty()) {
+            String[] res = askProxy(url, token, text, question, image);
+            main.post(() -> cb.onAnswer(res[0], res[1]));
           } else if (model.isFile()) {
-            label = "On-device Gemma";
-            answer = gemma(c, model, prompt);
+            String answer = gemma(c, model, prompt);
+            main.post(() -> cb.onAnswer("On-device Gemma", answer));
           } else {
-            label = "On-device screen analysis";
-            answer = TypeAnywhereEngine.answerLocally(text, question);
+            String answer = TypeAnywhereEngine.answerLocally(text, question);
+            main.post(() -> cb.onAnswer("On-device screen analysis", answer));
           }
-          main.post(() -> cb.onAnswer(label, answer));
         } catch (Exception | LinkageError | OutOfMemoryError e) {
-          if (key.isEmpty())
-            main.post(()
-                          -> cb.onAnswer("On-device screen analysis",
-                              TypeAnywhereEngine.answerLocally(text, question)));
+          if (token.isEmpty())
+            main.post(() -> cb.onAnswer("On-device screen analysis",
+                TypeAnywhereEngine.answerLocally(text, question)));
           else
-            main.post(()
-                          -> cb.onError("Gemini couldn’t answer. Check your connection and API "
-                                        + "key, then try again."));
+            main.post(() -> cb.onError(
+                "Hex API couldn’t answer. Check your connection and proxy token, then try again."));
         }
       });
     } catch (RejectedExecutionException busy) {
       cb.onError("Another answer is in progress. Try again shortly.");
     }
   }
-  private static String gemini(String key, String prompt, Bitmap image) throws Exception {
-    JSONArray parts = new JSONArray().put(new JSONObject().put("text", prompt));
+  private static String[] askProxy(String endpointUrl, String token, String screenText,
+      String question, Bitmap image) throws Exception {
+    JSONObject payload = new JSONObject()
+        .put("question", question == null ? "" : question)
+        .put("screenText", screenText == null ? "" : screenText);
     if (image != null) {
       ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
-      if (!image.compress(Bitmap.CompressFormat.JPEG, 85, jpeg))
-        throw new IOException();
-      parts.put(new JSONObject().put("inline_data",
-          new JSONObject()
-              .put("mime_type", "image/jpeg")
-              .put("data", Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP))));
+      if (!image.compress(Bitmap.CompressFormat.JPEG, 82, jpeg))
+        throw new IOException("JPEG encode failed");
+      payload.put("imageBase64", Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP));
+      payload.put("imageMimeType", "image/jpeg");
     }
-    byte[] body = new JSONObject()
-                      .put("contents", new JSONArray().put(new JSONObject().put("parts", parts)))
-                      .put("generationConfig", new JSONObject().put("maxOutputTokens", 1536))
-                      .toString()
-                      .getBytes(StandardCharsets.UTF_8);
-    HttpURLConnection conn = (HttpURLConnection) new URL(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent")
-                                 .openConnection();
+    byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
+    HttpURLConnection conn = (HttpURLConnection) new URL(endpointUrl).openConnection();
     try {
       conn.setConnectTimeout(15000);
-      conn.setReadTimeout(15000);
+      conn.setReadTimeout(25000);
       conn.setInstanceFollowRedirects(false);
       conn.setRequestMethod("POST");
       conn.setDoOutput(true);
       conn.setFixedLengthStreamingMode(body.length);
       conn.setRequestProperty("Content-Type", "application/json");
-      conn.setRequestProperty("x-goog-api-key", key);
+      conn.setRequestProperty("Authorization", "Bearer " + token);
       try (OutputStream out = conn.getOutputStream()) {
         out.write(body);
       }
+      int status = conn.getResponseCode();
+      if (status < 200 || status >= 300) throw new IOException("HTTP " + status);
       try (InputStream in = conn.getInputStream();
           ByteArrayOutputStream out = new ByteArrayOutputStream()) {
         byte[] buf = new byte[4096];
         int n;
         while ((n = in.read(buf)) != -1) {
-          if (out.size() + n > 262144)
-            throw new IOException();
+          if (out.size() + n > 262144) throw new IOException("Response too large");
           out.write(buf, 0, n);
         }
-        String s = TypeAnywhereEngine.parseGeminiResponse(out.toString("UTF-8"));
-        if (s.isEmpty())
-          throw new IOException();
-        return s;
+        JSONObject json = new JSONObject(out.toString("UTF-8"));
+        String answer = json.optString("answer", "").trim();
+        String label = json.optString("sourceLabel", "Gemini 4 Hydrogen").trim();
+        if (answer.isEmpty()) throw new IOException("Empty answer");
+        return new String[] { label.isEmpty() ? "Gemini 4 Hydrogen" : label, answer };
       }
     } finally {
       conn.disconnect();

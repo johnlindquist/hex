@@ -172,7 +172,7 @@ public final class TypeAnywhereActivity extends Activity {
     body.addView(answer);
     card.addView(body, -1, -2);
     if (!TypeAnywhereAiClient.key(this).isEmpty())
-      sheet.addView(text("Ask sends this screen and question to Gemini.", 13, TEXT_MUTED));
+      sheet.addView(text("Ask sends this screen and question to Gemini 4 Hydrogen via Hex API.", 13, TEXT_MUTED));
     LinearLayout composer = row();
     pad(composer, 0, 4);
     sheet.addView(composer);

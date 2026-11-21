@@ -1015,17 +1015,31 @@ public final class HexHomeActivity extends Activity {
   }
   private void configureAnywhereKey() {
     SharedPreferences prefs = getSharedPreferences("hex_settings", MODE_PRIVATE);
+    LinearLayout box = new LinearLayout(this);
+    box.setOrientation(LinearLayout.VERTICAL);
+    int p = dp(this, 16);
+    box.setPadding(p, dp(this, 8), p, 0);
+    EditText endpoint = new EditText(this);
+    endpoint.setSingleLine();
+    endpoint.setHint(anomaly.hex.android.anywhere.TypeAnywhereAiClient.DEFAULT_ENDPOINT);
+    endpoint.setText(anomaly.hex.android.anywhere.TypeAnywhereAiClient.endpoint(this));
     EditText key = new EditText(this);
     key.setSingleLine();
-    key.setHint("New API key");
+    key.setHint("Hex API bearer token");
     key.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-    AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Use Gemini for Type anywhere?")
-        .setMessage("Asking a question sends the captured screen, its text and your question to Google. Remove the key to use on-device answers only.")
-        .setView(key).setNegativeButton("Cancel", null)
-        .setNeutralButton("Remove key", (d,n) -> prefs.edit().remove("type_anywhere_api_key").apply())
-        .setPositiveButton("Save key", (d,n) -> {
+    box.addView(endpoint);
+    box.addView(key);
+    AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Connect Hex API (Gemini 4 Hydrogen)")
+        .setMessage("Asking a question sends the captured screen and your question to your locked-down Hex API proxy. Remove the token to use on-device answers only.")
+        .setView(box).setNegativeButton("Cancel", null)
+        .setNeutralButton("Remove token", (d,n) -> prefs.edit().remove("type_anywhere_api_key").apply())
+        .setPositiveButton("Save", (d,n) -> {
+          String url = endpoint.getText().toString().trim();
           String value = key.getText().toString().trim();
-          if (!value.isEmpty()) prefs.edit().putString("type_anywhere_api_key", value).apply();
+          SharedPreferences.Editor ed = prefs.edit();
+          if (!url.isEmpty()) ed.putString("type_anywhere_endpoint", url);
+          if (!value.isEmpty()) ed.putString("type_anywhere_api_key", value);
+          ed.apply();
         }).create();
     dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
     dialog.show();
@@ -1063,7 +1077,7 @@ public final class HexHomeActivity extends Activity {
 
       if (lab == LabId.TYPE_ANYWHERE && labs.isEnabled(lab)) {
         act("Configure accessibility button", false, this::accessibility);
-        act("Gemini API key", false, this::configureAnywhereKey);
+        act("Hex API proxy (Gemini 4 Hydrogen)", false, this::configureAnywhereKey);
       }
       if (lab == LabId.WORDS_ON_SCREEN && labs.isEnabled(lab))
         act("Configure window access", false, this::accessibility);
