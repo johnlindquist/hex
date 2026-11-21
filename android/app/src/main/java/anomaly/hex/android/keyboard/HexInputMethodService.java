@@ -99,9 +99,10 @@ public final class HexInputMethodService extends InputMethodService implements F
   private void meta() {
     if (barView == null) return;
     String id = speechLang.selectedId();
-    barView.setMeta(hexSettings.style().label(), "auto".equalsIgnoreCase(id) ? "Auto" : id.toUpperCase(Locale.ROOT));
+    barView.setMeta(hexSettings.style(), id, SpeechLanguage.AUTO.equals(id) ? "Auto" : languageLabel(id));
+    barView.setReturnAction(!actionLabel().equals("↵"));
   }
-  private void resetEditor() { onCancelDictation(); setUndo(null, -1); editor = null; lastSpace = 0; }
+  private void resetEditor() { if (barView != null) barView.resetGesture(); onCancelDictation(); setUndo(null, -1); editor = null; lastSpace = 0; }
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
   @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); super.onWindowHidden(); }
@@ -169,7 +170,15 @@ public final class HexInputMethodService extends InputMethodService implements F
   public void onReturn() { if (ic() == null) return; editing(); if (actionLabel().equals("↵")) replace(0,"\n"); else ic().performEditorAction(action); }
   public void onSwitchKeyboard() { if (!switchToNextInputMethod(false)) getSystemService(InputMethodManager.class).showInputMethodPicker(); }
   public void onOpenApp() { startActivity(new Intent(this, HexHomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
-  public void onStyleCycle() { TranscriptStyle[] styles = TranscriptStyle.values(); hexSettings.setStyle(styles[(hexSettings.style().ordinal()+1)%styles.length]); meta(); }
+  static String languageLabel(String id) {
+    Locale locale = Locale.forLanguageTag(id);
+    return locale.getDisplayLanguage(locale);
+  }
+  public void onStyleSelected(TranscriptStyle style) { hexSettings.setStyle(style); meta(); }
+  public void onLanguageSelected(String id) { speechLang.select(id); meta(); }
+  public void onKeyFeedback() {
+    if (container != null && kbSettings.haptics()) container.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
+  }
   public void onUndo() { onUndoDictation(); }
   private boolean at(InputConnection c, int end, String suffix) {
     SurroundingText s = c.getSurroundingText(suffix.length(),0,0);
