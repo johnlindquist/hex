@@ -7,22 +7,31 @@ Prepare Hex on the phone                              // android.setup
 ├── Install the debug APK → push the verified Parakeet files into private storage
 ├── Open Hex → grant Microphone and enable dictation in Android Accessibility
 ├── Try Hex or General → tap the scratchpad to test with your current keyboard
+├── Dictation setup → import the four offline model files from Android’s document picker instead of using ADB
 ├── General → check readiness, copy or clear scratchpad text
+├── Audio & language → choose Auto or a Parakeet language for formatting, not recognition
+├── Always use phone microphone → prefer built-in input when available
+├── About → open Privacy Policy, Support or offline open-source notices
 └── Labs → Run setup again to revisit the three onboarding steps
 
 Tap the floating mic                                  // android.dictate
 ├── Speak → local Parakeet recognizes phrases → insert at the original cursor
 ├── Finish → deliver remaining words; never press Send
+├── ↶ Undo last dictation → remove the last confirmed insertion only while the editor and text still match
 ├── Cancel → discard unfinished work, not text already inserted
 └── Change editor → do not redirect pending words to the new field
 ```
+
+General’s **Dictate & copy** and the Quick Settings tile offer dictation without a focused text field. Finish to copy; cancel to leave the clipboard unchanged. An ongoing dictation notification provides controls while recording.
 
 Sources: [manifest and permission boundary](../../android/app/src/main/AndroidManifest.xml), [dictation service configuration](../../android/app/src/main/res/xml/bubble.xml), [speech dependencies and build target](../../android/app/build.gradle). The [push script](../../android/scripts/push-model.sh) checks SHA-256 on the host and device. Those checks establish file identity, not that a particular phone can load the model or that a particular app accepted its output.
 
 ```ts
 Choose how words come out                             // android.output
 ├── Choose Polished, Casual, Notes or Verbatim → style the result locally
-├── Custom vocabulary → add or remove preferred spellings inline
+├── Spoken @ handles and email addresses → normalize supported phrases locally
+├── Custom vocabulary → add or remove preferred spellings; switching it off preserves saved terms
+├── Dictation learning (opt-in) → learn a single-word edit after two matching sightings; remove or clear learned fixes
 ├── History → search as you type and copy a retained dictation
 └── History → choose Off, seven days or 30 days; distinct from unfinished drafts
 
@@ -30,7 +39,7 @@ Enable a Lab (each starts off)                        // android.labs
 ├── Recovery drafts → keep encrypted checkpoints for an interrupted take
 ├── Clean up with Gemma → review with a separately installed local model
 ├── Words on screen → separately enable the hint service and approve a window read
-└── Clean up what I say → apply spoken cleanup rules without loading Gemma
+└── Clean up what I say → apply localized spoken cleanup rules without loading Gemma
 ```
 
 Sources: [Android core settings and Lab registry](../../android/app/src/main/java/anomaly/hex/android/core), [hint service configuration](../../android/app/src/main/res/xml/hint_window.xml), [optional cleanup model](../../android/scripts/cleanup-model.sh). File provisioning alone does not enable recovery, read a window or prove cleanup quality.

@@ -77,11 +77,16 @@ public final class CopyDictationActivity extends Activity implements SpeechSessi
     }
     settings = new HexSettings(this);
     style = settings.style();
-    var vocab = new CustomVocabulary(this).terms();
+    DictationFixStore fixStore = new DictationFixStore(this);
+    CustomVocabulary vocabulary = new CustomVocabulary(this);
+    java.util.List<String> vocab = vocabulary.isEnabled() ? vocabulary.terms() : java.util.List.of();
+    java.util.Map<String,String> fixes = fixStore.isEnabled() ? fixStore.activeFixes() : java.util.Map.of();
+    String locale = SpeechLanguage.resolveLocale(new SpeechLanguage(this).selectedId(),
+        java.util.Locale.getDefault()).toLanguageTag();
     boolean spoken = new HexLabs(this).isEnabled(LabId.SPOKEN_CLEANUP);
     notification = new DictationNotification(this, 7102, this::stopTake, () -> close(null));
-    session = new SpeechSession(this, Engine.get(this), null,
-        s -> TranscriptFormatter.applyPipeline(s, style, vocab, spoken, ""), this);
+    session = new SpeechSession(this, Engine.get(this), () -> new Microphone(this, settings.preferBuiltInMic()),
+        s -> TranscriptFormatter.applyPipeline(s, style, vocab, spoken, "", fixes, locale), this);
     session.start();
   }
   private void stopTake() {

@@ -39,6 +39,12 @@ public final class HexSettings {
             if (hapticsEnabled() != value) p.edit().putBoolean("hapticsEnabled", value).putLong("revision", revision()+1).apply();
         }
     }
+    public synchronized boolean preferBuiltInMic() { return p.getBoolean("preferBuiltInMic", false); }
+    public synchronized void setPreferBuiltInMic(boolean value) {
+        synchronized (LOCK) {
+            if (preferBuiltInMic() != value) p.edit().putBoolean("preferBuiltInMic", value).putLong("revision", revision()+1).apply();
+        }
+    }
     public synchronized long revision() { return p.getLong("revision", 0); }
     public synchronized JSONObject toJson() {
         synchronized (LOCK) {
@@ -48,7 +54,8 @@ public final class HexSettings {
                     .put("historyRetention", historyRetention().id())
                     .put("onboardingCompleted", onboardingCompleted())
                     .put("onboardingPage", onboardingPage())
-                    .put("hapticsEnabled", hapticsEnabled());
+                    .put("hapticsEnabled", hapticsEnabled())
+                    .put("preferBuiltInMic", preferBuiltInMic());
             } catch (JSONException impossible) { throw new IllegalStateException(impossible); }
         }
     }

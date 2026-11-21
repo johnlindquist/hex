@@ -29,6 +29,7 @@ public final class HexBubbleService extends AccessibilityService {
   public Placement placement;
   private final Handler main = new Handler(Looper.getMainLooper());
   private HexSettings settings;
+  private DictationFixStore fixStore;
   private HexLabs labs;
   private HexHistory history;
   private Drafts drafts;
@@ -62,6 +63,7 @@ public final class HexBubbleService extends AccessibilityService {
   private void settleEdits() { observeEdits.run(); disarmEdits(); }
   private final Runnable observeEdits = () -> {
     if (editSuffix == null || tracker == null || isBusy()) return;
+    if (!fixStore.isEnabled()) { disarmEdits(); return; }
     SurroundingText s = spanContext();
     if (s == null) { disarmEdits(); return; }
     String text = s.getText().toString();
@@ -127,6 +129,10 @@ public final class HexBubbleService extends AccessibilityService {
   public void onCreate() {
     super.onCreate();
     settings = new HexSettings(this);
+    fixStore = new DictationFixStore(this);
+    setFixListener((heard, replacement) -> {
+      if (fixStore.isEnabled()) fixStore.recordSighting(heard, replacement);
+    });
     labs = new HexLabs(this);
     history = new HexHistory(this);
     placement = new Placement(this);
@@ -313,39 +319,9 @@ public final class HexBubbleService extends AccessibilityService {
     if (strip != null && settings.hapticsEnabled())
       strip.performHapticFeedback(HapticFeedbackConstants.CONFIRM);
   }
-  private static final class Microphone implements SpeechSession.Input {
-    final AudioRecord rec;
-    Microphone() {
-      int min = AudioRecord.getMinBufferSize(
-          16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-      rec = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16000,
-          AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(min, 64000));
-      try {
-        rec.startRecording();
-        if (rec.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
-          throw new IllegalStateException();
-      } catch (RuntimeException e) {
-        close();
-        throw e;
-      }
-    }
-    public int read(short[] b, int o, int n) {
-      return rec.read(b, o, n);
-    }
-    public boolean isSilenced() {
-      AudioRecordingConfiguration c = rec.getActiveRecordingConfiguration();
-      return c != null && c.isClientSilenced();
-    }
-    public void close() {
-      try {
-        rec.stop();
-      } catch (RuntimeException ignored) {
-      }
-      rec.release();
-    }
-  }
+
   public String start() {
-    return start(Microphone::new);
+    return start(() -> new Microphone(this, settings.preferBuiltInMic()));
   }
   /** In-process fixture source; never selectable through the exported control receiver. */
   public String start(SpeechSession.Source source) {
@@ -371,7 +347,11 @@ public final class HexBubbleService extends AccessibilityService {
     String before = ctx.getText()
                         .subSequence(0, Math.min(ctx.getSelectionStart(), ctx.getSelectionEnd()))
                         .toString();
-    List<String> vocab = new CustomVocabulary(this).terms();
+    CustomVocabulary vocabulary = new CustomVocabulary(this);
+    java.util.List<String> vocab = vocabulary.isEnabled() ? vocabulary.terms() : java.util.List.of();
+    java.util.Map<String,String> fixes = fixStore.isEnabled() ? fixStore.activeFixes() : java.util.Map.of();
+    String locale = SpeechLanguage.resolveLocale(new SpeechLanguage(this).selectedId(),
+        java.util.Locale.getDefault()).toLanguageTag();
     boolean spoken = labs.isEnabled(LabId.SPOKEN_CLEANUP);
     invalidateCleanup();
     if (labs.isEnabled(LabId.RECOVERY_DRAFTS)) {
@@ -385,7 +365,7 @@ public final class HexBubbleService extends AccessibilityService {
     Drafts store = drafts;
     t.session = new SpeechSession(this, Engine.get(this), source,
         raw
-        -> TranscriptFormatter.applyPipeline(raw, t.style, vocab, spoken, before),
+        -> TranscriptFormatter.applyPipeline(raw, t.style, vocab, spoken, before, fixes, locale),
         new SpeechSession.Sink() {
           public void onMeter(int[] levels) {
             main.post(() -> {
@@ -558,7 +538,7 @@ public final class HexBubbleService extends AccessibilityService {
       clearUndo();
       if (inserted.length() <= DictationEditTracker.LIMIT) {
         undoInvalid = false; undoTarget = target; undoStart = first; undoEnd = t.a; undoText = inserted;
-        if (tracker != null) {
+        if (tracker != null && fixStore.isEnabled()) {
           InputMethod.AccessibilityInputConnection current = connection();
           SurroundingText s = current == null ? null : current.getSurroundingText(inserted.length()+32, 33, 0);
           if (s != null && s.getOffset() >= 0 && absolute(s,true) == undoEnd

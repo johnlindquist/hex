@@ -7,6 +7,13 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.os.*;
 import android.provider.Settings;
+import android.provider.OpenableColumns;
+import android.database.Cursor;
+import android.net.Uri;
+import anomaly.hex.android.control.CopyDictationActivity;
+import anomaly.hex.android.speech.SpeechLanguage;
+import java.io.*;
+import java.util.*;
 import android.view.*;
 import android.widget.*;
 import anomaly.hex.android.core.*;
@@ -332,7 +339,40 @@ public final class HexHomeActivity extends Activity {
       act("Open accessibility settings", false, this::accessibility);
     status("Speech model", installed ? "Parakeet 0.6B" : "Not installed");
     if (!installed)
-      note("Install the offline Parakeet model with the Android setup script.");
+      note("Select the Parakeet encoder, decoder, joiner and tokens files.");
+    act("Import model files", false, () -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+        .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), 21));
+  }
+  @Override protected void onActivityResult(int request, int result, Intent data) {
+    super.onActivityResult(request, result, data);
+    if (request != 21 || result != RESULT_OK || data == null) return;
+    Set<Uri> files = new LinkedHashSet<>();
+    if (data.getData() != null) files.add(data.getData());
+    ClipData clips = data.getClipData();
+    if (clips != null) for (int i = 0; i < clips.getItemCount(); i++) files.add(clips.getItemAt(i).getUri());
+    Context app = getApplicationContext();
+    new Thread(() -> {
+      int imported = 0;
+      for (Uri uri : files) {
+        if (uri == null || !"content".equals(uri.getScheme())) continue;
+        try (Cursor names = app.getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+          if (names == null || !names.moveToFirst()) continue;
+          String name = names.getString(0);
+          try (InputStream stream = app.getContentResolver().openInputStream(uri)) {
+            if (stream == null) continue;
+            ModelStore.importModelFile(app, name, stream);
+            imported++;
+          }
+        } catch (IOException | RuntimeException unavailable) { /* Count only successful copies. */ }
+      }
+      String message = imported + " imported · " + ModelStore.missingFiles(app).size() + " missing";
+      runOnUiThread(() -> {
+        Toast.makeText(app, message, Toast.LENGTH_LONG).show();
+        if (isDestroyed() || isFinishing()) return;
+        modelAvailable = ModelStore.inspect(this).state != ModelStore.State.MISSING;
+        render();
+      });
+    }, "hex-model-import").start();
   }
   private void copy(String words) {
     getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Hex", words));
@@ -366,12 +406,55 @@ public final class HexHomeActivity extends Activity {
     title("General", "Local dictation, ready where you write.");
     checklist();
     scratchpad(true);
+    act("Dictate & copy", false, () -> startActivity(new Intent(this, CopyDictationActivity.class)));
+    card("Audio & language");
+    SpeechLanguage language = new SpeechLanguage(this);
+    act("Speech language: " + languageLabel(language.selectedId()), false, () -> pickLanguage(language));
+    toggleRow("Always use phone microphone", "Keeps Bluetooth music playing and starts faster",
+        settings.preferBuiltInMic(), settings::setPreferBuiltInMic);
     card("Feedback");
     toggleRow("Haptic feedback", "Vibrate when dictation starts and stops.",
         settings.hapticsEnabled(), settings::setHapticsEnabled);
     if (labs.isEnabled(LabId.RECOVERY_DRAFTS))
       act("Recovery drafts", false,
           () -> startActivity(new Intent(this, HexRecoveryActivity.class)));
+    card("About");
+    act("Privacy Policy", false, () -> openLink("https://anoma.ly/hex/privacy"));
+    act("Support", false, () -> openLink("https://anoma.ly/hex/support"));
+    act("Open-source notices", false, this::showNotices);
+  }
+  private void openLink(String url) {
+    try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+    catch (ActivityNotFoundException e) { Toast.makeText(this, "No browser available", Toast.LENGTH_SHORT).show(); }
+  }
+  private String languageLabel(String id) {
+    String label = SpeechLanguage.resolveLocale(id, Locale.getDefault()).getDisplayLanguage();
+    return SpeechLanguage.AUTO.equals(id) ? "Auto (" + label + ")" : label;
+  }
+  private void pickLanguage(SpeechLanguage language) {
+    Set<String> ordered = new LinkedHashSet<>();
+    ordered.add(SpeechLanguage.AUTO);
+    ordered.addAll(language.recentIds());
+    ordered.addAll(SpeechLanguage.supportedIds());
+    List<String> ids = new ArrayList<>(ordered);
+    String[] labels = ids.stream().map(this::languageLabel).toArray(String[]::new);
+    new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert).setTitle("Speech language")
+        .setSingleChoiceItems(labels, ids.indexOf(language.selectedId()), (dialog, which) -> {
+          language.select(ids.get(which)); dialog.dismiss(); render();
+        }).setNegativeButton("Cancel", null).show();
+  }
+  private void showNotices() {
+    StringBuilder notices = new StringBuilder();
+    for (String file : new String[]{"models.txt", "ort-LICENSE.txt", "sherpa-LICENSE.txt"}) {
+      notices.append(file).append("\n\n");
+      try (BufferedReader reader = new BufferedReader(new InputStreamReader(getAssets().open("notices/" + file), java.nio.charset.StandardCharsets.UTF_8))) {
+        String line;
+        while ((line = reader.readLine()) != null) notices.append(line).append('\n');
+      } catch (IOException e) { notices.append("Notice unavailable\n"); }
+      notices.append('\n');
+    }
+    new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert).setTitle("Open-source notices")
+        .setMessage(notices.toString()).setPositiveButton("Close", null).show();
   }
   private void toggleRow(
       String label, String summary, boolean value, java.util.function.Consumer<Boolean> changed) {
@@ -429,7 +512,29 @@ public final class HexHomeActivity extends Activity {
       radioRow(s.label(), summary, settings.style() == s, () -> settings.setStyle(s));
     }
     card("Custom vocabulary");
-    note("Add names or terms you want Hex to recognize.");
+    toggleRow("Custom vocabulary", "Spell names and terms your way", vocabulary.isEnabled(), enabled -> {
+      vocabulary.setEnabled(enabled); render();
+    });
+    if (vocabulary.isEnabled()) vocabularyEditor();
+    card("Dictation learning");
+    DictationFixStore fixes = new DictationFixStore(this);
+    toggleRow("Learn from dictation fixes", "Remembers single-word edits after two sightings", fixes.isEnabled(), enabled -> {
+      fixes.setEnabled(enabled); render();
+    });
+    var active = new TreeMap<>(fixes.activeFixes());
+    active.forEach((heard, preferred) -> {
+      divider(group);
+      LinearLayout r = row(group);
+      flexible(r, text(this, heard + " → " + preferred, 15, TEXT));
+      Button remove = button(this, "Remove", false, () -> { fixes.removeFix(heard); render(); });
+      remove.setContentDescription("Remove fix for " + heard);
+      r.addView(remove);
+    });
+    if (!active.isEmpty()) act("Clear learned fixes", false, () -> new AlertDialog.Builder(this)
+        .setMessage("Delete all learned fixes?").setNegativeButton("Cancel", null)
+        .setPositiveButton("Delete", (dialog, which) -> { fixes.clearAll(); render(); }).show());
+  }
+  private void vocabularyEditor() {
     LinearLayout form = row(group, 10);
     EditText entry = input(this, "New term");
     entry.setSingleLine();
