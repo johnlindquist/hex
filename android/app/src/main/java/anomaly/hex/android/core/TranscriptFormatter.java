@@ -1,16 +1,29 @@
 package anomaly.hex.android.core;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.regex.*;
 
 public final class TranscriptFormatter {
     private TranscriptFormatter() {}
-    private static final Pattern FILLER = Pattern.compile("(?i)(?:^|(?<=[\\s,]))(?:um+|uh+|er+|ah+)(?=[\\s,.!?]|$),?\\s*");
+    static String language(String tag) {
+        return tag == null ? "en" : Locale.forLanguageTag(tag.replace('_', '-')).getLanguage();
+    }
     static String collapse(String s) {
         return s.replaceAll("[ \\t]+", " ").replaceAll("(?m)^ +| +$", "").strip();
     }
-    static String stripFillers(String s) { return collapse(FILLER.matcher(s).replaceAll(" ")); }
+    static String stripFillers(String text, String tag) {
+        String fillers = switch (language(tag)) {
+            case "en" -> "um+|uh+|er+|ah+";
+            case "es" -> "e+h+m*|e+m+|m{2,}|hm+|este|pues";
+            case "de" -> "ä+h+m*|ö+h+m*|hm+";
+            case "nb", "nn", "no", "da", "sv" -> "e+h+m*|ø+h+m*|ö+h+m*|hm+";
+            default -> null;
+        };
+        return collapse(fillers == null ? text : text.replaceAll(
+            "(?iu)(?:^|(?<=[\\s,]))(?:" + fillers + ")(?=[\\s,.!?]|$),?\\s*", " "));
+    }
     private static String punctuation(String s) {
         return s.replaceAll("\\s+([,.;:!?])", "$1").replaceFirst("^[,;:]+\\s*", "").strip();
     }
@@ -47,11 +60,14 @@ public final class TranscriptFormatter {
         return String.join("\n",lines).strip();
     }
     public static String format(String raw, TranscriptStyle style, String beforeCursor) {
+        return format(raw, style, beforeCursor, "en");
+    }
+    public static String format(String raw, TranscriptStyle style, String beforeCursor, String language) {
         String s=raw==null?"":raw.strip();
         if (s.isEmpty()) return "";
         if (style==TranscriptStyle.VERBATIM) s=collapse(s);
         else {
-            s=stripFillers(s);
+            s=stripFillers(s, language);
             if (style==TranscriptStyle.NOTES) s=notes(s);
             else if (style==TranscriptStyle.CASUAL) {
                 s=punctuation(s.toLowerCase(Locale.ROOT));
@@ -82,8 +98,19 @@ public final class TranscriptFormatter {
         return !Character.isWhitespace(last) && "([{\"“‘«¿¡".indexOf(last)<0 && ".,!?;:)]}”\n".indexOf(s.charAt(0))<0?" "+s:s;
     }
     public static String applyPipeline(String raw, TranscriptStyle style, List<String> vocab, boolean spokenCleanup, String beforeCursor) {
-        String text=raw==null?"":raw;
-        if (spokenCleanup) text=SpokenCleanupRules.apply(text);
-        return CustomVocabulary.apply(format(CustomVocabulary.apply(text,vocab),style,beforeCursor),vocab);
+        return applyPipeline(raw, style, vocab, spokenCleanup, beforeCursor, Map.of());
+    }
+    public static String applyPipeline(String raw, TranscriptStyle style, List<String> vocab, boolean spokenCleanup,
+                                       String beforeCursor, Map<String,String> learnedFixes) {
+        return applyPipeline(raw, style, vocab, spokenCleanup, beforeCursor, learnedFixes, "en");
+    }
+    public static String applyPipeline(String raw, TranscriptStyle style, List<String> vocab, boolean spokenCleanup,
+                                       String beforeCursor, Map<String,String> learnedFixes, String language) {
+        String text = raw == null ? "" : raw;
+        if (style == TranscriptStyle.VERBATIM) return format(text, style, beforeCursor, language);
+        if (spokenCleanup) text = SpokenCleanupRules.apply(text, language);
+        text = DictationFixStore.applyRules(text, vocab, learnedFixes);
+        String formatted = format(text, style, beforeCursor, language);
+        return CustomVocabulary.apply(formatted, vocab);
     }
 }

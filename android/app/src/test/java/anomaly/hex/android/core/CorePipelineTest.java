@@ -16,7 +16,7 @@ public class CorePipelineTest {
     }
 
     // Exercise the real persistence keys/revision paths without booting an emulator.
-    private static final class Memory extends ContextWrapper {
+    static final class Memory extends ContextWrapper {
         private final Map<String,SharedPreferences> files=new HashMap<>();
         Memory() { super(null); }
         @Override public SharedPreferences getSharedPreferences(String name,int mode) {
@@ -97,11 +97,44 @@ public class CorePipelineTest {
         assertEquals("hex uses WeChat.",TranscriptFormatter.applyPipeline("HEX uses we chat",TranscriptStyle.POLISHED,v,false,null));
         assertEquals("WeChat rocks",TranscriptFormatter.applyPipeline("WECHAT ROCKS.",TranscriptStyle.CASUAL,v,false,null));
         String repair="um, on Tuesday, I mean, Wednesday";
-        assertEquals("on Wednesday",TranscriptFormatter.applyPipeline(repair,TranscriptStyle.VERBATIM,v,true,null));
+        assertEquals(repair,TranscriptFormatter.applyPipeline(repair,TranscriptStyle.VERBATIM,v,true,null));
         assertEquals(repair,TranscriptFormatter.applyPipeline(repair,TranscriptStyle.VERBATIM,v,false,null));
         assertEquals("I mean what I say",SpokenCleanupRules.apply("I mean what I say"));
         assertEquals("say no, we cannot",SpokenCleanupRules.apply("say no, we cannot"));
         assertEquals("Tuesday. We agreed, sorry, Wednesday",SpokenCleanupRules.apply("Tuesday. We agreed, sorry, Wednesday"));
+    }
+    @Test public void spokenAddressesAndLiteralGuards() {
+        String[][] examples = {
+            {"john dot doe at example dot com", "john.doe@example.com"},
+            {"jane at acme dot io", "jane@acme.io"},
+            {"Mail John at the rategmail.com.", "Mail john@gmail.com."},
+            {"Priya at signyahoo.com!", "priya@yahoo.com!"},
+            {"Joe at the rate, Acme dot co dot in, please", "joe@acme.co.in, please"},
+            {"press the at-sign key", "press the @ key"},
+        };
+        for (String[] pair : examples) assertEquals(pair[0], pair[1], SpokenCleanupRules.apply(pair[0]));
+        for (String literal : List.of("at sign language", "meet me at five", "at the rate of ten percent",
+                "at the rate of dot com", "Look at that dot on the map.", "John at gmail.com.")) {
+            assertEquals(literal, SpokenCleanupRules.apply(literal));
+        }
+        String raw = "jane at acme dot io";
+        assertEquals("jane@acme.io", TranscriptFormatter.applyPipeline(raw, TranscriptStyle.POLISHED, List.of(), true, null));
+        assertEquals(raw, TranscriptFormatter.applyPipeline(raw, TranscriptStyle.VERBATIM, List.of(), true, null));
+    }
+    @Test public void cleanupUsesDictationLanguage() {
+        assertEquals("I saw the cat", SpokenCleanupRules.apply("uh I I saw the the cat"));
+        assertEquals("hola mundo", SpokenCleanupRules.apply("eh, este pues hola hola mundo", "es-MX"));
+        assertEquals("er geht", SpokenCleanupRules.apply("Äh, ähm er er geht", "de-DE"));
+        for (String lang : List.of("nb-NO", "no")) assertEquals("det er bra", SpokenCleanupRules.apply("eh øh det det er bra", lang));
+        assertEquals("Um dia.", TranscriptFormatter.format("um dia", TranscriptStyle.POLISHED, null, "pt"));
+    }
+    @Test public void vocabularyCanBePausedWithoutErasingTerms() {
+        Memory context = new Memory();
+        CustomVocabulary vocabulary = new CustomVocabulary(context);
+        assertTrue(vocabulary.isEnabled()); vocabulary.addTerm("WeChat"); vocabulary.setEnabled(false);
+        CustomVocabulary reopened = new CustomVocabulary(context);
+        assertFalse(reopened.isEnabled()); reopened.setEnabled(true);
+        assertEquals(List.of("WeChat"), reopened.terms());
     }
     @Test public void historyTextBoundedAtUtf8Boundary() {
         String prefix="a".repeat(16381); assertEquals(prefix,HexHistory.bounded(prefix+"😀"));

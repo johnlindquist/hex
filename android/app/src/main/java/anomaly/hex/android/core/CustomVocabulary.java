@@ -14,6 +14,8 @@ public final class CustomVocabulary {
     private static final Pattern COMPOUND = Pattern.compile("[\\s\\p{N}-]|\\p{Ll}\\p{Lu}");
     private final SharedPreferences prefs;
     public CustomVocabulary(Context ctx) { prefs = ctx.getSharedPreferences("hex_vocabulary", Context.MODE_PRIVATE); }
+    public boolean isEnabled() { return prefs.getBoolean("enabled", true); }
+    public void setEnabled(boolean enabled) { prefs.edit().putBoolean("enabled", enabled).apply(); }
     static String key(String s) { return NON_WORD.matcher(s.toLowerCase(Locale.ROOT)).replaceAll(""); }
     static List<String> sanitize(List<String> terms) {
         Set<String> seen = new HashSet<>();
