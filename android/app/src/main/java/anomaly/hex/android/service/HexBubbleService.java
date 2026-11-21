@@ -17,6 +17,7 @@ import android.widget.*;
 import anomaly.hex.android.cleanup.*;
 import anomaly.hex.android.control.DictationNotification;
 import anomaly.hex.android.core.*;
+import anomaly.hex.android.keyboard.KeyboardPresence;
 import anomaly.hex.android.recovery.Drafts;
 import anomaly.hex.android.speech.*;
 import anomaly.hex.android.ui.*;
@@ -194,6 +195,7 @@ public final class HexBubbleService extends AccessibilityService {
     Engine.get(this).prewarmAsync();
     connected = true;
     active = this;
+    KeyboardPresence.setOnVisibilityChanged(() -> main.post(this::render));
     render();
   }
   @Override
@@ -282,7 +284,7 @@ public final class HexBubbleService extends AccessibilityService {
       else if (state.equals("listening") || state.equals("transcribing")) notification.show(state.equals("listening"));
     }
     WindowManager wm = getSystemService(WindowManager.class);
-    if (!connected || !editor || !unlocked() || calling()) {
+    if (!connected || !editor || !unlocked() || calling() || KeyboardPresence.isImeVisible()) {
       main.removeCallbacks(imeWatch);
       lastImeBottom = -1;
       if (strip != null) {
@@ -731,6 +733,7 @@ public final class HexBubbleService extends AccessibilityService {
   }
   @Override
   public void onDestroy() {
+    KeyboardPresence.setOnVisibilityChanged(null);
     if (connected) {
       unregisterReceiver(screen);
       getSystemService(AudioManager.class).removeOnModeChangedListener(mode);
