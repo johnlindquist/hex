@@ -61,7 +61,7 @@ public final class HexRecoveryActivity extends Activity {
       LinearLayout card = new LinearLayout(this);
       card.setOrientation(1);
       card.setPadding(d, d, d, d);
-      card.setBackground(shape(this, CARD, 18, LINE));
+      card.setBackground(shape(this, SURFACE, 18, 0));
       LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
       p.topMargin = d;
       rows.addView(card, p);

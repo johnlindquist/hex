@@ -14,13 +14,13 @@ final class TabIcon extends View {
   }
   @Override
   protected void onDraw(Canvas c) {
-    float size = HexTheme.dp(getContext(), 21);
+    float size = HexTheme.dp(getContext(), 20);
     c.save();
     c.translate((getWidth() - size) / 2, (getHeight() - size) / 2);
     c.scale(size / 24, size / 24);
-    ink.setColor(isSelected() ? HexTheme.TEXT : HexTheme.MUTED);
+    ink.setColor(isSelected() ? HexTheme.TEXT : HexTheme.FAINT);
     ink.setStyle(Paint.Style.STROKE);
-    ink.setStrokeWidth(1.7f);
+    ink.setStrokeWidth(1.65f);
     ink.setStrokeCap(Paint.Cap.ROUND);
     switch (tab) {
       case 0 -> {
@@ -32,10 +32,15 @@ final class TabIcon extends View {
         }
       }
       case 1 -> {
-        for (int j = 0; j < 3; j++) c.drawLine(4, 6 + j * 6, 20 - j * 3, 6 + j * 6, ink);
+        for (int j = 0; j < 4; j++)
+          c.drawLine(4 + j * 3, 7 - j % 3 * 2, 4 + j * 3, 9 + j % 3 * 2, ink);
+        c.drawLine(4, 17, 20, 17, ink);
+        c.drawLine(4, 21, 15, 21, ink);
       }
       case 2 -> {
-        c.drawCircle(12, 12, 9, ink);
+        c.drawArc(3, 3, 21, 21, 212, 315, false, ink);
+        c.drawLine(3, 4, 3, 9, ink);
+        c.drawLine(3, 9, 8, 9, ink);
         c.drawLine(12, 6, 12, 12, ink);
         c.drawLine(12, 12, 16, 15, ink);
       }

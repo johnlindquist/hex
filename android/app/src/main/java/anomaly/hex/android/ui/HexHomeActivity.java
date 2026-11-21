@@ -2,6 +2,7 @@ package anomaly.hex.android.ui;
 import static anomaly.hex.android.ui.HexTheme.*;
 
 import android.Manifest;
+import android.graphics.*;
 import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
@@ -40,8 +41,10 @@ public final class HexHomeActivity extends Activity {
   private final Runnable persistDraft = () -> {
     draftPending = false;
     SharedPreferences.Editor edit = getPreferences(MODE_PRIVATE).edit();
-    if (scratch.isEmpty()) edit.remove("scratch_draft");
-    else edit.putString("scratch_draft", scratch);
+    if (scratch.isEmpty())
+      edit.remove("scratch_draft");
+    else
+      edit.putString("scratch_draft", scratch);
     edit.apply();
   };
   private String readiness = "";
@@ -125,27 +128,37 @@ public final class HexHomeActivity extends Activity {
     return v;
   }
   private void title(String s, String detail) {
-    TextView heading = text(this, s, 32, TEXT);
+    TextView heading = text(this, s, 28, TEXT);
+    heading.setLetterSpacing(-.015f);
     heading.setAccessibilityHeading(true);
     add(header, heading, 4);
-    add(header, text(this, detail, 15, MUTED), 4);
+    add(header, text(this, detail, 13, MUTED), 4);
   }
   private void card(String label) {
-    group = column();
-    group.setPadding(d(16), d(14), d(16), d(16));
-    group.setBackground(shape(this, CARD, 18, LINE));
-    add(body, group, 18);
     if (!label.isEmpty()) {
-      TextView h = text(this, label, 19, TEXT);
+      TextView h = text(this, label, 13, MUTED);
       h.setAccessibilityHeading(true);
-      add(group, h, 0);
+      h.setPadding(d(16), 0, 0, 0);
+      add(body, h, 18);
     }
+    group = column();
+    group.setBackground(shape(this, SURFACE, 18, 0));
+    group.setClipToOutline(true);
+    add(body, group, label.isEmpty() ? 12 : 6);
   }
   private void note(String s) {
-    add(group, text(this, s, 15, MUTED), 8);
+    TextView v = text(this, s, 13, MUTED);
+    v.setPadding(d(16), d(8), d(16), d(8));
+    add(group, v, 0);
   }
   private void act(String label, boolean primary, Runnable fn) {
-    add(group, button(this, label, primary, fn), 8);
+    if (primary)
+      add(group, button(this, label, true, fn), 8);
+    else
+      linkRow(label,
+          label.equals("Support") || label.equals("Privacy policy")
+              || label.equals("Keyboard settings") || label.equals("Configure window access"),
+          fn);
   }
   private boolean imeVisible;
   private void updateNav() {
@@ -186,17 +199,17 @@ public final class HexHomeActivity extends Activity {
     footer.setPadding(d(16), d(8), d(16), d(8));
     root.addView(footer);
     nav = new LinearLayout(this);
-    nav.setBackgroundColor(SURFACE);
-    root.addView(nav, -1, d(64));
+    nav.setBackgroundColor(CANVAS);
+    root.addView(nav, -1, d(58));
     for (int i = 0; i < tabs.length; i++) {
       int dest = i;
       LinearLayout item = items[i] = column();
       item.setGravity(Gravity.CENTER);
-      item.setBackground(ripple(this, SURFACE, 8));
+      item.setBackground(ripple(this, CANVAS, 8));
       item.setContentDescription(tabs[i]);
       item.setFocusable(true);
-      item.addView(new TabIcon(this, i), d(46), d(26));
-      TextView label = text(this, tabs[i], 12, MUTED);
+      item.addView(new TabIcon(this, i), d(20), d(20));
+      TextView label = text(this, tabs[i], 11, FAINT);
       label.setGravity(Gravity.CENTER_HORIZONTAL);
       LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
       lp.topMargin = d(4);
@@ -225,9 +238,20 @@ public final class HexHomeActivity extends Activity {
     screen = next;
     footer.setVisibility(setup ? View.VISIBLE : View.GONE);
     updateNav();
-    if (setup)
-      add(header, text(this, "Hex   /   " + (settings.onboardingPage() + 1) + " of 3", 12, MUTED),
-          0);
+    boolean welcome = setup && settings.onboardingPage() == 0;
+    header.setVisibility(welcome ? View.GONE : View.VISIBLE);
+    scroll.setFillViewport(welcome);
+    body.setGravity(welcome ? Gravity.CENTER_VERTICAL : Gravity.TOP);
+    if (setup && settings.onboardingPage() > 0) {
+      int p = settings.onboardingPage();
+      LinearLayout step = row(header);
+      Button back = smallButton(this, "‹", () -> page(p - 1));
+      back.setContentDescription("Back");
+      back.setBackground(ripple(this, 0, 12));
+      back.setTextSize(24);
+      step.addView(back, d(44), d(44));
+      flexible(step, text(this, (p + 1) + " of 3", 13, FAINT));
+    }
     if (setup) {
       tour(settings.onboardingPage());
       return;
@@ -249,17 +273,20 @@ public final class HexHomeActivity extends Activity {
       items[i].setSelected(i == tab);
       View icon = items[i].getChildAt(0);
       icon.setSelected(i == tab);
-      icon.setBackground(shape(this, i == tab ? CONTROL : SURFACE, 14, 0));
-      ((TextView) items[i].getChildAt(1)).setTextColor(i == tab ? TEXT : MUTED);
+      icon.invalidate();
+      ((TextView) items[i].getChildAt(1)).setTextColor(i == tab ? TEXT : FAINT);
     }
   }
   private void divider(LinearLayout box) {
-    divider(box, box == group && box.getChildCount() == 1 ? 10 : 0);
+    if (box != group || box.getChildCount() > 0)
+      divider(box, 0);
   }
   private void divider(LinearLayout box, int gap) {
     View line = new View(this);
     line.setBackgroundColor(LINE);
-    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, d(1));
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, Math.max(1, dp(this, .5f)));
+    if (box == group)
+      lp.setMarginStart(d(16));
     lp.topMargin = d(gap);
     box.addView(line, lp);
   }
@@ -275,22 +302,45 @@ public final class HexHomeActivity extends Activity {
   }
   private void tour(int p) {
     if (p == 0) {
-      title("Welcome to Hex", "Speak in any text field. Your voice stays on this device.");
-      card("Dictation, where you write");
+      View mark = glyph("mark", 64, TEXT);
+      centered(body, mark, 64, 64, 16);
+      TextView badge = text(this, "100% on device", 13, MUTED);
+      badge.setPadding(d(12), 0, d(12), 0);
+      badge.setGravity(Gravity.CENTER);
+      badge.setBackground(shape(this, SURFACE, 999, 0));
+      centered(body, badge, -2, 28, 16);
+      TextView hero = text(this, "Talk instead of type,\nin any app.", 28, TEXT);
+      hero.setLetterSpacing(-.015f);
+      hero.setGravity(Gravity.CENTER);
+      hero.setAccessibilityHeading(true);
+      add(body, hero, 16);
+      String[] props = {
+          "Dictate wherever you type", "Nothing leaves your phone", "Your music keeps playing"};
+      String[] icons = {"keyboard", "lock", "wave"};
+      for (int i = 0; i < props.length; i++) {
+        LinearLayout r = row(body, i == 0 ? 24 : 10);
+        View icon = glyph(icons[i], 18, TEXT);
+        icon.setBackground(shape(this, SURFACE, 11, 0));
+        r.addView(icon, d(38), d(38));
+        TextView label = text(this, props[i], 15, TEXT);
+        label.setTypeface(Typeface.create("sans-serif-medium", 0));
+        r.addView(label, afterControl());
+      }
       DotScopeView scope = new DotScopeView(this);
+      scope.setDrawPlate(false);
       scope.setDemoMode(true);
-      group.addView(scope, -1, d(70));
-      note("Tap the floating mic, speak, then tap the checkmark to insert your words.");
-      footerAction("Set up Hex", null, () -> page(1), true);
+      scope.setBackground(shape(this, LAYER_01, 999, 0));
+      centered(body, scope, -1, 48, 20);
+      footerAction("Get started", null, () -> page(1), true);
     } else if (p == 1) {
       title("Set up Hex", "Three things make local dictation possible.");
       checklist();
-      footerAction("Try Hex",
-          () -> page(0), () -> page(2), mic() && HexBubbleService.active != null && model());
+      footerAction(
+          "Try Hex", null, () -> page(2), mic() && HexBubbleService.active != null && model());
     } else {
       title("Try Hex", "Tap the scratchpad to show the floating mic, then dictate a sentence.");
       scratchpad(false);
-      footerAction("Start using Hex", () -> page(1), () -> {
+      footerAction("Start using Hex", null, () -> {
         settings.setOnboardingCompleted(true);
         tab = 0;
         render();
@@ -303,6 +353,8 @@ public final class HexHomeActivity extends Activity {
   private LinearLayout row(LinearLayout parent, int gap) {
     LinearLayout r = new LinearLayout(this);
     r.setGravity(Gravity.CENTER_VERTICAL);
+    if (parent == group)
+      r.setPadding(d(16), d(8), d(16), d(8));
     add(parent, r, gap);
     return r;
   }
@@ -314,63 +366,172 @@ public final class HexHomeActivity extends Activity {
     lp.setMarginStart(d(8));
     return lp;
   }
-  private void status(String name, String value) {
+  private void centered(LinearLayout box, View v, int w, int h, int gap) {
+    LinearLayout.LayoutParams lp =
+        new LinearLayout.LayoutParams(w < 0 ? w : d(w), h < 0 ? h : d(h));
+    lp.gravity = Gravity.CENTER_HORIZONTAL;
+    lp.topMargin = d(gap);
+    box.addView(v, lp);
+  }
+  private View glyph(String name, int size, int color) {
+    return new View(this) {
+      final Paint ink = new Paint(Paint.ANTI_ALIAS_FLAG);
+      protected void onDraw(Canvas c) {
+        float side = d(size);
+        if (name.equals("mark")) {
+          drawHexMark(c, getWidth() / 2f, getHeight() / 2f, side, TEXT, MIC);
+          return;
+        }
+        c.save();
+        c.translate((getWidth() - side) / 2, (getHeight() - side) / 2);
+        c.scale(side / 20, side / 20);
+        ink.setColor(color);
+        ink.setStrokeWidth(1.7f);
+        ink.setStrokeCap(Paint.Cap.ROUND);
+        ink.setStyle(Paint.Style.STROKE);
+        switch (name) {
+          case "done":
+            ink.setStyle(Paint.Style.FILL);
+            c.drawCircle(10, 10, 9, ink);
+            ink.setColor(CANVAS);
+            ink.setStyle(Paint.Style.STROKE);
+          case "check":
+            c.drawLine(4, 10, 8, 14, ink);
+            c.drawLine(8, 14, 16, 6, ink);
+            break;
+          case "pending":
+            c.drawCircle(10, 10, 8.2f, ink);
+            break;
+          case "link":
+            c.drawLine(7, 4, 13, 10, ink);
+            c.drawLine(13, 10, 7, 16, ink);
+            break;
+          case "external":
+            c.drawLine(4, 16, 16, 4, ink);
+            c.drawLine(7, 4, 16, 4, ink);
+            c.drawLine(16, 4, 16, 13, ink);
+            break;
+          case "menu":
+            c.drawLine(6, 7, 10, 3, ink);
+            c.drawLine(10, 3, 14, 7, ink);
+            c.drawLine(6, 13, 10, 17, ink);
+            c.drawLine(10, 17, 14, 13, ink);
+            break;
+          case "keyboard":
+            c.drawRoundRect(1, 4, 19, 16, 2, 2, ink);
+            for (int j = 0; j < 4; j++) c.drawPoint(4 + j * 4, 8, ink);
+            c.drawLine(6, 12, 14, 12, ink);
+            break;
+          case "wave":
+            for (int j = 0; j < 5; j++) {
+              int h = 8 - 3 * Math.abs(2 - j);
+              c.drawLine(2 + j * 4, 10 - h, 2 + j * 4, 10 + h, ink);
+            }
+            break;
+          case "lock":
+            c.drawArc(6, 2, 14, 12, 180, 180, false, ink);
+            c.drawRoundRect(3, 8, 17, 18, 2, 2, ink);
+            break;
+        }
+        c.restore();
+      }
+    };
+  }
+  private LinearLayout labels(String title, String detail) {
+    LinearLayout v = column();
+    add(v, text(this, title, 15, TEXT), 0);
+    if (detail != null)
+      add(v, text(this, detail, 12, MUTED), 3);
+    return v;
+  }
+  private void setupRow(String name, String detail, boolean done, String action, Runnable run) {
     divider(group);
     LinearLayout r = row(group);
-    r.setMinimumHeight(d(38));
-    flexible(r, text(this, name, 15, TEXT));
-    r.addView(text(this, value, 14, MUTED));
+    r.setMinimumHeight(d(52));
+    r.addView(glyph(done ? "done" : "pending", 18, done ? SUCCESS : FAINT), d(18), d(18));
+    LinearLayout v = labels(name, detail);
+    v.setPadding(d(10), 0, d(6), 0);
+    flexible(r, v);
+    if (action != null)
+      r.addView(smallButton(this, action, run));
   }
   private void checklist() {
     boolean microphone = mic(), service = HexBubbleService.active != null, installed = model();
-    readiness = microphone + ":" + service + ":" + installed;
-    boolean ready = microphone && service && installed;
-    card("");
-    LinearLayout r = row(group);
-    flexible(r, text(this, "Dictation setup", 19, TEXT));
-    TextView badge = text(this, ready ? "Ready" : "Action needed", 12, ready ? SUCCESS : MIC);
-    badge.setPadding(d(10), d(5), d(10), d(5));
-    badge.setBackground(shape(this, ready ? 0x2034c759 : 0x20ff9500, 16, 0));
-    r.addView(badge);
-    status("Microphone", microphone ? "Allowed" : "Permission needed");
-    if (!microphone)
-      act("Allow microphone", false,
-          () -> requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 1));
-    status("Accessibility", service ? "Connected" : "Disconnected");
-    if (!service)
-      act("Open accessibility settings", false, this::accessibility);
-    status("Speech model", installed ? "Parakeet 0.6B" : "Not installed");
-    if (!installed)
-      note("Select the Parakeet encoder, decoder, joiner and tokens files.");
-    act("Import model files", false, () -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
-        .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), 21));
+    readiness = readyKey();
+    card(settings.onboardingCompleted() ? "Dictation setup" : "");
+    setupRow("Microphone", microphone ? "Allowed" : "Permission needed", microphone,
+        microphone ? null : "Allow",
+        () -> requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 1));
+    setupRow("Accessibility", service ? "Connected" : "Disconnected", service,
+        service ? null : "Settings", this::accessibility);
+    setupRow("Speech model",
+        installed ? "Parakeet 0.6B" : "Select encoder, decoder, joiner and tokens files", installed,
+        "Import",
+        ()
+            -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                                          .addCategory(Intent.CATEGORY_OPENABLE)
+                                          .setType("*/*")
+                                          .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true),
+                21));
   }
-  @Override protected void onActivityResult(int request, int result, Intent data) {
+  private void linkRow(String name, boolean external, Runnable run) {
+    actionRow(name, null, null, external ? "external" : "link", run);
+  }
+  private void menuRow(String name, String detail, String value, Runnable run) {
+    actionRow(name, detail, value, "menu", run);
+  }
+  private void actionRow(String name, String detail, String value, String icon, Runnable run) {
+    divider(group);
+    LinearLayout r = row(group);
+    r.setMinimumHeight(d(value == null ? 50 : 48));
+    r.setBackground(ripple(this, SURFACE, 0));
+    flexible(r, labels(name, detail));
+    if (value != null)
+      r.addView(text(this, value, 15, MUTED));
+    r.addView(glyph(icon, 13, MUTED), afterIcon());
+    r.setOnClickListener(v -> run.run());
+  }
+  private LinearLayout.LayoutParams afterIcon() {
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(d(13), d(16));
+    lp.setMarginStart(d(6));
+    return lp;
+  }
+  @Override
+  protected void onActivityResult(int request, int result, Intent data) {
     super.onActivityResult(request, result, data);
-    if (request != 21 || result != RESULT_OK || data == null) return;
+    if (request != 21 || result != RESULT_OK || data == null)
+      return;
     Set<Uri> files = new LinkedHashSet<>();
-    if (data.getData() != null) files.add(data.getData());
+    if (data.getData() != null)
+      files.add(data.getData());
     ClipData clips = data.getClipData();
-    if (clips != null) for (int i = 0; i < clips.getItemCount(); i++) files.add(clips.getItemAt(i).getUri());
+    if (clips != null)
+      for (int i = 0; i < clips.getItemCount(); i++) files.add(clips.getItemAt(i).getUri());
     Context app = getApplicationContext();
     new Thread(() -> {
       int imported = 0;
       for (Uri uri : files) {
-        if (uri == null || !"content".equals(uri.getScheme())) continue;
-        try (Cursor names = app.getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
-          if (names == null || !names.moveToFirst()) continue;
+        if (uri == null || !"content".equals(uri.getScheme()))
+          continue;
+        try (Cursor names = app.getContentResolver().query(
+                 uri, new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+          if (names == null || !names.moveToFirst())
+            continue;
           String name = names.getString(0);
           try (InputStream stream = app.getContentResolver().openInputStream(uri)) {
-            if (stream == null) continue;
+            if (stream == null)
+              continue;
             ModelStore.importModelFile(app, name, stream);
             imported++;
           }
-        } catch (IOException | RuntimeException unavailable) { /* Count only successful copies. */ }
+        } catch (IOException | RuntimeException unavailable) { /* Count only successful copies. */
+        }
       }
       String message = imported + " imported · " + ModelStore.missingFiles(app).size() + " missing";
       runOnUiThread(() -> {
         Toast.makeText(app, message, Toast.LENGTH_LONG).show();
-        if (isDestroyed() || isFinishing()) return;
+        if (isDestroyed() || isFinishing())
+          return;
         modelAvailable = ModelStore.inspect(this).state != ModelStore.State.MISSING;
         render();
       });
@@ -379,6 +540,11 @@ public final class HexHomeActivity extends Activity {
   private void copy(String words) {
     getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Hex", words));
   }
+  private void inset(View view) {
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+    lp.setMargins(d(16), d(10), d(16), d(4));
+    group.addView(view, lp);
+  }
   private void scratchpad(boolean actions) {
     card("Scratchpad");
     practice = input(this, scratchpadHint());
@@ -386,32 +552,47 @@ public final class HexHomeActivity extends Activity {
     practice.setMinHeight(d(110));
     practice.setText(scratch);
     practice.addTextChangedListener(new android.text.TextWatcher() {
-      @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-      @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
-      @Override public void afterTextChanged(android.text.Editable s) {
+      @Override
+      public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+      @Override
+      public void onTextChanged(CharSequence s, int start, int before, int count) {}
+      @Override
+      public void afterTextChanged(android.text.Editable s) {
         scratch = s == null ? "" : s.toString();
         handler.removeCallbacks(persistDraft);
         draftPending = true;
         handler.postDelayed(persistDraft, 400);
       }
     });
-    add(group, practice, 8);
+    inset(practice);
     if (actions) {
       LinearLayout r = row(group, 10);
-      r.addView(button(this, "Copy", false, () -> copy(practice.getText().toString())));
-      r.addView(button(this, "Clear", false, () -> {
-        practice.setText("");
-      }), afterControl());
+      r.addView(smallButton(this, "Copy", () -> copy(practice.getText().toString())));
+      r.addView(smallButton(this, "Clear", () -> { practice.setText(""); }), afterControl());
     }
   }
   private void general() {
-    title("General", "Local dictation, ready where you write.");
+    LinearLayout r = row(header);
+    r.addView(glyph("mark", 20, TEXT), d(20), d(20));
+    TextView name = text(this, "Hex", 20, TEXT);
+    name.setPadding(d(8), 0, 0, 0);
+    flexible(r, name);
+    int steps = (mic() ? 0 : 1) + (model() ? 0 : 1) + (HexBubbleService.active != null ? 0 : 1);
+    TextView badge =
+        text(this, steps == 0 ? "● Ready" : "● " + steps + (steps == 1 ? " step" : " steps"), 13,
+            steps == 0 ? SUCCESS : MIC);
+    badge.setPadding(d(10), 0, d(10), 0);
+    badge.setGravity(Gravity.CENTER);
+    badge.setBackground(shape(this, 0x12ffffff, 999, 0));
+    r.addView(badge, -2, d(28));
     checklist();
     scratchpad(true);
-    act("Dictate & copy", false, () -> startActivity(new Intent(this, CopyDictationActivity.class)));
+    act("Dictate & copy", false,
+        () -> startActivity(new Intent(this, CopyDictationActivity.class)));
     card("Audio & language");
     SpeechLanguage language = new SpeechLanguage(this);
-    act("Speech language: " + languageLabel(language.selectedId()), false, () -> pickLanguage(language));
+    menuRow("Speech language", null, languageLabel(language.selectedId()),
+        () -> pickLanguage(language));
     toggleRow("Always use phone microphone", "Keeps Bluetooth music playing and starts faster",
         settings.preferBuiltInMic(), settings::setPreferBuiltInMic);
     keyboardCard();
@@ -419,57 +600,86 @@ public final class HexHomeActivity extends Activity {
     toggleRow("Haptic feedback", "Vibrate when dictation starts and stops.",
         settings.hapticsEnabled(), settings::setHapticsEnabled);
     if (labs.isEnabled(LabId.RECOVERY_DRAFTS))
-      act("Recovery drafts", false,
+      act("Open recovery drafts", false,
           () -> startActivity(new Intent(this, HexRecoveryActivity.class)));
     card("About");
-    act("Privacy Policy", false, () -> openLink("https://anoma.ly/hex/privacy"));
+    act("Privacy policy", false, () -> openLink("https://anoma.ly/hex/privacy"));
     act("Support", false, () -> openLink("https://anoma.ly/hex/support"));
     act("Open-source notices", false, this::showNotices);
   }
   private String scratchpadHint() {
-    return KeyboardPresence.isHexKeyboardDefault(this) ? "Tap here and press the Hex key to test dictation..."
+    return KeyboardPresence.isHexKeyboardDefault(this)
+        ? "Tap here and press the Hex key to test dictation..."
         : "Tap here and press the floating mic to test dictation...";
   }
   private TextView keyboardStatus;
-  @Override public void onWindowFocusChanged(boolean focused) {
+  @Override
+  public void onWindowFocusChanged(boolean focused) {
     super.onWindowFocusChanged(focused);
-    if (focused && practice != null && practice.isAttachedToWindow()) practice.setHint(scratchpadHint());
-    if (focused && keyboardStatus != null && keyboardStatus.isAttachedToWindow()) refreshKeyboardStatus();
+    if (focused && practice != null && practice.isAttachedToWindow())
+      practice.setHint(scratchpadHint());
+    if (focused && keyboardStatus != null && keyboardStatus.isAttachedToWindow())
+      refreshKeyboardStatus();
   }
   private void refreshKeyboardStatus() {
     ComponentName component = new ComponentName(this, HexInputMethodService.class);
-    boolean enabled = getSystemService(InputMethodManager.class).getEnabledInputMethodList().stream()
-        .anyMatch(i -> component.equals(i.getComponent()));
-    keyboardStatus.setText(KeyboardPresence.isHexKeyboardDefault(this)
-        ? "Active" : enabled ? "Enabled" : "Off (using system keyboard)");
+    boolean enabled = getSystemService(InputMethodManager.class)
+                          .getEnabledInputMethodList()
+                          .stream()
+                          .anyMatch(i -> component.equals(i.getComponent()));
+    keyboardStatus.setText(KeyboardPresence.isHexKeyboardDefault(this) ? "Active"
+            : enabled                                                  ? "Enabled"
+                      : "Off (using system keyboard)");
   }
   private void keyboardCard() {
     card("Optional Hex Keyboard");
     KeyboardSettings kb = new KeyboardSettings(this);
     InputMethodManager imm = getSystemService(InputMethodManager.class);
     keyboardStatus = text(this, "", 15, MUTED);
-    add(group, keyboardStatus, 8);
+    LinearLayout status = row(group);
+    flexible(status, text(this, "Status", 15, TEXT));
+    status.addView(keyboardStatus);
     refreshKeyboardStatus();
-    act("Keyboard settings", false, () -> startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)));
+    act("Keyboard settings", false,
+        () -> startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)));
     act("Switch keyboard", false, imm::showInputMethodPicker);
-    divider(group, 10);
-    radioRowContent("Full keyboard", "QWERTY letters, suggestions, and Hex key", kb.isFullKeyboard(), () -> kb.setFullKeyboard(true));
-    radioRow("Dictation bar", "Compact voice stage with space, delete, and return", !kb.isFullKeyboard(), () -> kb.setFullKeyboard(false));
-    if (!kb.isFullKeyboard()) return;
+    segmentedRow("Keyboard", new String[] {"Full", "Dictation bar"}, kb.isFullKeyboard() ? 0 : 1,
+        i -> kb.setFullKeyboard(i == 0));
+    if (!kb.isFullKeyboard())
+      return;
     List<String> codes = new ArrayList<>(List.of("auto"));
     for (KeyboardLanguage lang : KeyboardLanguage.values()) codes.add(lang.code());
-    String[] labels = codes.stream().map(code -> code.equals("auto") ? "Automatic" : Locale.forLanguageTag(code).getDisplayLanguage()).toArray(String[]::new);
+    String[] labels =
+        codes.stream()
+            .map(code
+                -> code.equals("auto") ? "Automatic"
+                                       : Locale.forLanguageTag(code).getDisplayLanguage())
+            .toArray(String[] ::new);
     int index = Math.max(0, codes.indexOf(kb.layoutLanguage()));
-    divider(group, 10);
-    act("Keyboard layout: " + labels[index], false, () -> new AlertDialog.Builder(this).setTitle("Keyboard layout")
-        .setSingleChoiceItems(labels, index, (dialog, i) -> { kb.setLayoutLanguage(codes.get(i)); dialog.dismiss(); render(); }).show());
-    toggleRow("Autocorrect", "Fixes typos when you press space", kb.autocorrect(), kb::setAutocorrect);
-    toggleRow("Key pop-ups", "Shows the letter above your finger", kb.keyPopups(), kb::setKeyPopups);
-    toggleRow("Keyboard haptics", "A light tap as you press Hex's keys", kb.haptics(), kb::setHaptics);
+    menuRow("Keyboard layout", null, labels[index],
+        ()
+            -> new AlertDialog.Builder(this)
+                .setTitle("Keyboard layout")
+                .setSingleChoiceItems(labels, index,
+                    (dialog, i) -> {
+                      kb.setLayoutLanguage(codes.get(i));
+                      dialog.dismiss();
+                      render();
+                    })
+                .show());
+    toggleRow(
+        "Autocorrect", "Fixes typos when you press space", kb.autocorrect(), kb::setAutocorrect);
+    toggleRow(
+        "Key pop-ups", "Shows the letter above your finger", kb.keyPopups(), kb::setKeyPopups);
+    toggleRow(
+        "Keyboard haptics", "A light tap as you press Hex's keys", kb.haptics(), kb::setHaptics);
   }
   private void openLink(String url) {
-    try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
-    catch (ActivityNotFoundException e) { Toast.makeText(this, "No browser available", Toast.LENGTH_SHORT).show(); }
+    try {
+      startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+    } catch (ActivityNotFoundException e) {
+      Toast.makeText(this, "No browser available", Toast.LENGTH_SHORT).show();
+    }
   }
   private String languageLabel(String id) {
     String label = SpeechLanguage.resolveLocale(id, Locale.getDefault()).getDisplayLanguage();
@@ -481,70 +691,95 @@ public final class HexHomeActivity extends Activity {
     ordered.addAll(language.recentIds());
     ordered.addAll(SpeechLanguage.supportedIds());
     List<String> ids = new ArrayList<>(ordered);
-    String[] labels = ids.stream().map(this::languageLabel).toArray(String[]::new);
-    new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert).setTitle("Speech language")
-        .setSingleChoiceItems(labels, ids.indexOf(language.selectedId()), (dialog, which) -> {
-          language.select(ids.get(which)); dialog.dismiss(); render();
-        }).setNegativeButton("Cancel", null).show();
+    String[] labels = ids.stream().map(this::languageLabel).toArray(String[] ::new);
+    new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+        .setTitle("Speech language")
+        .setSingleChoiceItems(labels, ids.indexOf(language.selectedId()),
+            (dialog, which) -> {
+              language.select(ids.get(which));
+              dialog.dismiss();
+              render();
+            })
+        .setNegativeButton("Cancel", null)
+        .show();
   }
   private void showNotices() {
     StringBuilder notices = new StringBuilder();
-    for (String file : new String[]{"models.txt", "ort-LICENSE.txt", "sherpa-LICENSE.txt"}) {
+    for (String file : new String[] {"models.txt", "ort-LICENSE.txt", "sherpa-LICENSE.txt"}) {
       notices.append(file).append("\n\n");
-      try (BufferedReader reader = new BufferedReader(new InputStreamReader(getAssets().open("notices/" + file), java.nio.charset.StandardCharsets.UTF_8))) {
+      try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+               getAssets().open("notices/" + file), java.nio.charset.StandardCharsets.UTF_8))) {
         String line;
         while ((line = reader.readLine()) != null) notices.append(line).append('\n');
-      } catch (IOException e) { notices.append("Notice unavailable\n"); }
+      } catch (IOException e) {
+        notices.append("Notice unavailable\n");
+      }
       notices.append('\n');
     }
-    new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert).setTitle("Open-source notices")
-        .setMessage(notices.toString()).setPositiveButton("Close", null).show();
+    new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+        .setTitle("Open-source notices")
+        .setMessage(notices.toString())
+        .setPositiveButton("Close", null)
+        .show();
   }
   private void toggleRow(
       String label, String summary, boolean value, java.util.function.Consumer<Boolean> changed) {
     divider(group);
     LinearLayout r = row(group);
-    r.setPadding(0, d(12), 0, d(12));
+    r.setMinimumHeight(d(50));
+    r.setPadding(d(16), d(10), d(16), d(10));
     LinearLayout labels = column();
     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
     lp.setMarginEnd(d(12));
     r.addView(labels, lp);
-    add(labels, text(this, label, 16, TEXT), 0);
-    add(labels, text(this, summary, 14, MUTED), 3);
+    add(labels, text(this, label, 15, TEXT), 0);
+    add(labels, text(this, summary, 12, MUTED), 3);
     Switch toggle = new Switch(this);
     toggle.setContentDescription(label + ". " + summary);
     toggle.setChecked(value);
     int[][] states = {{android.R.attr.state_checked}, {}};
     toggle.setThumbTintList(
-        new android.content.res.ColorStateList(states, new int[] {PRIMARY, 0xffadb1b8}));
+        new android.content.res.ColorStateList(states, new int[] {0xffffffff, 0xffffffff}));
     toggle.setTrackTintList(
-        new android.content.res.ColorStateList(states, new int[] {0xff307543, 0xff565b64}));
+        new android.content.res.ColorStateList(states, new int[] {SUCCESS, 0xff565b64}));
     toggle.setOnCheckedChangeListener((v, b) -> changed.accept(b));
     r.addView(toggle);
     r.setOnClickListener(v -> toggle.toggle());
   }
+  private void segmentedRow(
+      String title, String[] options, int selected, java.util.function.IntConsumer select) {
+    divider(group);
+    LinearLayout r = row(group);
+    r.setMinimumHeight(d(50));
+    flexible(r, text(this, title, 15, TEXT));
+    LinearLayout well = new LinearLayout(this);
+    well.setPadding(d(2), d(2), d(2), d(2));
+    well.setBackground(shape(this, 0x0effffff, 9, 0));
+    r.addView(well, -2, d(32));
+    for (int i = 0; i < options.length; i++) {
+      int index = i;
+      Button b = smallButton(this, options[i], () -> {
+        select.accept(index);
+        render();
+      });
+      b.setSelected(i == selected);
+      b.setBackground(ripple(this, i == selected ? 0x24ffffff : 0, 7));
+      well.addView(b, -2, -1);
+    }
+  }
   private void radioRow(String label, String summary, boolean checked, Runnable select) {
     divider(group);
-    radioRowContent(label, summary, checked, select);
-  }
-  private void radioRowContent(String label, String summary, boolean checked, Runnable select) {
     LinearLayout r = row(group);
-    r.setPadding(0, d(10), 0, d(10));
-    r.setMinimumHeight(d(52));
-    RadioButton b = new RadioButton(this);
-    b.setButtonTintList(android.content.res.ColorStateList.valueOf(PRIMARY));
-    b.setChecked(checked);
-    b.setContentDescription(summary == null ? label : label + ". " + summary);
-    r.addView(b);
-    LinearLayout labels = column();
-    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
-    lp.setMarginStart(d(8));
-    r.addView(labels, lp);
-    add(labels, text(this, label, 16, TEXT), 0);
-    if (summary != null)
-      add(labels, text(this, summary, 14, MUTED), 2);
-    b.setOnClickListener(v -> { select.run(); render(); });
-    r.setOnClickListener(v -> b.performClick());
+    r.setMinimumHeight(d(50));
+    flexible(r, labels(label, summary));
+    r.setSelected(checked);
+    if (checked)
+      r.addView(glyph("check", 16, TEXT), d(16), d(16));
+    r.setBackground(ripple(this, SURFACE, 0));
+    r.setOnClickListener(v -> {
+      select.run();
+      render();
+    });
   }
   private void output() {
     title("Output", "Choose how Hex writes your words.");
@@ -559,65 +794,88 @@ public final class HexHomeActivity extends Activity {
       radioRow(s.label(), summary, settings.style() == s, () -> settings.setStyle(s));
     }
     card("Custom vocabulary");
-    toggleRow("Custom vocabulary", "Spell names and terms your way", vocabulary.isEnabled(), enabled -> {
-      vocabulary.setEnabled(enabled); render();
-    });
-    if (vocabulary.isEnabled()) vocabularyEditor();
+    toggleRow(
+        "Custom vocabulary", "Spell names and terms your way", vocabulary.isEnabled(), enabled -> {
+          vocabulary.setEnabled(enabled);
+          render();
+        });
+    if (vocabulary.isEnabled())
+      vocabularyEditor();
     card("Dictation learning");
     DictationFixStore fixes = new DictationFixStore(this);
-    toggleRow("Learn from dictation fixes", "Remembers single-word edits after two sightings", fixes.isEnabled(), enabled -> {
-      fixes.setEnabled(enabled); render();
-    });
+    toggleRow("Learn from dictation fixes", "Remembers single-word edits after two sightings",
+        fixes.isEnabled(), enabled -> {
+          fixes.setEnabled(enabled);
+          render();
+        });
     var active = new TreeMap<>(fixes.activeFixes());
     active.forEach((heard, preferred) -> {
       divider(group);
       LinearLayout r = row(group);
       flexible(r, text(this, heard + " → " + preferred, 15, TEXT));
-      Button remove = button(this, "Remove", false, () -> { fixes.removeFix(heard); render(); });
+      Button remove = button(this, "Remove", false, () -> {
+        fixes.removeFix(heard);
+        render();
+      });
       remove.setContentDescription("Remove fix for " + heard);
       r.addView(remove);
     });
-    if (!active.isEmpty()) act("Clear learned fixes", false, () -> new AlertDialog.Builder(this)
-        .setMessage("Delete all learned fixes?").setNegativeButton("Cancel", null)
-        .setPositiveButton("Delete", (dialog, which) -> { fixes.clearAll(); render(); }).show());
+    if (!active.isEmpty())
+      act("Clear learned fixes", false,
+          ()
+              -> new AlertDialog.Builder(this)
+                  .setMessage("Delete all learned fixes?")
+                  .setNegativeButton("Cancel", null)
+                  .setPositiveButton("Delete",
+                      (dialog, which) -> {
+                        fixes.clearAll();
+                        render();
+                      })
+                  .show());
   }
   private void vocabularyEditor() {
     LinearLayout form = row(group, 10);
     EditText entry = input(this, "New term");
     entry.setSingleLine();
     flexible(form, entry);
-    form.addView(button(this, "Add", false, () -> {
+    form.addView(smallButton(this, "Add", () -> {
       if (vocabulary.addTerm(entry.getText().toString()))
         render();
       else
         entry.setError("Enter a new term within the vocabulary limit");
     }), afterControl());
     for (String term : vocabulary.terms()) {
-      divider(group, 10);
-      LinearLayout r = row(group);
+      LinearLayout r = row(group, 6);
+      r.setMinimumHeight(d(36));
+      r.setPadding(d(12), d(4), d(5), d(4));
+      r.setBackground(shape(this, LAYER_01, 8.5f, 0));
+      LinearLayout.LayoutParams pill = (LinearLayout.LayoutParams) r.getLayoutParams();
+      pill.setMargins(d(16), d(6), d(16), d(4));
       flexible(r, text(this, term, 15, TEXT));
-      Button remove = button(this, "×", false, () -> {
+      Button remove = smallButton(this, "✕", () -> {
         vocabulary.removeTerm(term);
         render();
       });
       remove.setPadding(0, 0, 0, 0);
       remove.setContentDescription("Remove " + term);
-      r.addView(remove, d(48), d(48));
+      remove.setBackground(ripple(this, LAYER_02, 999));
+      r.addView(remove, d(26), d(26));
     }
   }
   private void history() {
     title("History", "Dictations confirmed in the text field.");
     card("Keep dictations");
     for (HistoryRetention r : HistoryRetention.values())
-      radioRow(r.label(), null, r == settings.historyRetention(), () -> settings.setHistoryRetention(r));
+      radioRow(
+          r.label(), null, r == settings.historyRetention(), () -> settings.setHistoryRetention(r));
     history.pruneExpired(settings.historyRetention());
     card("Recent dictations");
     EditText search = input(this, "Search dictations…");
     search.setSingleLine();
     search.setText(query);
-    add(group, search, 8);
+    inset(search);
     LinearLayout results = column();
-    add(group, results, 8);
+    inset(results);
     historyResults(results);
     search.addTextChangedListener(new android.text.TextWatcher() {
       public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -628,19 +886,20 @@ public final class HexHomeActivity extends Activity {
       public void afterTextChanged(android.text.Editable e) {}
     });
     if (history.count() > 0) {
-      Button clear = button(this, "Clear history", false,
+      Button clear = smallButton(this, "Clear history",
           ()
               -> new AlertDialog.Builder(this)
-                     .setMessage("Delete all retained dictations?")
-                     .setNegativeButton("Cancel", null)
-                     .setPositiveButton("Delete",
-                         (v, n) -> {
-                           history.clearAll();
-                           render();
-                         })
-                     .show());
+                  .setMessage("Delete all retained dictations?")
+                  .setNegativeButton("Cancel", null)
+                  .setPositiveButton("Delete",
+                      (v, n) -> {
+                        history.clearAll();
+                        render();
+                      })
+                  .show());
       clear.setTextColor(DANGER);
-      add(group, clear, 8);
+      LinearLayout actions = row(group);
+      actions.addView(clear);
     }
   }
   private void historyResults(LinearLayout results) {
@@ -659,7 +918,7 @@ public final class HexHomeActivity extends Activity {
                         .getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
                         .format(new java.util.Date(e.createdAtMs));
       flexible(r, text(this, date + " · " + TranscriptStyle.fromId(e.style).label(), 13, FAINT));
-      r.addView(button(this, "Copy", false, () -> copy(e.finalText)));
+      r.addView(smallButton(this, "Copy", () -> copy(e.finalText)));
     }
   }
   private void labs() {
@@ -686,7 +945,8 @@ public final class HexHomeActivity extends Activity {
               .show();
         } else {
           labs.setEnabledUnchecked(lab, on);
-          if (lab == LabId.EMOJI_KEYBOARD) new KeyboardSettings(this).setEmojiEnabled(on);
+          if (lab == LabId.EMOJI_KEYBOARD)
+            new KeyboardSettings(this).setEmojiEnabled(on);
           HexBubbleService.refreshLabs();
           render();
         }

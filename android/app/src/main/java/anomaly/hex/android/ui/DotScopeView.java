@@ -15,8 +15,7 @@ public final class DotScopeView extends View {
   static {
     for (int i = 0; i < EXP_LUT.length; i++)
       EXP_LUT[i] = (float) Math.exp(-2.4 * i * 4 / (EXP_LUT.length - 1));
-    for (int i = 0; i < PHASE.length; i++)
-      PHASE[i] = (float) Math.sin(i * Math.PI / 1000);
+    for (int i = 0; i < PHASE.length; i++) PHASE[i] = (float) Math.sin(i * Math.PI / 1000);
   }
   private Bitmap basePlate;
   private final Paint dots = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -25,11 +24,17 @@ public final class DotScopeView extends View {
   private final float[] yCoords = new float[ROWS], levels = new float[MicEnvelope.BARS];
   private float[] xCoords, sinPiU, u4, cos4, u8, cos8, u10, cos10, mix, edgeAlpha;
   private int[] bar;
-  private boolean live, demo, ticking;
+  private boolean live, demo, ticking, drawPlate = true;
+  public void setDrawPlate(boolean enabled) {
+    drawPlate = enabled;
+    invalidate();
+  }
   private long lastFrameNanos;
   private final Choreographer.FrameCallback tick = new Choreographer.FrameCallback() {
-    @Override public void doFrame(long now) {
-      if (!ticking) return;
+    @Override
+    public void doFrame(long now) {
+      if (!ticking)
+        return;
       if (now - lastFrameNanos >= 30_000_000L) {
         lastFrameNanos = now;
         invalidate();
@@ -38,7 +43,8 @@ public final class DotScopeView extends View {
     }
   };
   private void setTicking(boolean enabled) {
-    if (enabled == ticking) return;
+    if (enabled == ticking)
+      return;
     ticking = enabled;
     if (enabled) {
       lastFrameNanos = 0;
@@ -47,13 +53,16 @@ public final class DotScopeView extends View {
       Choreographer.getInstance().removeFrameCallback(tick);
     }
   }
-  @Override public void onVisibilityAggregated(boolean visible) {
+  @Override
+  public void onVisibilityAggregated(boolean visible) {
     super.onVisibilityAggregated(visible);
     setTicking(visible && (live || demo));
   }
   private void modeChanged() {
-    setTicking(isAttachedToWindow() && isShown() && getWindowVisibility() == VISIBLE && (live || demo));
-    if (!live && !demo) invalidate();
+    setTicking(
+        isAttachedToWindow() && isShown() && getWindowVisibility() == VISIBLE && (live || demo));
+    if (!live && !demo)
+      invalidate();
   }
   void setDemoMode(boolean enabled) {
     demo = enabled;
@@ -63,20 +72,23 @@ public final class DotScopeView extends View {
     super(c);
     setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
   }
-  @Override protected void onAttachedToWindow() {
+  @Override
+  protected void onAttachedToWindow() {
     super.onAttachedToWindow();
-    if (basePlate == null) buildPlate(getWidth(), getHeight());
+    if (basePlate == null)
+      buildPlate(getWidth(), getHeight());
     modeChanged();
   }
-  @Override protected void onDetachedFromWindow() {
+  @Override
+  protected void onDetachedFromWindow() {
     setTicking(false);
     releasePlate();
     super.onDetachedFromWindow();
   }
   private void releasePlate() {
-    if (basePlate != null) basePlate.recycle();
+    if (basePlate != null)
+      basePlate.recycle();
     basePlate = null;
-
   }
   public void update(boolean recording, int[] targets) {
     boolean changed = live != recording;
@@ -86,7 +98,8 @@ public final class DotScopeView extends View {
     else if (targets != null)
       for (int i = 0; i < levels.length; i++)
         levels[i] = i < targets.length ? Math.min(1f, Math.max(0, targets[i]) / 100f) : 0;
-    if (changed) modeChanged();
+    if (changed)
+      modeChanged();
   }
   @Override
   protected void onSizeChanged(int w, int h, int oldw, int oldh) {
@@ -95,17 +108,26 @@ public final class DotScopeView extends View {
     buildPlate(w, h);
   }
   private void buildPlate(int w, int h) {
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0)
+      return;
     float dp = getResources().getDisplayMetrics().density;
     float pitch = Math.max(3 * dp, Math.min(4 * dp, h / 11f));
     int cols = Math.max(15, (int) Math.floor((w - 16 * dp) / pitch));
-    xCoords = new float[cols]; sinPiU = new float[cols]; edgeAlpha = new float[cols];
-    u4 = new float[cols]; cos4 = new float[cols]; u8 = new float[cols]; cos8 = new float[cols];
-    u10 = new float[cols]; cos10 = new float[cols]; mix = new float[cols]; bar = new int[cols];
+    xCoords = new float[cols];
+    sinPiU = new float[cols];
+    edgeAlpha = new float[cols];
+    u4 = new float[cols];
+    cos4 = new float[cols];
+    u8 = new float[cols];
+    cos8 = new float[cols];
+    u10 = new float[cols];
+    cos10 = new float[cols];
+    mix = new float[cols];
+    bar = new int[cols];
     for (int i = 1; i < BUCKETS; i++) points[i] = new float[2 * ROWS * cols];
     float radius = pitch * .3f;
     Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-    p.setColor(HexTheme.PRIMARY);
+    p.setColor(HexTheme.WARM_PEARL_BASE);
     dots.setColor(HexTheme.PRIMARY);
     dots.setStrokeWidth(2 * radius);
     dots.setStrokeCap(Paint.Cap.ROUND);
@@ -117,12 +139,15 @@ public final class DotScopeView extends View {
     for (int x = 0; x < cols; x++) {
       float px = xCoords[x] = (w - (cols - 1) * pitch) * .5f + x * pitch;
       edgeAlpha[x] = Math.max(0f, Math.min(1f, Math.min(px, w - px) / fade));
-      p.setAlpha(Math.round(55 * edgeAlpha[x]));
+      p.setAlpha(Math.round(28 * edgeAlpha[x]));
       float u = x / (float) (cols - 1);
       sinPiU[x] = (float) Math.sin(Math.PI * u);
-      u4[x] = (float) Math.sin(4 * u); cos4[x] = (float) Math.cos(4 * u);
-      u8[x] = (float) Math.sin(8 * u); cos8[x] = (float) Math.cos(8 * u);
-      u10[x] = (float) Math.sin(10 * u); cos10[x] = (float) Math.cos(10 * u);
+      u4[x] = (float) Math.sin(4 * u);
+      cos4[x] = (float) Math.cos(4 * u);
+      u8[x] = (float) Math.sin(8 * u);
+      cos8[x] = (float) Math.cos(8 * u);
+      u10[x] = (float) Math.sin(10 * u);
+      cos10[x] = (float) Math.cos(10 * u);
       float idx = u * (levels.length - 1);
       bar[x] = Math.min((int) idx, levels.length - 2);
       mix[x] = idx - bar[x];
@@ -131,16 +156,30 @@ public final class DotScopeView extends View {
   }
   @Override
   protected void onDraw(Canvas c) {
-    if (basePlate == null) return;
-    c.drawBitmap(basePlate, 0f, 0f, null);
-    if (!live && !demo) return;
+    if (basePlate == null)
+      return;
+    if (drawPlate)
+      c.drawBitmap(basePlate, 0f, 0f, null);
+    if (!live && !demo) {
+      if (!drawPlate) {
+        dots.setColor(HexTheme.WARM_PEARL_BASE);
+        for (int x = 0; x < xCoords.length; x++) {
+          dots.setAlpha(Math.round((18 + 20 * sinPiU[x]) * edgeAlpha[x]));
+          int offset = Math.round(u8[x] * sinPiU[x]);
+          c.drawPoint(xCoords[x], yCoords[4 + offset], dots);
+          if (offset != 0)
+            c.drawPoint(xCoords[x], yCoords[4 - offset], dots);
+        }
+      }
+      return;
+    }
     int t = (int) (SystemClock.uptimeMillis() % PHASE.length);
     float sin = PHASE[t], cos = PHASE[(t + 500) % PHASE.length];
     Arrays.fill(counts, 0);
     for (int x = 0; x < xCoords.length; x++) {
       int a = bar[x];
       float level = demo ? .48f + .22f * (u4[x] * cos + cos4[x] * sin)
-          : levels[a] + (levels[a + 1] - levels[a]) * mix[x];
+                         : levels[a] + (levels[a + 1] - levels[a]) * mix[x];
       float second = -3.2f * level * (u8[x] * cos + cos8[x] * sin) * sinPiU[x];
       float wave = 3.8f * level * (u10[x] * cos - cos10[x] * sin) * sinPiU[x];
       float intensity = (.25f + .75f * level) * (BUCKETS - 1);
@@ -152,13 +191,18 @@ public final class DotScopeView extends View {
         int bucket = Math.round(EXP_LUT[index] * intensity * edgeAlpha[x]);
         if (bucket > 0) {
           int n = counts[bucket];
-          points[bucket][n] = xCoords[x]; points[bucket][n + 1] = yCoords[y];
+          points[bucket][n] = xCoords[x];
+          points[bucket][n + 1] = yCoords[y];
           counts[bucket] = n + 2;
         }
       }
     }
     for (int i = 1; i < BUCKETS; i++) {
-      if (counts[i] == 0) continue;
+      if (counts[i] == 0)
+        continue;
+      float u = (i - 1f) / (BUCKETS - 2);
+      dots.setColor(
+          Color.rgb(Math.round(219 + 31 * u), Math.round(212 + 33 * u), Math.round(196 + 39 * u)));
       dots.setAlpha(250 * i / (BUCKETS - 1));
       c.drawPoints(points[i], 0, counts[i], dots);
     }
