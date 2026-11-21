@@ -609,6 +609,9 @@ public final class HexHomeActivity extends Activity {
   private void scratchpad(boolean actions) {
     card("Scratchpad");
     practice = input(this, scratchpadHint());
+    practice.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+        | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
     practice.setGravity(Gravity.TOP | Gravity.START);
     practice.setMinHeight(d(110));
     practice.setText(scratch);

@@ -66,6 +66,12 @@ public final class EmojiPanelView extends LinearLayout {
     }
     void append(String s) { if(query.length()<64) query.append(s); refreshTop(); }
     void erase() { if(query.length()>0) query.delete(query.offsetByCodePoints(query.length(),-1),query.length()); refreshTop(); }
+    void eraseWord() {
+        int i=query.length();
+        while(i>0 && Character.isWhitespace(query.charAt(i-1))) i--;
+        while(i>0 && !Character.isWhitespace(query.charAt(i-1))) i--;
+        query.setLength(i); refreshTop();
+    }
     private void pick(String s) { recent.record(s); host.onEmojiPick(s); if(searching) toggleSearch.run(); else {populate(); refreshTop();} }
     private void refreshTop() {
         top.removeAllViews(); Context c=getContext();
@@ -101,7 +107,10 @@ public final class EmojiPanelView extends LinearLayout {
         groups.removeAllViews(); tabs.removeAllViews(); Context c=getContext();
         headers.clear(); TextView abc=label(c,"ABC",15); abc.setTextSize(15.5f); abc.setContentDescription("Back to letters");
         abc.setBackground(cap(KEY_FILL)); abc.setOnClickListener(v->close.run()); tabs.addView(abc,dp(c,50),-1);
-        Map<String,List<String>> all=new LinkedHashMap<>(); List<String> used=recent.list(); all.put("Frequently used",used.isEmpty()?DEFAULTS:used); all.putAll(EmojiCatalog.categories());
+        Map<String,List<String>> all=new LinkedHashMap<>();
+        LinkedHashSet<String> freq=new LinkedHashSet<>(recent.list());
+        for(String d:DEFAULTS) { if(freq.size()>=8) break; freq.add(d); }
+        all.put("Frequently used",new ArrayList<>(freq)); all.putAll(EmojiCatalog.categories());
         int i=0,sectionWidth=0;
         for(var entry:all.entrySet()) {
             String name=entry.getKey(); LinearLayout section=new LinearLayout(c); section.setOrientation(VERTICAL);

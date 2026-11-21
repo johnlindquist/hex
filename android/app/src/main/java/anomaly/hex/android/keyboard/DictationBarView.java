@@ -46,6 +46,7 @@ public final class DictationBarView extends LinearLayout {
   private final FrameLayout top;
   private final LinearLayout normal, dictate;
   private final View dot, undo, cancel, returnKey, languageTrigger, styleTrigger;
+  private final HexMarkView mark;
   private final TextView status, language, style, done;
   private final DotScopeView scope;
   private final Stage stage;
@@ -66,7 +67,7 @@ public final class DictationBarView extends LinearLayout {
     addView(top, new LayoutParams(-1, dp(26)));
     normal = horizontal();
     top.addView(normal);
-    HexMarkView mark = new HexMarkView(c);
+    mark = new HexMarkView(c);
     action(mark, "Open Hex", host::onOpenApp, 0, 13);
     normal.addView(mark, cell(22, 26, 0));
     LinearLayout cluster = horizontal();
@@ -162,6 +163,7 @@ public final class DictationBarView extends LinearLayout {
 
   public void setDictationState(String state, int[] meterLevels) {
     boolean live = "listening".equals(state), busy = "transcribing".equals(state);
+    mark.setWarm("ready".equalsIgnoreCase(state) || "warm".equalsIgnoreCase(state));
     scope.update(live, meterLevels);
     if (live == listening && busy == transcribing) return;
     if (live) started = SystemClock.elapsedRealtime();

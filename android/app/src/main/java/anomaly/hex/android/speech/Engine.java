@@ -34,7 +34,7 @@ public final class Engine {
     return shared;
   }
 
-  public synchronized boolean isAvailable() {
+  public boolean isAvailable() {
     return recognizer != null || ModelStore.inspect(ctx).state != ModelStore.State.MISSING;
   }
 

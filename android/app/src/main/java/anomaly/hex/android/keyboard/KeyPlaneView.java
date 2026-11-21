@@ -37,9 +37,9 @@ public final class KeyPlaneView extends View {
     private Key down;
     private long started;
     private int pointer = -1, heldShiftPointer = -1, selection;
-    private float origin, cursor, pickerLeft, cell;
+    private float origin, cursor, lastX, pickerLeft, cell;
     private String[] variants;
-    private boolean dragging, popups = true, haptics = true, emoji;
+    private boolean dragging, searching, popups = true, haptics = true, emoji;
 
     KeyPlaneView(Context c, Input host, Runnable openEmoji) {
         super(c); this.host = host; this.openEmoji = openEmoji;
@@ -56,9 +56,11 @@ public final class KeyPlaneView extends View {
         language = lang; popups = popup; haptics = haptic; emoji = emojis; reset(); rebuild(getWidth()); requestLayout();
     }
     void field(FieldKind kind, String label) {
-        field = kind; action = label == null || label.equalsIgnoreCase("return") ? "" : label;
+        field = kind;
+        action = (label == null || label.isBlank() || label.equals("↵") || label.equalsIgnoreCase("return")) ? "" : label;
         reset(); rebuild(getWidth());
     }
+    void setSearching(boolean value) { if (searching != value) { searching = value; invalidate(); } }
     void letters() { layer = Layer.LETTERS; reset(); rebuild(getWidth()); }
     void autoCap(boolean cap) { shift.applyAutoCap(cap); invalidate(); }
     @Override protected void onMeasure(int w, int h) {
@@ -107,7 +109,7 @@ public final class KeyPlaneView extends View {
         boolean wide=landscape(), show=popups && !wide && variants==null && down!=null && down.kind()==KeyKind.CHAR;
         for (Key k : layout.keys()) {
             if(show && k==down) continue;
-            boolean primary = k.kind()==KeyKind.RETURN && !action.isBlank();
+            boolean primary = k.kind()==KeyKind.RETURN && !action.isBlank() && !dragging && !searching;
             boolean active = k==down;
             box(c,k.left(),k.top(),k.right(),k.bottom(),primary ? (active?ACTION_PRESSED:ACTION_FILL) : (active?KEY_PRESSED:KEY_FILL));
             if(dragging) continue;
@@ -148,6 +150,7 @@ public final class KeyPlaneView extends View {
         if(left) java.util.Collections.reverse(java.util.Arrays.asList(options));
         selection=left?options.length-1:0;
         pickerLeft=Math.max(2,Math.min(width-cell*options.length-10,(down.left()+down.right())/2-4-(selection+.5f)*cell));
+        if (Math.abs(lastX - origin) > cell * 0.5f) select(lastX);
         invalidate();
     };
     private void select(float x) { selection=Math.max(0,Math.min(variants.length-1,(int)((x-pickerLeft-4)/cell))); }
@@ -180,7 +183,7 @@ public final class KeyPlaneView extends View {
                 else if(down!=null && down.kind()==KeyKind.CHAR) commit();
                 removeCallbacks(repeat); removeCallbacks(accent); variants=null; dragging=false;
             }
-            origin=cursor=e.getX(i)/density(); down=layout.hitTest(origin,e.getY(i)/density());
+            origin=cursor=lastX=e.getX(i)/density(); down=layout.hitTest(origin,e.getY(i)/density());
             if(down==null) return a!=MotionEvent.ACTION_DOWN;
             pointer=e.getPointerId(i); started=e.getEventTime();
             if(haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
@@ -199,6 +202,7 @@ public final class KeyPlaneView extends View {
             return true;
         }
         float x=e.getX(index)/density(), y=e.getY(index)/density();
+        lastX=x;
         if(variants!=null) {
             if(a==MotionEvent.ACTION_MOVE && Math.abs(x-origin)>1) {
                 int prev=selection; select(x); if(haptics && prev!=selection) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
@@ -208,7 +212,16 @@ public final class KeyPlaneView extends View {
             dragging=true; int delta=(int)((x-cursor)/7.5f);
             if(delta!=0) { cursor+=delta*7.5f; host.onCursorMove(delta); }
         } else if(a==MotionEvent.ACTION_MOVE && !down.hitTest(x,y)) {
-            removeCallbacks(accent); removeCallbacks(repeat);
+            if(down.kind()==KeyKind.CHAR) {
+                Key under=layout.hitTest(x,y);
+                if(under!=null && under.kind()==KeyKind.CHAR) {
+                    down=under; origin=x; removeCallbacks(accent); postDelayed(accent,400);
+                } else {
+                    removeCallbacks(accent); removeCallbacks(repeat);
+                }
+            } else {
+                removeCallbacks(accent); removeCallbacks(repeat);
+            }
         }
         if(a==MotionEvent.ACTION_UP || (a==MotionEvent.ACTION_POINTER_UP && e.getActionIndex()==index)) {
             if(variants!=null || down.hitTest(x,y)) commit();

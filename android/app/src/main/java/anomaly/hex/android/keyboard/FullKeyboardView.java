@@ -21,6 +21,7 @@ public final class FullKeyboardView extends FrameLayout {
         void onStopDictation();
         void onCancelDictation();
         void onSwitchKeyboard();
+        void onOpenApp();
     }
     private final Host host;
     private final SuggestionStripView strip;
@@ -34,21 +35,26 @@ public final class FullKeyboardView extends FrameLayout {
         addView(strip,new LayoutParams(-1,dp(c,plane.landscape()?39:44))); addView(plane,new LayoutParams(-1,-2));
     }
     private void toggleEmoji() {
-        if(!emojiEnabled || emojiOpen) { closeEmoji(); return; }
+        if(!emojiEnabled) { closeEmoji(); return; }
+        if(emojiOpen) {
+            if(panel.searching()) toggleSearch();
+            else closeEmoji();
+            return;
+        }
         if(panel==null) {
             panel=new EmojiPanelView(getContext(),host,this::closeEmoji,this::toggleSearch);
             addView(panel,indexOfChild(plane),new LayoutParams(-1,-1));
         }
         emojiOpen=true; panel.setVisibility(VISIBLE); panel.open(); panel.contextEmoji(emojiContext);
-        strip.setVisibility(INVISIBLE); plane.setVisibility(INVISIBLE);
+        plane.setSearching(false); strip.setVisibility(INVISIBLE); plane.setVisibility(INVISIBLE);
     }
     private void toggleSearch() {
-        boolean search=!panel.searching(); panel.search(search); plane.letters(); plane.setVisibility(search?VISIBLE:INVISIBLE); requestLayout();
+        boolean search=!panel.searching(); panel.search(search); plane.letters(); plane.setSearching(search); plane.setVisibility(search?VISIBLE:INVISIBLE); requestLayout();
     }
     private void closeEmoji() {
         if(!emojiOpen) return;
         requestLayout();
-        emojiOpen=false; panel.setVisibility(GONE); plane.letters(); plane.setVisibility(VISIBLE); strip.setVisibility(VISIBLE);
+        emojiOpen=false; panel.setVisibility(GONE); plane.setSearching(false); plane.letters(); plane.setVisibility(VISIBLE); strip.setVisibility(VISIBLE);
     }
     private String emojiContext;
     public void setEmojiContext(String context) {
@@ -62,6 +68,7 @@ public final class FullKeyboardView extends FrameLayout {
     }
     public void setSuggestions(List<String> items) { strip.suggestions(items==null?List.of():items); }
     public void setUndoVisible(boolean visible) { strip.setUndo(visible); }
+    public void showNotice(String message, boolean openApp) { closeEmoji(); strip.showNotice(message, openApp); }
     public void setFieldKind(KeyboardLayout.FieldKind kind,String returnLabel) { closeEmoji(); plane.field(kind,returnLabel); }
     public void setAutoCap(boolean value) { plane.autoCap(value); }
     public void setSettings(KeyboardLanguage language,boolean keyPopups,boolean haptics,boolean emojiEnabled) {
@@ -72,7 +79,7 @@ public final class FullKeyboardView extends FrameLayout {
     private final class PlaneHost implements KeyPlaneView.Input {
         public void onCharacter(String s) { if(emojiOpen) panel.append(s); else host.onCharacter(s); }
         public void onDeleteChar() { if(emojiOpen) panel.erase(); else host.onDeleteChar(); }
-        public void onDeleteWord() { if(emojiOpen) panel.search(true); else host.onDeleteWord(); }
+        public void onDeleteWord() { if(emojiOpen) panel.eraseWord(); else host.onDeleteWord(); }
         public void onSpace() { if(emojiOpen) panel.append(" "); else host.onSpace(); }
         public void onReturn() { if(emojiOpen) toggleSearch(); else host.onReturn(); }
         public void onCursorMove(int d) { if(!emojiOpen) host.onCursorMove(d); }

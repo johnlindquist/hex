@@ -11,8 +11,9 @@ public final class SuggestionStripView extends FrameLayout {
     private final FullKeyboardView.Host host;
     private final LinearLayout typing, recording, slots;
     private final FrameLayout center;
-    private final LinearLayout undo;
-    private final TextView clock;
+    private final LinearLayout undo, noticeBar;
+    private final TextView clock, noticeText, noticeAction;
+    private final Runnable clearNotice = () -> showNotice(null, false);
     private List<String> items=List.of();
     private String emojiContext;
     private final View finish;
@@ -38,7 +39,15 @@ public final class SuggestionStripView extends FrameLayout {
         View arrow=new View(c){protected void onDraw(android.graphics.Canvas canvas){KeyIcons.drawUndoArrow(canvas,getWidth()/2f,getHeight()/2f,dp(c,16),TEXT_MUTED);}};
         undo.addView(arrow,dp(c,20),-1); TextView undoLabel=label(c,"Undo dictation",14); undoLabel.setTextSize(13.5f); undoLabel.setTextColor(TEXT_MUTED);
         undo.addView(undoLabel); undo.setContentDescription("Undo dictation"); undo.setOnClickListener(v->host.onUndoDictation());
-        center.addView(undo,new LayoutParams(-2,dp(c,30),Gravity.CENTER)); setUndo(false);
+        center.addView(undo,new LayoutParams(-2,dp(c,30),Gravity.CENTER));
+        noticeBar=row(c); noticeBar.setBackground(pill(CHIP_FILL)); noticeBar.setPadding(dp(c,10),0,dp(c,6),0);
+        noticeText=label(c,"",13); noticeText.setTextColor(TEXT); noticeBar.addView(noticeText);
+        noticeAction=label(c,"Open",13); noticeAction.setTextColor(0xFFFFFFFF);
+        noticeAction.setBackground(pill(ACTION_FILL)); noticeAction.setPadding(dp(c,9),0,dp(c,9),0);
+        LinearLayout.LayoutParams nap=new LinearLayout.LayoutParams(-2,dp(c,22)); nap.leftMargin=dp(c,8);
+        noticeAction.setOnClickListener(v->{ showNotice(null,false); host.onOpenApp(); });
+        noticeBar.addView(noticeAction,nap); noticeBar.setVisibility(GONE);
+        center.addView(noticeBar,new LayoutParams(-2,dp(c,30),Gravity.CENTER)); setUndo(false);
         mark=new HexMarkView(c); typing.addView(mark,new LinearLayout.LayoutParams(dp(c,44),-1));
         mark.setOnClickListener(v->host.onStartDictation());
         recording=row(c); recording.setPadding(dp(c,6.5f),0,dp(c,6.5f),0); addView(recording);
@@ -66,7 +75,22 @@ public final class SuggestionStripView extends FrameLayout {
         LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(c,32),dp(c,32)); p.leftMargin=dp(c,6);
         recording.addView(b,p); return b;
     }
-    void setUndo(boolean visible) { undo.setVisibility(visible?VISIBLE:GONE); slots.setVisibility(visible?GONE:VISIBLE); }
+    void setUndo(boolean visible) {
+        if(visible) showNotice(null,false);
+        undo.setVisibility(visible?VISIBLE:GONE);
+        slots.setVisibility(visible||noticeBar.getVisibility()==VISIBLE?GONE:VISIBLE);
+    }
+    void showNotice(String message, boolean openApp) {
+        timer.removeCallbacks(clearNotice);
+        if(message==null || message.isBlank()) {
+            noticeBar.setVisibility(GONE);
+            slots.setVisibility(undo.getVisibility()==VISIBLE?GONE:VISIBLE);
+            return;
+        }
+        undo.setVisibility(GONE); slots.setVisibility(GONE);
+        noticeText.setText(message); noticeAction.setVisibility(openApp?VISIBLE:GONE);
+        noticeBar.setVisibility(VISIBLE); timer.postDelayed(clearNotice,4000);
+    }
     void suggestions(List<String> values) { items=List.copyOf(values); renderSlots(); }
     void contextEmoji(String value) { if(!java.util.Objects.equals(value,emojiContext)){emojiContext=value; renderSlots();} }
     private void renderSlots() {
@@ -75,10 +99,18 @@ public final class SuggestionStripView extends FrameLayout {
         boolean lone=emojiContext!=null && (items.isEmpty() || items.size()==1 && first.equals(emojiContext));
         boolean correction=isQuoted(first) && items.size()>1 && !items.get(1).isBlank() && !items.get(1).equals(emojiContext)
                 && !items.get(1).equals(first.substring(1,first.length()-1));
+        String[] values=new String[3]; String[] words=new String[3];
         for(int i=0;i<3;i++) {
-            if(i>0) { View line=new View(c); if(!correction) line.setBackgroundColor(SEPARATOR); slots.addView(line,1,dp(c,20)); }
-            String value=lone?(i==1?emojiContext:""):i<items.size()?items.get(i):"";
-            String word=isQuoted(value)?value.substring(1,value.length()-1):value;
+            values[i]=lone?(i==1?emojiContext:""):i<items.size()?items.get(i):"";
+            words[i]=isQuoted(values[i])?values[i].substring(1,values[i].length()-1):values[i];
+        }
+        for(int i=0;i<3;i++) {
+            if(i>0) {
+                View line=new View(c);
+                if(!correction && !words[i-1].isEmpty() && !words[i].isEmpty()) line.setBackgroundColor(SEPARATOR);
+                slots.addView(line,1,dp(c,20));
+            }
+            String value=values[i], word=words[i];
             boolean emoji=word.equals(emojiContext);
             FrameLayout cell=new FrameLayout(c); slots.addView(cell,weight());
             TextView slot=label(c,i==0 && !word.isEmpty() && !emoji?"“"+word+"”":value,emoji?23:16);

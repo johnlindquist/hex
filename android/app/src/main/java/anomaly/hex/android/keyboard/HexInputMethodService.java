@@ -49,7 +49,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     container.setBackgroundColor(KeyboardPalette.BACKDROP);
     container.setOnApplyWindowInsetsListener((v, insets) -> {
       int bottom = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
-      int safeBottom = bottom > 0 ? Math.max(bottom + KeyboardPalette.dp(this, 8), KeyboardPalette.dp(this, 36)) : KeyboardPalette.dp(this, 10);
+      int safeBottom = bottom > 0 ? bottom : KeyboardPalette.dp(this, 8);
       if (v.getPaddingBottom() != safeBottom) v.setPadding(0, 0, 0, safeBottom);
       return insets;
     });
@@ -87,20 +87,25 @@ public final class HexInputMethodService extends InputMethodService implements F
       fullView.setSettings(language, kbSettings.keyPopups(), kbSettings.haptics(), emojiEnabled && !privateField);
       fullView.setFieldKind(kind, actionLabel());
     }
-    meta(); refresh(); Engine.get(this).prewarmAsync();
+    meta(); drawState(idleState(), null); refresh(); Engine.get(this).prewarmAsync();
+  }
+  private String idleState() {
+    return !privateField
+        && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        && Engine.get(this).isAvailable() ? "ready" : "idle";
   }
   private String actionLabel() {
     return switch (action) {
       case EditorInfo.IME_ACTION_DONE -> "Done"; case EditorInfo.IME_ACTION_SEARCH -> "Search";
       case EditorInfo.IME_ACTION_SEND -> "Send"; case EditorInfo.IME_ACTION_GO -> "Go";
-      case EditorInfo.IME_ACTION_NEXT -> "Next"; default -> "↵";
+      case EditorInfo.IME_ACTION_NEXT -> "Next"; default -> "";
     };
   }
   private void meta() {
     if (barView == null) return;
     String id = speechLang.selectedId();
     barView.setMeta(hexSettings.style(), id, SpeechLanguage.AUTO.equals(id) ? "Auto" : languageLabel(id));
-    barView.setReturnAction(!actionLabel().equals("↵"));
+    barView.setReturnAction(!actionLabel().isEmpty());
   }
   private void resetEditor() { if (barView != null) barView.resetGesture(); onCancelDictation(); setUndo(null, -1); editor = null; lastSpace = 0; }
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); super.onFinishInputView(finishing); }
@@ -115,7 +120,9 @@ public final class HexInputMethodService extends InputMethodService implements F
   private static String word(String context) { Matcher m = WORD.matcher(context); return m.find() ? m.group() : ""; }
   private void refresh() {
     InputConnection c = ic(); if (fullView == null || c == null) return;
-    fullView.setAutoCap(!privateField && c.getCursorCapsMode(editor.inputType) != 0);
+    int explicitCap = editor.inputType & (InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_CAP_WORDS | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+    int capFlags = explicitCap != 0 ? editor.inputType : (words ? (editor.inputType | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES) : editor.inputType);
+    fullView.setAutoCap(!privateField && c.getCursorCapsMode(capFlags) != 0);
     String context = words ? before(256) : "";
     List<String> suggestions = new ArrayList<>(autocorrect.suggestions(word(context), vocabulary));
     String emoji = emojiEnabled ? EmojiCatalog.suggestForContext(context) : null;
@@ -167,12 +174,15 @@ public final class HexInputMethodService extends InputMethodService implements F
     ExtractedText t = c.getExtractedText(new ExtractedTextRequest(), 0); if (t == null || t.text == null) return;
     int p = t.startOffset + Math.max(0, Math.min(t.text.length(), t.selectionEnd + delta)); c.setSelection(p,p); refresh();
   }
-  public void onReturn() { if (ic() == null) return; editing(); if (actionLabel().equals("↵")) replace(0,"\n"); else ic().performEditorAction(action); }
+  public void onReturn() { if (ic() == null) return; editing(); if (actionLabel().isEmpty()) replace(0,"\n"); else ic().performEditorAction(action); }
   public void onSwitchKeyboard() { if (!switchToNextInputMethod(false)) getSystemService(InputMethodManager.class).showInputMethodPicker(); }
   public void onOpenApp() { startActivity(new Intent(this, HexHomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
   static String languageLabel(String id) {
     Locale locale = Locale.forLanguageTag(id);
-    return locale.getDisplayLanguage(locale);
+    String name = locale.getDisplayLanguage(locale);
+    if (name == null || name.isEmpty()) return id;
+    int firstEnd = Character.charCount(name.codePointAt(0));
+    return name.substring(0, firstEnd).toUpperCase(locale) + name.substring(firstEnd);
   }
   public void onStyleSelected(TranscriptStyle style) { hexSettings.setStyle(style); meta(); }
   public void onLanguageSelected(String id) { speechLang.select(id); meta(); }
@@ -194,14 +204,18 @@ public final class HexInputMethodService extends InputMethodService implements F
   }
   public void onDictateToggle() { if (session == null) onStartDictation(); else onStopDictation(); }
   public void onCancel() { onCancelDictation(); }
-  public void onCancelDictation() { generation++; if (session != null) session.cancel(); session = null; drawState("idle",null); }
+  public void onCancelDictation() { generation++; if (session != null) session.cancel(); session = null; drawState(idleState(),null); }
   public void onStopDictation() { if (session != null) { session.finish(); drawState("transcribing",null); } }
-  private void notice(String message) { Toast.makeText(this,message,Toast.LENGTH_SHORT).show(); }
+  private void notice(String message) { notice(message, false); }
+  private void notice(String message, boolean openApp) {
+    if (fullView != null) fullView.showNotice(message, openApp);
+    else Toast.makeText(this,message,Toast.LENGTH_SHORT).show();
+  }
   public void onStartDictation() {
     InputConnection target = ic(); if (session != null || target == null) return;
-    if (privateField) { notice("Dictation is unavailable in password fields"); return; }
-    if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { notice("Open Hex to allow microphone access"); return; }
-    if (!Engine.get(this).isAvailable()) { notice("Open Hex to install the speech model"); return; }
+    if (privateField) { notice("Dictation unavailable in passwords"); return; }
+    if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { notice("Allow mic in Hex", true); return; }
+    if (!Engine.get(this).isAvailable()) { notice("Install model in Hex", true); return; }
     SurroundingText anchor = target.getSurroundingText(0,0,0);
     if (anchor == null || anchor.getOffset() < 0) { notice("This editor cannot confirm the dictation target"); return; }
     editing(); long id = ++generation;
@@ -216,7 +230,7 @@ public final class HexInputMethodService extends InputMethodService implements F
       public void onCheckpoint(byte[] pcm) { }
       public void onError(String code,String detail) { post(() -> notice("Dictation: " + detail)); }
       public void onStateChanged(String s) { post(() -> {
-        if (s.equals("finished") || s.equals("cancelled") || s.equals("error")) { session = null; drawState("idle",null); }
+        if (s.equals("finished") || s.equals("cancelled") || s.equals("error")) { session = null; drawState(idleState(),null); }
         else if (!state.equals("transcribing") || !s.equals("listening")) drawState(s,null);
       }); }
       public void onPhraseReady(String raw,String ignored,long ms) { post(() -> {
