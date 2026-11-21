@@ -1,5 +1,9 @@
 package anomaly.hex.android.service;
 import android.Manifest;
+import android.accessibilityservice.AccessibilityButtonController;
+import android.graphics.Bitmap;
+import android.hardware.HardwareBuffer;
+import anomaly.hex.android.anywhere.*;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.InputMethod;
 import android.app.*;
@@ -191,10 +195,73 @@ public final class HexBubbleService extends AccessibilityService {
       }
     };
   }
+  private final AccessibilityButtonController.AccessibilityButtonCallback anywhereButton =
+      new AccessibilityButtonController.AccessibilityButtonCallback() {
+        @Override public void onClicked(AccessibilityButtonController button) {
+          if (labs.isEnabled(LabId.TYPE_ANYWHERE))
+            launchTypeAnywhere();
+        }
+      };
+  private int captureRequest;
+  public void launchTypeAnywhere() {
+    if (!connected || !unlocked() || !labs.isEnabled(LabId.TYPE_ANYWHERE))
+      return;
+    int request = ++captureRequest;
+    TypeAnywhereStore.clear(this);
+    try {
+      takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
+        public void onFailure(int code) {
+          openAnywhere(request, null,
+              code == ERROR_TAKE_SCREENSHOT_SECURE_WINDOW
+                  ? "Protected screen — type your question"
+                  : "Screen unavailable — type your question");
+        }
+        public void onSuccess(ScreenshotResult result) {
+          Bitmap pixels = null;
+          try (HardwareBuffer buffer = result.getHardwareBuffer()) {
+            if (request != captureRequest)
+              return;
+            Bitmap wrapped = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
+            if (wrapped != null)
+              try {
+                pixels = wrapped.copy(Bitmap.Config.ARGB_8888, false);
+                if (pixels.getWidth() > 1080) {
+                  Bitmap original = pixels;
+                  pixels = Bitmap.createScaledBitmap(original, 1080,
+                      Math.max(1, Math.round(original.getHeight() * 1080f / original.getWidth())),
+                      true);
+                  original.recycle();
+                }
+              } finally {
+                wrapped.recycle();
+              }
+          } catch (RuntimeException | OutOfMemoryError e) {
+            pixels = null;
+          }
+          openAnywhere(request, pixels, "Screen unavailable — type your question");
+        }
+      });
+    } catch (RuntimeException e) {
+      openAnywhere(request, null, "Screen unavailable — type your question");
+    }
+  }
+  private void openAnywhere(int request, Bitmap pixels, String note) {
+    if (request != captureRequest || !connected || !unlocked()
+        || !labs.isEnabled(LabId.TYPE_ANYWHERE))
+      return;
+    TypeAnywhereStore capture = TypeAnywhereStore.put(this, pixels);
+    startActivity(
+        TypeAnywhereActivity.intent(this, capture.capturedAt, pixels == null ? note : null));
+    if (pixels != null)
+      new Thread(() -> TypeAnywhereStore.persist(this, capture), "ScreenHandoff").start();
+  }
   @Override
   protected void onServiceConnected() {
     if (!connected) {
-      getContentResolver().registerContentObserver(Settings.Secure.getUriFor(Settings.Secure.DEFAULT_INPUT_METHOD), false, defaultImeObserver);
+      getAccessibilityButtonController().registerAccessibilityButtonCallback(anywhereButton, main);
+      getContentResolver().registerContentObserver(
+          Settings.Secure.getUriFor(Settings.Secure.DEFAULT_INPUT_METHOD), false,
+          defaultImeObserver);
       registerReceiver(screen, new IntentFilter(Intent.ACTION_SCREEN_OFF), RECEIVER_NOT_EXPORTED);
       getSystemService(AudioManager.class).addOnModeChangedListener(getMainExecutor(), mode);
     }
@@ -742,6 +809,7 @@ public final class HexBubbleService extends AccessibilityService {
   public void onDestroy() {
     KeyboardPresence.setOnVisibilityChanged(null);
     if (connected) {
+      getAccessibilityButtonController().unregisterAccessibilityButtonCallback(anywhereButton);
       getContentResolver().unregisterContentObserver(defaultImeObserver);
       unregisterReceiver(screen);
       getSystemService(AudioManager.class).removeOnModeChangedListener(mode);

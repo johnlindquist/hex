@@ -48,6 +48,8 @@ Enable a Lab (each starts off)                        // android.labs
 └── Clean up what I say → apply localized spoken cleanup rules without loading Gemma
 ```
 
+**Labs › Type anywhere** (`android.type-anywhere`, off by default): Enable the lab and assign Hex dictation to Android’s Accessibility Button. Tap it in an app to capture the current display and open a keyboard-focused sheet. Type or dictate a question, or choose a quick prompt. Local OCR reads the screenshot. Ask uses Gemini if a key is saved under Labs › Type anywhere › Gemini API key (sends the image, OCR text and question), otherwise installed Gemma reads the text offline. Without either, the sheet extracts relevant lines on-device. Protected or unavailable screens still open the composer without an image. Closing the sheet discards the capture and its private cache handoff. `TypeAnywhereTest` checks the local answer and Gemini text contracts; shortcut assignment, IME placement, OCR and inference need device verification.
+
 Sources: [Android core settings and Lab registry](../../android/app/src/main/java/anomaly/hex/android/core), [hint service configuration](../../android/app/src/main/res/xml/hint_window.xml), [optional cleanup model](../../android/scripts/cleanup-model.sh). File provisioning alone does not enable recovery, read a window or prove cleanup quality.
 
 ```ts

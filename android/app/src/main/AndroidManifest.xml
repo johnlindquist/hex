@@ -70,6 +70,10 @@
         android:permission="android.permission.BIND_JOB_SERVICE"
         android:exported="false"/>
 
+    <activity android:name=".anywhere.TypeAnywhereActivity" android:exported="false"
+        android:theme="@style/Theme.Hex.TypeAnywhere" android:excludeFromRecents="true"
+        android:taskAffinity="anomaly.hex.android.anywhere" android:windowSoftInputMode="adjustResize|stateAlwaysVisible"/>
+
     <activity android:name=".control.CopyDictationActivity" android:exported="false"
         android:theme="@android:style/Theme.Material.Dialog.Alert" android:excludeFromRecents="true"
         android:taskAffinity="anomaly.hex.android.copy" android:launchMode="singleTop"/>

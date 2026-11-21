@@ -5,4 +5,10 @@
     <item name="android:navigationBarColor">#0A0B0D</item>
     <item name="android:colorAccent">#F0F2F5</item>
   </style>
+  <style name="Theme.Hex.TypeAnywhere" parent="Theme.Hex">
+    <item name="android:windowIsTranslucent">true</item>
+    <item name="android:windowBackground">@android:color/transparent</item>
+    <item name="android:backgroundDimAmount">0.48</item>
+    <item name="android:backgroundDimEnabled">true</item>
+  </style>
 </resources>

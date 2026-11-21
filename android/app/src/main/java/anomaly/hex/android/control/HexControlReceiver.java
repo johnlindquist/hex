@@ -14,7 +14,7 @@ import org.json.*;
  */
 public final class HexControlReceiver extends BroadcastReceiver {
   private static final String OPS = "describe,status,start,stop,cancel,settings,labs,vocabulary,"
-                                    + "history,drafts,moveMic,reviewCleanup,closeCleanup";
+                                    + "history,drafts,moveMic,reviewCleanup,closeCleanup,type_anywhere";
   @Override
   public void onReceive(Context c, Intent i) {
     if (!isOrderedBroadcast())
@@ -41,6 +41,11 @@ public final class HexControlReceiver extends BroadcastReceiver {
                     "start: target; stop/cancel: target and session; settings/labs writes: "
                     + "expectedRevision; moveMic: expected position rev; "
                     + "reviewCleanup/closeCleanup: passage");
+            break;
+          case "type_anywhere":
+            if (!labs.isEnabled(LabId.TYPE_ANYWHERE)) result="lab_disabled";
+            else if (b!=null) b.launchTypeAnywhere();
+            else c.startActivity(anomaly.hex.android.anywhere.TypeAnywhereActivity.intent(c,0,"Screen unavailable — type your question"));
             break;
           case "status":
             if (b != null && !locked)

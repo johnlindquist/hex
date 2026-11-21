@@ -2,6 +2,6 @@
   <string name="app_name">Hex</string>
   <string name="service_dictation_label">Hex</string>
   <string name="service_words_on_screen_label">Hex words on screen</string>
-  <string name="service_dictation_description">Shows a floating Hex dictation control beside text fields and inserts your words through the focused input connection. This service cannot take screenshots or read the window tree.</string>
+  <string name="service_dictation_description">Shows a floating Hex dictation control beside text fields and inserts your words through the focused input connection. With Type anywhere enabled, tapping the accessibility button captures the display for your question. Hex does not read the window tree.</string>
   <string name="service_words_on_screen_description">Optional Words on screen lab for Hex. Only when you tap Read this window during review, Hex checks the focused editor and runs local OCR on one image of that window. You choose which words to pass to cleanup. No images are saved and nothing leaves your device.</string>
 </resources>

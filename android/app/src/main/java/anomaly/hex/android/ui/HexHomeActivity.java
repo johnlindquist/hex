@@ -1013,6 +1013,23 @@ public final class HexHomeActivity extends Activity {
       r.addView(smallButton(this, "Copy", () -> copy(e.finalText)));
     }
   }
+  private void configureAnywhereKey() {
+    SharedPreferences prefs = getSharedPreferences("hex_settings", MODE_PRIVATE);
+    EditText key = new EditText(this);
+    key.setSingleLine();
+    key.setHint("New API key");
+    key.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+    AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Use Gemini for Type anywhere?")
+        .setMessage("Asking a question sends the captured screen, its text and your question to Google. Remove the key to use on-device answers only.")
+        .setView(key).setNegativeButton("Cancel", null)
+        .setNeutralButton("Remove key", (d,n) -> prefs.edit().remove("type_anywhere_api_key").apply())
+        .setPositiveButton("Save key", (d,n) -> {
+          String value = key.getText().toString().trim();
+          if (!value.isEmpty()) prefs.edit().putString("type_anywhere_api_key", value).apply();
+        }).create();
+    dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    dialog.show();
+  }
   private void labs() {
     title("Labs", "Optional features. Each starts off.");
     String last = "";
@@ -1044,6 +1061,10 @@ public final class HexHomeActivity extends Activity {
         }
       });
 
+      if (lab == LabId.TYPE_ANYWHERE && labs.isEnabled(lab)) {
+        act("Configure accessibility button", false, this::accessibility);
+        act("Gemini API key", false, this::configureAnywhereKey);
+      }
       if (lab == LabId.WORDS_ON_SCREEN && labs.isEnabled(lab))
         act("Configure window access", false, this::accessibility);
       if (lab == LabId.RECOVERY_DRAFTS && labs.isEnabled(lab))
