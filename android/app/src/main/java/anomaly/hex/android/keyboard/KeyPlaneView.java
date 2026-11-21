@@ -21,6 +21,9 @@ public final class KeyPlaneView extends View {
         void onSpace();
         void onReturn();
         void onCursorMove(int delta);
+        void onSelectionStart();
+        void onSelectionExtend(int delta);
+        void onSelectionEnd();
         void onSwitchKeyboard();
     }
     private final Input host;
@@ -39,7 +42,7 @@ public final class KeyPlaneView extends View {
     private int pointer = -1, heldShiftPointer = -1, selection;
     private float origin, cursor, lastX, pickerLeft, cell;
     private String[] variants;
-    private boolean dragging, searching, popups = true, haptics = true, emoji;
+    private boolean dragging, selecting, searching, popups = true, haptics = true, emoji;
 
     KeyPlaneView(Context c, Input host, Runnable openEmoji) {
         super(c); this.host = host; this.openEmoji = openEmoji;
@@ -130,6 +133,8 @@ public final class KeyPlaneView extends View {
                 fill = active ? KEY_PRESSED : KEY_FILL;
             }
             box(c,k.left(),k.top(),k.right(),k.bottom(),radius,fill);
+            if(selecting && k.kind()==KeyKind.SPACE)
+                text(c,"SELECT",(k.left()+k.right())/2,(k.top()+k.bottom())/2,12,k.right()-k.left()-8,RETURN_PILL_FILL);
             if(dragging) continue;
             String s = face(k);
             boolean lower=k.kind()==KeyKind.CHAR && Character.isLowerCase(s.codePointAt(0));
@@ -226,6 +231,7 @@ public final class KeyPlaneView extends View {
     private void reset() {
         removeCallbacks(repeat); removeCallbacks(accent);
         if(heldShiftPointer!=-1 || (down!=null && down.kind()==KeyKind.SHIFT)) shift.onShiftUp();
+        if(selecting) { selecting=false; host.onSelectionEnd(); }
         heldShiftPointer=-1;
         down=null; pointer=-1; variants=null; dragging=false; invalidate();
     }
@@ -239,6 +245,7 @@ public final class KeyPlaneView extends View {
             int i=e.getActionIndex();
             if(a==MotionEvent.ACTION_DOWN) reset();
             else {
+                if(dragging) return true;
                 if(down!=null && down.kind()==KeyKind.SHIFT) heldShiftPointer=pointer;
                 else if(down!=null && down.kind()==KeyKind.CHAR) commit();
                 removeCallbacks(repeat); removeCallbacks(accent); variants=null; dragging=false;
@@ -269,8 +276,13 @@ public final class KeyPlaneView extends View {
             }
         }
         else if(down.kind()==KeyKind.SPACE && (dragging || Math.abs(x-origin)>=10)) {
-            dragging=true; int delta=(int)((x-cursor)/7.5f);
-            if(delta!=0) { cursor+=delta*7.5f; host.onCursorMove(delta); }
+            if(!dragging) {
+                dragging=true;
+                selecting=heldShiftPointer!=-1 || shift.state()!=ShiftStateMachine.State.OFF;
+                if(selecting) host.onSelectionStart();
+            }
+            int delta=(int)((x-cursor)/7.5f);
+            if(delta!=0) { cursor+=delta*7.5f; if(selecting) host.onSelectionExtend(delta); else host.onCursorMove(delta); }
         } else if(a==MotionEvent.ACTION_MOVE && !down.hitTest(x,y)) {
             if(down.kind()==KeyKind.CHAR) {
                 Key under=layout.hitTest(x,y);

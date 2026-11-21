@@ -37,13 +37,15 @@ public final class HexInputMethodService extends InputMethodService implements F
   private boolean privateField, words, emojiEnabled;
   private int action;
   private long lastSpace, generation;
-  private String undoText, state = "idle";
-  private int undoEnd;
+  private String state = "idle";
+  private DictationUndo undo;
+  private final SelectionTrackpad trackpad = new SelectionTrackpad();
+  private int trackpadOffset;
   private SpeechSession session;
   private InputConnection speechTarget;
   private LivePunctuationSession live;
   private final Handler main = new Handler(Looper.getMainLooper());
-  private final Runnable expireUndo = () -> setUndo(null, -1);
+  private final Runnable expireUndo = () -> setUndo(null);
   private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{M}\\p{N}_'’]+\\z");
 
   @Override public void onCreate() {
@@ -133,7 +135,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     barView.setMeta(hexSettings.style(), id, SpeechLanguage.AUTO.equals(id) ? "Auto" : languageLabel(id));
     barView.setReturnAction(!actionLabel().isEmpty());
   }
-  private void resetEditor() { if (barView != null) barView.resetGesture(); onCancelDictation(); setUndo(null, -1); editor = null; lastSpace = 0; }
+  private void resetEditor() { trackpad.end(); if (barView != null) barView.resetGesture(); onCancelDictation(); setUndo(null); editor = null; lastSpace = 0; }
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
   @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); super.onWindowHidden(); }
@@ -161,13 +163,13 @@ public final class HexInputMethodService extends InputMethodService implements F
   @Override public void onUpdateSelection(int a,int b,int x,int y,int cs,int ce) {
     super.onUpdateSelection(a,b,x,y,cs,ce); if (x != a || y != b) refresh();
   }
-  private void setUndo(String text, int end) {
-    main.removeCallbacks(expireUndo); undoText = text; undoEnd = end;
-    if (fullView != null) fullView.setUndoVisible(text != null);
-    if (barView != null) barView.setUndoVisible(text != null);
-    if (text != null) main.postDelayed(expireUndo, 12000);
+  private void setUndo(DictationUndo value) {
+    main.removeCallbacks(expireUndo); undo = value;
+    if (fullView != null) fullView.setUndoVisible(value != null);
+    if (barView != null) barView.setUndoVisible(value != null);
+    if (value != null) main.postDelayed(expireUndo, 12000);
   }
-  private void editing() { lastSpace = 0; autocorrect.clearUndo(); setUndo(null, -1); }
+  private void editing() { lastSpace = 0; autocorrect.clearUndo(); setUndo(null); }
   private void replace(int n, String s) {
     InputConnection c = ic(); if (c == null) return;
     c.beginBatchEdit(); try { if (n == 0 || c.deleteSurroundingText(n, 0)) c.commitText(s, 1); }
@@ -184,7 +186,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     }
   }
   public void onSpace() {
-    if (ic() == null) return; setUndo(null,-1);
+    if (ic() == null) return; setUndo(null);
     long now = SystemClock.uptimeMillis(); String s = words ? before(256) : "";
     if (lastSpace != 0 && now - lastSpace < 350 && s.endsWith(" ")) { editing(); replace(1, ". "); return; }
     lastSpace = now;
@@ -240,6 +242,18 @@ public final class HexInputMethodService extends InputMethodService implements F
     ExtractedText t = c.getExtractedText(new ExtractedTextRequest(), 0); if (t == null || t.text == null) return;
     int p = t.startOffset + Math.max(0, Math.min(t.text.length(), t.selectionEnd + delta)); c.setSelection(p,p); refresh();
   }
+  public void onSelectionStart() {
+    trackpad.end(); InputConnection c = ic(); if (c == null) return; editing();
+    ExtractedText t = c.getExtractedText(new ExtractedTextRequest(), 0);
+    if (t == null || t.text == null || t.startOffset < 0 || t.selectionStart < 0 || t.selectionEnd < 0) return;
+    trackpadOffset = t.startOffset;
+    trackpad.begin(t.selectionStart, t.selectionEnd, t.text.length());
+  }
+  public void onSelectionExtend(int delta) {
+    var range = trackpad.move(delta); InputConnection c = ic();
+    if (range != null && (c == null || !c.setSelection(trackpadOffset + range.anchor(), trackpadOffset + range.active()))) trackpad.end();
+  }
+  public void onSelectionEnd() { trackpad.end(); }
   public void onReturn() {
     if (ic() == null) return;
     editing(); String label = actionLabel();
@@ -262,14 +276,15 @@ public final class HexInputMethodService extends InputMethodService implements F
     if (container != null && kbSettings.haptics()) container.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
   }
   public void onUndo() { onUndoDictation(); }
-  private boolean at(InputConnection c, int end, String suffix) {
-    SurroundingText s = c.getSurroundingText(suffix.length(),0,0);
+  private boolean at(InputConnection c, DictationUndo value) {
+    SurroundingText s = c.getSurroundingText(value.inserted().length(),0,0);
     return s != null && s.getOffset() >= 0 && s.getSelectionStart()==s.getSelectionEnd()
-        && s.getOffset()+s.getSelectionStart()==end && s.getText().subSequence(0,s.getSelectionStart()).toString().endsWith(suffix);
+        && value.matches(s.getOffset()+s.getSelectionStart(), s.getText().subSequence(0,s.getSelectionStart()));
   }
   public void onUndoDictation() {
-    InputConnection c = ic(); if (undoText != null && c != null && at(c,undoEnd,undoText)) c.deleteSurroundingText(undoText.length(),0);
-    setUndo(null,-1); refresh();
+    InputConnection c = ic(); DictationUndo value = undo;
+    if (value != null && c != null && at(c,value)) value.restore(c);
+    setUndo(null); refresh();
   }
   private void drawState(String value,int[] levels) {
     state = value; if (fullView != null) fullView.setDictationState(value,levels); if (barView != null) barView.setDictationState(value,levels);
@@ -291,7 +306,7 @@ public final class HexInputMethodService extends InputMethodService implements F
       if ((edit.trim()>0 && !c.deleteSurroundingText(edit.trim(),0)) || !c.commitText(edit.text(),1)) {
         onCancelDictation(); notice("Editor could not insert punctuation"); return;
       }
-      live.committed(edit,true); setUndo(null,-1); onKeyFeedback();
+      live.committed(edit,true); setUndo(null); onKeyFeedback();
     } finally { c.endBatchEdit(); }
     refresh();
   }
@@ -309,6 +324,11 @@ public final class HexInputMethodService extends InputMethodService implements F
     if (!Engine.get(this).isAvailable()) { notice("Install model in Hex", true); return; }
     SurroundingText anchor = target.getSurroundingText(0,0,0);
     if (anchor == null || anchor.getOffset() < 0) { notice("This editor cannot confirm the dictation target"); return; }
+    CharSequence selected = target.getSelectedText(0);
+    String replacedSelection = selected == null || selected.length() == 0 ? null : selected.toString();
+    if (Math.abs(anchor.getSelectionEnd() - anchor.getSelectionStart()) != (replacedSelection == null ? 0 : replacedSelection.length())) {
+      notice("This editor cannot confirm the dictation target"); return;
+    }
     editing(); long id = ++generation;
     TranscriptStyle style = hexSettings.style(); String lang = SpeechLanguage.resolveLocale(speechLang.selectedId(),Locale.getDefault()).toLanguageTag();
     var fixStore = new DictationFixStore(this); Map<String,String> fixes = fixStore.isEnabled() ? fixStore.activeFixes() : Map.of();
@@ -316,6 +336,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     // Format each delivered phrase against its verified live cursor, not the cursor at mic start.
     speechTarget = target; live = new LivePunctuationSession(anchor.getOffset()+anchor.getSelectionStart(),anchor.getOffset()+anchor.getSelectionEnd());
     session = new SpeechSession(this, Engine.get(this), () -> new Microphone(this,hexSettings.preferBuiltInMic()), raw -> raw, new SpeechSession.Sink() {
+      DictationUndo replacement;
       void post(Runnable r) { main.post(() -> { if (generation == id && ic() == target) r.run(); }); }
       public void onMeter(int[] levels) { post(() -> { if (state.equals("listening") || state.equals("recording")) drawState(state,levels); }); }
       public void onCheckpoint(byte[] pcm) { }
@@ -326,13 +347,18 @@ public final class HexInputMethodService extends InputMethodService implements F
       }); }
       public void onPhraseReady(String raw,String ignored,long ms) { post(() -> {
         if (!verifiedCursor(target)) return;
+        if (replacedSelection != null && (replacement == null
+            ? (live.start() != live.end() && !replacedSelection.equals(java.util.Objects.toString(target.getSelectedText(0), null)))
+            : !at(target, replacement))) {
+          onCancelDictation(); notice("Dictation stopped: text changed"); return;
+        }
         var edit = live.phrase(TranscriptFormatter.applyPipeline(raw,style,vocab,spoken,before(128),fixes,lang));
         String text = edit.text();
         if (text.isBlank() || !target.commitText(text,1)) return;
         live.committed(edit,false); int end=live.end();
-        SurroundingText s = target.getSurroundingText(text.length(),0,0);
-        if (s != null && s.getOffset() >= 0 && s.getOffset()+s.getSelectionStart()==end && s.getSelectionStart()==s.getSelectionEnd() && s.getText().subSequence(0,s.getSelectionStart()).toString().endsWith(text))
-          setUndo(text,end);
+        DictationUndo value = replacement == null ? new DictationUndo(text,end,replacedSelection) : replacement.append(text);
+        if (replacedSelection != null) replacement = value;
+        setUndo(at(target,value) ? value : null);
         if ((editor.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING)==0) history.record(raw,text,style,ms,hexSettings.historyRetention());
         refresh();
       }); }

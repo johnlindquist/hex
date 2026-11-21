@@ -14,6 +14,9 @@ public final class FullKeyboardView extends FrameLayout {
         void onSpace();
         void onReturn();
         void onCursorMove(int delta);
+        void onSelectionStart();
+        void onSelectionExtend(int delta);
+        void onSelectionEnd();
         void onSuggestionPick(String word);
         void onEmojiPick(String emoji);
         void onUndoDictation();
@@ -96,6 +99,9 @@ public final class FullKeyboardView extends FrameLayout {
         public void onDeleteWord() { if(emojiOpen) panel.eraseWord(); else host.onDeleteWord(); }
         public void onSpace() { if(emojiOpen) panel.append(" "); else host.onSpace(); }
         public void onReturn() { if(emojiOpen) toggleSearch(); else host.onReturn(); }
+        public void onSelectionStart() { if(!emojiOpen) host.onSelectionStart(); }
+        public void onSelectionExtend(int d) { if(!emojiOpen) host.onSelectionExtend(d); }
+        public void onSelectionEnd() { host.onSelectionEnd(); }
         public void onCursorMove(int d) { if(!emojiOpen) host.onCursorMove(d); }
         public void onSwitchKeyboard() { host.onSwitchKeyboard(); }
     }

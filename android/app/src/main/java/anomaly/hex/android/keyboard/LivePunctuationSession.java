@@ -10,6 +10,7 @@ final class LivePunctuationSession {
 
     LivePunctuationSession(int start,int end) { this.start=start; this.end=end; }
     boolean matches(int a,int b) { return start==a && end==b; }
+    int start() { return start; }
     int end() { return end; }
     Edit tap(String mark,String before) {
         boolean line="\n".equals(mark)||"\n\n".equals(mark);
