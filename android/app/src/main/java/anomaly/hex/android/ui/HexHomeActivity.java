@@ -958,6 +958,10 @@ public final class HexHomeActivity extends Activity {
       radioRow(
           r.label(), null, r == settings.historyRetention(), () -> settings.setHistoryRetention(r));
     history.pruneExpired(settings.historyRetention());
+    int recovered = anomaly.hex.android.speech.RecordingStore.recoverInterrupted(this, history, settings.style());
+    if (recovered > 0) {
+      Toast.makeText(this, "Recovered " + recovered + " interrupted recording" + (recovered > 1 ? "s" : ""), Toast.LENGTH_SHORT).show();
+    }
     card("Recent dictations");
     EditText search = input(this, "Search dictations…");
     search.setSingleLine();

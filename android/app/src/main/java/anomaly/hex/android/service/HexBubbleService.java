@@ -122,7 +122,12 @@ public final class HexBubbleService extends AccessibilityService {
   private final class Take {
     final String id = UUID.randomUUID().toString(), owner = target;
     final TranscriptStyle style = settings.style();
+    final StringBuilder allRaw = new StringBuilder();
+    final StringBuilder allFinal = new StringBuilder();
+    long totalMs;
     SpeechSession session;
+    RecordingStore.Writer recorder;
+    PowerManager.WakeLock wakeLock;
     volatile String draft;
     boolean finished;
     int a, b;
@@ -520,6 +525,17 @@ public final class HexBubbleService extends AccessibilityService {
       }
     }
     Drafts store = drafts;
+    if (settings.historyRetention() != HistoryRetention.OFF) {
+      try { t.recorder = new RecordingStore.Writer(this); } catch (java.io.IOException ignored) {}
+    }
+    try {
+      var pm = getSystemService(PowerManager.class);
+      if (pm != null) {
+        t.wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Hex:BubbleDictation");
+        t.wakeLock.setReferenceCounted(false);
+        t.wakeLock.acquire(30L * 60L * 1000L);
+      }
+    } catch (RuntimeException ignored) {}
     t.session = new SpeechSession(this, Engine.get(this), source,
         raw
         -> TranscriptFormatter.applyPipeline(raw, t.style, vocab, spoken, before, fixes, locale),
@@ -568,6 +584,7 @@ public final class HexBubbleService extends AccessibilityService {
           }
           public void onCheckpoint(byte[] pcm) {
             synchronized (t) {
+              if (t.recorder != null) t.recorder.appendPcm(pcm);
               if (t.draft != null && labs.isEnabled(LabId.RECOVERY_DRAFTS))
                 store.appendChunk(t.draft, pcm);
             }
@@ -601,6 +618,30 @@ public final class HexBubbleService extends AccessibilityService {
     render();
     return "ok";
   }
+  private void finishTakeAudio(Take t, boolean keep, boolean interrupted) {
+    if (t.wakeLock != null) {
+      try { if (t.wakeLock.isHeld()) t.wakeLock.release(); } catch (RuntimeException ignored) {}
+      t.wakeLock = null;
+    }
+    String wavPath = null;
+    long recMs = t.totalMs;
+    synchronized (t) {
+      if (t.recorder != null) {
+        recMs = Math.max(recMs, t.recorder.durationMs());
+        wavPath = t.recorder.finish(this, keep && settings.historyRetention() != HistoryRetention.OFF);
+        t.recorder = null;
+      }
+    }
+    if (keep && settings.historyRetention() != HistoryRetention.OFF
+        && (t.allFinal.length() > 0 || (wavPath != null && recMs >= 1000))) {
+      String finalStr = t.allFinal.length() > 0
+          ? (interrupted ? t.allFinal.toString().trim() + " [interrupted]" : t.allFinal.toString().trim())
+          : "(Interrupted recording — tap Re-transcribe)";
+      history.record(t.allRaw.toString().trim(), finalStr, t.style, recMs, settings.historyRetention(), wavPath);
+    } else if (wavPath != null) {
+      RecordingStore.deleteFile(wavPath);
+    }
+  }
   public void cancel(String why) {
     Take t = take;
     if (t == null)
@@ -610,7 +651,9 @@ public final class HexBubbleService extends AccessibilityService {
     pending.clear();
     confirming = false;
     t.session.cancel();
-    if ("cancelled".equals(why))
+    boolean explicit = "cancelled".equals(why);
+    finishTakeAudio(t, !explicit, !explicit);
+    if (explicit)
       deleteDraft(t);
     outcome = why;
     state = "idle";
@@ -630,6 +673,7 @@ public final class HexBubbleService extends AccessibilityService {
       confirming = true;
       pending.remove().run();
     } else if (t.finished) {
+      finishTakeAudio(t, true, false);
       deleteDraft(t);
       take = null;
       main.postDelayed(unloadIdle, 120_000);
@@ -708,7 +752,11 @@ public final class HexBubbleService extends AccessibilityService {
           }
         }
       }
-      history.record(raw, sent.trim(), t.style, ms, settings.historyRetention());
+      if (t.allRaw.length() > 0) t.allRaw.append(' ');
+      t.allRaw.append(raw.trim());
+      if (t.allFinal.length() > 0) t.allFinal.append(' ');
+      t.allFinal.append(sent.trim());
+      t.totalMs += ms;
       if (labs.isEnabled(LabId.GEMMA_CLEANUP)) {
         if (cleanup == null)
           cleanup = new Cleanup(this);

@@ -135,7 +135,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     barView.setMeta(hexSettings.style(), id, SpeechLanguage.AUTO.equals(id) ? "Auto" : languageLabel(id));
     barView.setReturnAction(!actionLabel().isEmpty());
   }
-  private void resetEditor() { trackpad.end(); if (barView != null) barView.resetGesture(); onCancelDictation(); setUndo(null); editor = null; lastSpace = 0; }
+  private void resetEditor() { trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
   @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); super.onWindowHidden(); }
@@ -294,7 +294,7 @@ public final class HexInputMethodService extends InputMethodService implements F
   private boolean verifiedCursor(InputConnection target) {
     SurroundingText s = target.getSurroundingText(0,0,0);
     if (s != null && s.getOffset()>=0 && live.matches(s.getOffset()+s.getSelectionStart(),s.getOffset()+s.getSelectionEnd())) return true;
-    onCancelDictation(); notice("Dictation stopped: cursor moved"); return false;
+    interruptDictation("cursor_moved"); notice("Dictation interrupted — audio saved to History"); return false;
   }
   private static String drumName(String mark) {
     return switch (mark) {
@@ -313,7 +313,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     c.beginBatchEdit();
     try {
       if ((edit.trim() > 0 && !c.deleteSurroundingText(edit.trim(), 0)) || !c.commitText(edit.text(), 1)) {
-        onCancelDictation(); notice("Editor could not insert punctuation"); return;
+        interruptDictation("editor_failed"); notice("Editor closed — audio saved to History"); return;
       }
       live.committed(edit, true); setUndo(null);
     } finally { c.endBatchEdit(); }
@@ -345,7 +345,19 @@ public final class HexInputMethodService extends InputMethodService implements F
       wakeLock = null;
     }
   }
-  public void onCancelDictation() { generation++; live=null; speechTarget=null; releaseWakeLock(); if (session != null) session.cancel(); session = null; drawState(idleState(),null); }
+  private volatile boolean explicitCancel;
+  private void interruptDictation(String reason) {
+    if (session == null) return;
+    explicitCancel = false;
+    generation++; live=null; speechTarget=null; releaseWakeLock();
+    session.cancel(); session = null; drawState(idleState(),null);
+  }
+  public void onCancelDictation() {
+    explicitCancel = true;
+    generation++; live=null; speechTarget=null; releaseWakeLock();
+    if (session != null) session.cancel();
+    session = null; drawState(idleState(),null);
+  }
   public void onStopDictation() { if (session != null) { session.finish(); drawState("transcribing",null); } }
   private void notice(String message) { notice(message, false); }
   private void notice(String message, boolean openApp) {
@@ -364,7 +376,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     if (Math.abs(anchor.getSelectionEnd() - anchor.getSelectionStart()) != (replacedSelection == null ? 0 : replacedSelection.length())) {
       notice("This editor cannot confirm the dictation target"); return;
     }
-    editing(); long id = ++generation;
+    editing(); long id = ++generation; explicitCancel = false;
     TranscriptStyle style = hexSettings.style(); String lang = SpeechLanguage.resolveLocale(speechLang.selectedId(),Locale.getDefault()).toLanguageTag();
     var fixStore = new DictationFixStore(this); Map<String,String> fixes = fixStore.isEnabled() ? fixStore.activeFixes() : Map.of();
     boolean spoken = labs.isEnabled(LabId.SPOKEN_CLEANUP); List<String> vocab = vocabulary;
@@ -392,13 +404,22 @@ public final class HexInputMethodService extends InputMethodService implements F
       }); }
       public void onStateChanged(String s) {
         if (s.equals("finished") || s.equals("cancelled") || s.equals("error")) {
-          boolean keep = !s.equals("cancelled") && allowHistory && hexSettings.historyRetention() != HistoryRetention.OFF;
+          boolean interrupted = (s.equals("cancelled") && !explicitCancel) || s.equals("error");
+          boolean keep = (!s.equals("cancelled") || interrupted)
+              && allowHistory && hexSettings.historyRetention() != HistoryRetention.OFF;
           String wavPath = recorder != null ? recorder.finish(HexInputMethodService.this, keep) : null;
           long recMs = recorder != null ? Math.max(totalMs, recorder.durationMs()) : totalMs;
           main.post(() -> {
-            if (keep && (allFinal.length() > 0 || wavPath != null)) {
+            if (keep && (allFinal.length() > 0 || (wavPath != null && recMs >= 1000))) {
               String rawStr = allRaw.toString().trim();
-              String finalStr = allFinal.length() > 0 ? allFinal.toString().trim() : "(Audio saved — tap Re-transcribe)";
+              String finalStr;
+              if (allFinal.length() > 0) {
+                finalStr = interrupted
+                    ? allFinal.toString().trim() + " [interrupted]"
+                    : allFinal.toString().trim();
+              } else {
+                finalStr = "(Interrupted recording — tap Re-transcribe)";
+              }
               history.record(rawStr, finalStr, style, recMs, hexSettings.historyRetention(), wavPath);
             } else if (wavPath != null) {
               anomaly.hex.android.speech.RecordingStore.deleteFile(wavPath);
@@ -416,7 +437,7 @@ public final class HexInputMethodService extends InputMethodService implements F
         if (replacedSelection != null && (replacement == null
             ? (live.start() != live.end() && !replacedSelection.equals(java.util.Objects.toString(target.getSelectedText(0), null)))
             : !at(target, replacement))) {
-          onCancelDictation(); notice("Dictation stopped: text changed"); return;
+          interruptDictation("text_changed"); notice("Dictation interrupted — audio saved to History"); return;
         }
         var edit = live.phrase(TranscriptFormatter.applyPipeline(raw,style,vocab,spoken,before(128),fixes,lang));
         String text = edit.text();
