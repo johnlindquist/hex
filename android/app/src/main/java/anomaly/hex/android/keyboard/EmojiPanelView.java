@@ -1,6 +1,9 @@
 package anomaly.hex.android.keyboard;
 
 import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Rect;
 import android.view.*;
 import android.widget.*;
 import java.util.*;
@@ -18,16 +21,16 @@ public final class EmojiPanelView extends LinearLayout {
     private final StringBuilder query=new StringBuilder();
     private String contextEmoji;
     private boolean searching;
-    private int viewport, rows;
+    private int viewport, rows, catalogSize;
     private final List<View> headers=new ArrayList<>();
     private int active;
     private android.graphics.drawable.GradientDrawable cap(int color) {
         var bg=pill(color); bg.setCornerRadius(dp(getContext(),8.5f)); return bg;
     }
-    private final android.graphics.Paint indicator=new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+    private final Paint indicator=new Paint(Paint.ANTI_ALIAS_FLAG);
     private View icon(int index,String name) {
         View b=new View(getContext()) {
-            protected void onDraw(android.graphics.Canvas canvas) {
+            protected void onDraw(Canvas canvas) {
                 float x=getWidth()/2f,y=getHeight()/2f,s=dp(getContext(),20);
                 if(index==-1) KeyIcons.drawDelete(canvas,x,y,s,TEXT);
                 else if(index==-2) KeyIcons.drawSearch(canvas,x,y,s,TEXT_MUTED);
@@ -37,7 +40,7 @@ public final class EmojiPanelView extends LinearLayout {
                     indicator.setColor(CHIP_FILL);
                     KeyIcons.drawCancel(canvas,x,y,dp(getContext(),11),TEXT);
                 }
-                else { if(index==active){android.graphics.Paint paint=indicator; canvas.drawCircle(x,y,dp(getContext(),15),paint);}
+                else { if(index==active){Paint paint=indicator; canvas.drawCircle(x,y,dp(getContext(),15),paint);}
                     KeyIcons.drawEmojiCategory(canvas,index,x,y,s,index==active?TEXT:TEXT_MUTED); }
             }
         }; b.setContentDescription(name); return b;
@@ -105,7 +108,8 @@ public final class EmojiPanelView extends LinearLayout {
     }
     @Override protected void onMeasure(int w,int h) {
         int count=getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE?3:4;
-        if(viewport!=MeasureSpec.getSize(w)||rows!=count){viewport=MeasureSpec.getSize(w);rows=count;if(!searching) populate();}
+        int curSize=EmojiCatalog.size();
+        if(viewport!=MeasureSpec.getSize(w)||rows!=count||catalogSize!=curSize){viewport=MeasureSpec.getSize(w);rows=count;catalogSize=curSize;if(!searching) populate();}
         super.onMeasure(w,h);
     }
     private void populate() {
@@ -117,18 +121,20 @@ public final class EmojiPanelView extends LinearLayout {
         LinkedHashSet<String> freq=new LinkedHashSet<>(recent.list());
         for(String d:DEFAULTS) { if(freq.size()>=8) break; freq.add(d); }
         all.put("Frequently used",new ArrayList<>(freq)); all.putAll(EmojiCatalog.categories());
+        int cellW=dp(c,42);
         int i=0,sectionWidth=0;
         for(var entry:all.entrySet()) {
             String name=entry.getKey(); LinearLayout section=new LinearLayout(c); section.setOrientation(VERTICAL);
             TextView header=label(c,name,12); header.setTypeface(android.graphics.Typeface.create("sans-serif-medium",0)); header.setGravity(Gravity.CENTER_VERTICAL);
             header.setPadding(dp(c,6.5f),0,0,0); header.setTextColor(TEXT_MUTED); section.addView(header,-1,dp(c,20));
-            List<String> emojis=entry.getValue(); sectionWidth=Math.max((emojis.size()+rows-1)/rows*dp(c,42),dp(c,12)+(int)header.getPaint().measureText(name));
-            groups.addView(section,sectionWidth,-1); LinearLayout grid=new LinearLayout(c); section.addView(grid,-1,-1);
+            List<String> emojis=entry.getValue();
+            int cols=(emojis.size()+rows-1)/rows;
+            sectionWidth=Math.max(cols*cellW,dp(c,12)+(int)header.getPaint().measureText(name));
+            groups.addView(section,sectionWidth,-1);
+            EmojiGridView grid=new EmojiGridView(c,emojis,rows,cellW,this::pick);
+            section.addView(grid,-1,-1);
             int index=i++; headers.add(section); View tab=icon(index,name); tabs.addView(tab,new LayoutParams(0,-1,1));
             tab.setOnClickListener(v->{scroll.scrollTo(section.getLeft(),0); highlight(index);});
-            for(int start=0;start<emojis.size();start+=rows){ LinearLayout column=new LinearLayout(c); column.setOrientation(VERTICAL); column.setWeightSum(rows); grid.addView(column,dp(c,42),-1);
-                for(int j=start;j<Math.min(start+rows,emojis.size());j++){String s=emojis.get(j); TextView key=label(c,s,rows==3?23:28);key.setIncludeFontPadding(false);
-                    column.addView(key,new LayoutParams(-1,0,1)); key.setOnClickListener(v->pick(s));}}
         }
         groups.addView(new View(c),Math.max(0,viewport-sectionWidth),1);
         highlight(active); View delete=icon(-1,"Delete"); delete.setBackground(cap(KEY_FILL));
@@ -144,5 +150,98 @@ public final class EmojiPanelView extends LinearLayout {
             }
             return true;
         });
+    }
+
+    /** High-speed Canvas emoji grid: draws only visible columns inside clipBounds (zero TextView bloat for 1,900+ emojis). */
+    private static final class EmojiGridView extends View {
+        private final List<String> emojis;
+        private final int rows, cellW;
+        private final java.util.function.Consumer<String> onPick;
+        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint pressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Rect clip = new Rect();
+        private final float touchSlop;
+        private int pressedIdx = -1;
+        private float downX, downY;
+
+        EmojiGridView(Context c, List<String> emojis, int rows, int cellW, java.util.function.Consumer<String> onPick) {
+            super(c);
+            this.emojis = emojis;
+            this.rows = rows;
+            this.cellW = cellW;
+            this.onPick = onPick;
+            this.touchSlop = ViewConfiguration.get(c).getScaledTouchSlop();
+            textPaint.setTextAlign(Paint.Align.CENTER);
+            textPaint.setTextSize(dp(c, rows == 3 ? 23 : 27));
+            pressPaint.setColor(KEY_PRESSED);
+        }
+
+        private int hitIndex(float x, float y) {
+            int h = getHeight();
+            if (h <= 0 || x < 0 || y < 0 || y >= h) return -1;
+            int col = (int) (x / cellW);
+            int row = Math.min(rows - 1, (int) (y * rows / h));
+            int idx = col * rows + row;
+            return idx >= 0 && idx < emojis.size() ? idx : -1;
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            int h = getHeight();
+            if (h <= 0 || emojis.isEmpty()) return;
+            canvas.getClipBounds(clip);
+            int cols = (emojis.size() + rows - 1) / rows;
+            int firstCol = Math.max(0, clip.left / cellW);
+            int lastCol = Math.min(cols - 1, clip.right / cellW);
+            float cellH = (float) h / rows;
+            float baselineOffset = -(textPaint.ascent() + textPaint.descent()) / 2f;
+            float pressR = Math.min(cellW, cellH) * 0.44f;
+
+            for (int col = firstCol; col <= lastCol; col++) {
+                float cx = col * cellW + cellW * 0.5f;
+                for (int row = 0; row < rows; row++) {
+                    int idx = col * rows + row;
+                    if (idx >= emojis.size()) break;
+                    float cy = row * cellH + cellH * 0.5f;
+                    if (idx == pressedIdx) {
+                        canvas.drawCircle(cx, cy, pressR, pressPaint);
+                    }
+                    canvas.drawText(emojis.get(idx), cx, cy + baselineOffset, textPaint);
+                }
+            }
+        }
+
+        @Override public boolean onTouchEvent(MotionEvent e) {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN -> {
+                    downX = e.getX(); downY = e.getY();
+                    pressedIdx = hitIndex(downX, downY);
+                    if (pressedIdx >= 0) invalidate();
+                    return true;
+                }
+                case MotionEvent.ACTION_MOVE -> {
+                    if (pressedIdx >= 0 && (Math.abs(e.getX() - downX) > touchSlop || Math.abs(e.getY() - downY) > touchSlop)) {
+                        pressedIdx = -1;
+                        invalidate();
+                    }
+                    return true;
+                }
+                case MotionEvent.ACTION_UP -> {
+                    int picked = pressedIdx;
+                    pressedIdx = -1;
+                    if (picked >= 0 && picked == hitIndex(e.getX(), e.getY())) {
+                        invalidate();
+                        onPick.accept(emojis.get(picked));
+                    } else {
+                        invalidate();
+                    }
+                    return true;
+                }
+                case MotionEvent.ACTION_CANCEL -> {
+                    if (pressedIdx >= 0) { pressedIdx = -1; invalidate(); }
+                    return true;
+                }
+                default -> { return super.onTouchEvent(e); }
+            }
+        }
     }
 }

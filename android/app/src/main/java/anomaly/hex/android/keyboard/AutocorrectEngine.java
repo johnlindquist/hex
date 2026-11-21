@@ -6,6 +6,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -35,22 +36,47 @@ public final class AutocorrectEngine {
             + "used user usually very visit wait walk want warm watch water week weekend welcome well went were what when where "
             + "whether which while white whole whose will wish with within without word words work working world worry worth would "
             + "write wrong year years yesterday your yourself").split(" "));
+    private static final Set<String> SHORTHAND_ALLOWLIST = Set.of(
+            "ok", "okay", "ty", "thx", "pls", "plz", "tmrw", "tbh", "idk", "imo", "imho",
+            "lol", "lmao", "omg", "brb", "btw", "afaik", "fyi", "nvm", "rn", "irl", "jk",
+            "np", "yw", "smh", "ikr", "ngl", "fr", "gg", "dm", "pr", "prs", "ci", "ui",
+            "ux", "ios", "macos", "api", "apis", "url", "urls", "json", "sql", "ssh", "cli",
+            "gpu", "cpu", "ram", "sdk", "hex", "wisp", "seer", "rune", "kit", "gonna",
+            "wanna", "gotta", "kinda", "sorta", "yeah", "yep", "nope", "nah", "hey", "yo"
+    );
+    private static final Map<String, String> SUGGEST_ONLY_CONTRACTIONS = Map.of(
+            "ill", "I'll",
+            "id", "I'd",
+            "were", "we're",
+            "wed", "we'd",
+            "well", "we'll",
+            "its", "it's",
+            "lets", "let's",
+            "hell", "he'll",
+            "shell", "she'll"
+    );
     private final boolean english;
     private final WordDictionary dictionary;
     private final PersonalAutocorrectStore store;
+    private final SystemUserDictionary.Snapshot userDict;
     private final boolean allowLearning;
     private final Map<String, String> fixes = new HashMap<>();
     private final LinkedHashSet<String> suppressed = new LinkedHashSet<>();
     private Correction pending;
     private String undoContext;
 
-    public AutocorrectEngine() { this(KeyboardLanguage.EN, null, null, false); }
-    public AutocorrectEngine(KeyboardLanguage language) { this(language, null, null, false); }
+    public AutocorrectEngine() { this(KeyboardLanguage.EN, null, null, false, SystemUserDictionary.Snapshot.EMPTY); }
+    public AutocorrectEngine(KeyboardLanguage language) { this(language, null, null, false, SystemUserDictionary.Snapshot.EMPTY); }
     public AutocorrectEngine(KeyboardLanguage language, WordDictionary dictionary, PersonalAutocorrectStore store, boolean allowLearning) {
+        this(language, dictionary, store, allowLearning, SystemUserDictionary.Snapshot.EMPTY);
+    }
+    public AutocorrectEngine(KeyboardLanguage language, WordDictionary dictionary, PersonalAutocorrectStore store,
+                             boolean allowLearning, SystemUserDictionary.Snapshot userDict) {
         english = language == KeyboardLanguage.EN;
         this.dictionary = dictionary;
         this.store = store;
         this.allowLearning = allowLearning;
+        this.userDict = userDict == null ? SystemUserDictionary.Snapshot.EMPTY : userDict;
         String data = switch (language) {
             case EN -> "teh:the thw:the adn:and dont:don't cant:can't wont:won't im:I'm ive:I've "
                     + "recieve:receive seperate:separate definately:definitely becuase:because widht:width "
@@ -78,18 +104,56 @@ public final class AutocorrectEngine {
         }
     }
 
+    /** Extracts the active word before cursor, returning "" if attached to @, /, ., #, _, -, :, or digits. */
+    public static String currentToken(String textBeforeCursor) {
+        if (textBeforeCursor == null || textBeforeCursor.isEmpty()) return "";
+        Matcher m = TOKEN.matcher(textBeforeCursor);
+        if (!m.find()) return "";
+        int start = m.start();
+        if (start > 0) {
+            char prev = textBeforeCursor.charAt(start - 1);
+            if (prev == '@' || prev == '/' || prev == '.' || prev == '#'
+                    || prev == '_' || prev == '-' || prev == ':' || Character.isDigit(prev)) {
+                return "";
+            }
+        }
+        String tok = m.group();
+        for (int i = 0; i < tok.length(); i++) {
+            char c = tok.charAt(i);
+            if (c == '_' || Character.isDigit(c)) return "";
+        }
+        return tok;
+    }
+
+    private boolean isKnownValidWord(String lower) {
+        if (SHORTHAND_ALLOWLIST.contains(lower)) return true;
+        if (userDict.termsLower().contains(lower)) return true;
+        if (allowLearning && store != null && store.isKept(lower)) return true;
+        return english && dictionary != null && dictionary.contains(lower);
+    }
+
     private Correction lookup(String word, List<String> spellSuggestions) {
         if (word.isEmpty()) return null;
         String lower = word.toLowerCase(Locale.ROOT);
         if (suppressed.contains(lower)) return null;
         if (allowLearning && store != null && store.isKept(lower)) return null;
+
+        // 0. Android UserDictionary explicit shortcut (e.g. "omw" -> "On my way!"), even for ALL-CAPS
+        String shortcut = userDict.shortcuts().get(lower);
+        if (shortcut != null && !word.equals(shortcut)) {
+            return new Correction(word, shortcut, shortcut);
+        }
+
+        if (SHORTHAND_ALLOWLIST.contains(lower)) return null;
+        if (userDict.termsLower().contains(lower)) return null;
+
         boolean title = !word.equals(lower);
         if (title && !word.equals(capitalize(lower))) return null;
 
-        // 1. User-learned replacement (explicitly accepted earlier)
+        // 1. User-learned replacement (promoted after 2 consistent accepts; never auto-replaces a valid word)
         if (allowLearning && store != null) {
             String learned = store.lookupLearned(lower);
-            if (learned != null && !word.equals(learned)) {
+            if (learned != null && !word.equals(learned) && !(english && dictionary != null && dictionary.contains(lower))) {
                 return new Correction(word, learned, matchCase(word, title, learned));
             }
         }
@@ -100,22 +164,38 @@ public final class AutocorrectEngine {
             return new Correction(word, fix, matchCase(word, title, fix));
         }
 
-        // 3. Full 30k English frequency dictionary + QWERTY spatial-proximity 1-edit
+        // 3. Two-letter neighbor/swap typo ("tk" -> "to", "fo" -> "of")
+        if (english && dictionary != null && lower.length() == 2 && isPlainWord(word)) {
+            String twoFix = dictionary.bestTwoLetterFix(lower);
+            if (twoFix != null) {
+                return new Correction(word, twoFix, matchCase(word, title, twoFix));
+            }
+        }
+
+        // 4. Full 30k English frequency dictionary + QWERTY spatial-proximity 1-edit + missed-space split
         if (english && dictionary != null && dictionary.size() > 0 && lower.length() >= 3 && isPlainWord(word)) {
             if (!dictionary.contains(lower)) {
                 List<WordDictionary.Candidate> edits = dictionary.bestEdits(lower, 1);
+                String split = dictionary.splitMissedSpace(lower);
                 if (!edits.isEmpty()) {
                     WordDictionary.Candidate top = edits.get(0);
+                    // Prefer a high-frequency missed-space split ("upto" -> "up to") over a rare 1-edit word ("upton").
+                    if (split != null && top.rank() > 3000) {
+                        return new Correction(word, split, matchCase(word, title, split));
+                    }
                     if (top.rank() < 31000 && (top.cost() <= 14 || lower.length() >= 5)) {
                         return new Correction(word, top.word(), matchCase(word, title, top.word()));
                     }
+                }
+                if (split != null) {
+                    return new Correction(word, split, matchCase(word, title, split));
                 }
             } else {
                 return null; // Valid known English word: never replace on space.
             }
         }
 
-        // 4. System SpellCheckerSession recommendation (e.g. 2-edit typos or non-English locales)
+        // 5. System SpellCheckerSession recommendation (e.g. 2-edit typos or non-English locales)
         if (spellSuggestions != null && !spellSuggestions.isEmpty() && lower.length() >= 3 && isPlainWord(word)) {
             String best = spellSuggestions.get(0);
             if (best != null && !best.isBlank() && !best.equalsIgnoreCase(word)
@@ -124,6 +204,11 @@ public final class AutocorrectEngine {
             }
         }
         return null;
+    }
+
+    public boolean willAutoReplace(String currentWord, List<String> spellSuggestions) {
+        if (currentWord == null || currentWord.isBlank()) return false;
+        return lookup(currentWord, spellSuggestions) != null;
     }
 
     private static String matchCase(String original, boolean title, String replacement) {
@@ -143,13 +228,14 @@ public final class AutocorrectEngine {
     public Correction correctOnSpace(String textBeforeCursor, List<String> spellSuggestions) {
         clearUndo();
         if (textBeforeCursor == null) return null;
-        Matcher token = TOKEN.matcher(textBeforeCursor);
-        if (!token.find()) return null;
-        pending = lookup(token.group(), spellSuggestions);
+        String token = currentToken(textBeforeCursor);
+        if (token.isEmpty()) return null;
+        int tokenStart = textBeforeCursor.length() - token.length();
+        pending = lookup(token, spellSuggestions);
         if (pending != null) {
             // A bounded suffix also works when the editor gives a sliding window of context.
-            int start = Math.max(0, token.start() - 32);
-            undoContext = textBeforeCursor.substring(start, token.start()) + pending.caseMatched + " ";
+            int start = Math.max(0, tokenStart - 32);
+            undoContext = textBeforeCursor.substring(start, tokenStart) + pending.caseMatched + " ";
         }
         return pending;
     }
@@ -208,14 +294,34 @@ public final class AutocorrectEngine {
         if (currentWord == null || currentWord.isBlank()) return List.of();
         List<String> result = new ArrayList<>(3);
         result.add("“" + currentWord + "”");
+        String lower = currentWord.toLowerCase(Locale.ROOT);
+        boolean title = !currentWord.equals(lower) && currentWord.equals(capitalize(lower));
         Correction fix = lookup(currentWord, spellSuggestions);
-        if (fix != null) result.add(fix.caseMatched);
+        if (fix != null) {
+            result.add(fix.caseMatched);
+        } else {
+            // Suggest-only learned fix for a real word, or suggest-only English contraction ("well" -> "we'll")
+            if (allowLearning && store != null) {
+                String learned = store.lookupLearned(lower);
+                if (learned != null && !currentWord.equals(learned)) {
+                    result.add(matchCase(currentWord, title, learned));
+                }
+            }
+            if (result.size() < 2 && english) {
+                String contraction = SUGGEST_ONLY_CONTRACTIONS.get(lower);
+                if (contraction != null) {
+                    result.add(matchCase(currentWord, title, contraction));
+                }
+            }
+        }
         for (String word : customVocab) {
             if (result.size() == 3) break;
             if (word != null && word.length() > currentWord.length() && word.regionMatches(true, 0, currentWord, 0, currentWord.length()) && !result.contains(word)) result.add(word);
         }
-        String lower = currentWord.toLowerCase(Locale.ROOT);
-        boolean title = !currentWord.equals(lower) && currentWord.equals(capitalize(lower));
+        for (String word : userDict.terms()) {
+            if (result.size() == 3) break;
+            if (word.length() > currentWord.length() && word.regionMatches(true, 0, currentWord, 0, currentWord.length()) && !result.contains(word)) result.add(word);
+        }
         // Secondary dictionary edits or prefix completions
         if (english && dictionary != null && dictionary.size() > 0 && isPlainWord(currentWord) && result.size() < 3) {
             if (!dictionary.contains(lower) && lower.length() >= 3) {

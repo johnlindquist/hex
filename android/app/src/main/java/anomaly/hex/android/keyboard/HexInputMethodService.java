@@ -30,6 +30,7 @@ public final class HexInputMethodService extends InputMethodService implements F
   private PersonalAutocorrectStore personalStore;
   private SystemSpellChecker spellChecker;
   private volatile WordDictionary englishDictionary;
+  private volatile SystemUserDictionary.Snapshot userDictionary = SystemUserDictionary.Snapshot.EMPTY;
   private SpeechLanguage speechLang;
   private List<String> vocabulary = List.of();
   private EditorInfo editor;
@@ -51,11 +52,13 @@ public final class HexInputMethodService extends InputMethodService implements F
     spellChecker = new SystemSpellChecker(this::refresh);
     new Thread(() -> {
       englishDictionary = WordDictionary.loadEnglish(this);
+      userDictionary = SystemUserDictionary.load(this);
+      EmojiCatalog.load(this);
       main.post(() -> {
         if (editor != null && autocorrect != null) {
           KeyboardLanguage lang = KeyboardLanguage.resolve(kbSettings.layoutLanguage(), Locale.getDefault());
           boolean allowLearn = !privateField && (editor.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
-          autocorrect = new AutocorrectEngine(lang, englishDictionary, personalStore, allowLearn);
+          autocorrect = new AutocorrectEngine(lang, englishDictionary, personalStore, allowLearn, userDictionary);
           refresh();
         }
       });
@@ -97,7 +100,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     emojiEnabled = labs.isEnabled(LabId.EMOJI_KEYBOARD);
     KeyboardLanguage language = KeyboardLanguage.resolve(kbSettings.layoutLanguage(), Locale.getDefault());
     boolean allowLearn = !privateField && (info.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
-    autocorrect = new AutocorrectEngine(language, englishDictionary, personalStore, allowLearn);
+    autocorrect = new AutocorrectEngine(language, englishDictionary, personalStore, allowLearn, userDictionary);
     if (words && kbSettings.autocorrect()) spellChecker.open(this, Locale.forLanguageTag(language.code()));
     else spellChecker.close();
     CustomVocabulary vocab = new CustomVocabulary(this); vocabulary = vocab.isEnabled() ? vocab.terms() : List.of();
@@ -137,7 +140,7 @@ public final class HexInputMethodService extends InputMethodService implements F
   private String before(int n) {
     InputConnection c = ic(); CharSequence s = c == null ? null : c.getTextBeforeCursor(n, 0); return s == null ? "" : s.toString();
   }
-  private static String word(String context) { Matcher m = WORD.matcher(context); return m.find() ? m.group() : ""; }
+  private static String word(String context) { return AutocorrectEngine.currentToken(context); }
   private void refresh() {
     InputConnection c = ic(); if (fullView == null || c == null) return;
     int explicitCap = editor.inputType & (InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_CAP_WORDS | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
@@ -147,9 +150,10 @@ public final class HexInputMethodService extends InputMethodService implements F
     String current = word(context);
     List<String> spellSugs = words && kbSettings.autocorrect() && spellChecker != null ? spellChecker.lookupOrQuery(current) : List.of();
     List<String> suggestions = new ArrayList<>(autocorrect.suggestions(current, vocabulary, spellSugs));
+    boolean autoReplace = words && kbSettings.autocorrect() && autocorrect.willAutoReplace(current, spellSugs);
     String emoji = emojiEnabled ? EmojiCatalog.suggestForContext(context) : null;
     if (emoji != null) { if (suggestions.size() == 3) suggestions.remove(2); suggestions.add(emoji); }
-    fullView.setSuggestions(suggestions); fullView.setEmojiContext(context);
+    fullView.setSuggestions(suggestions, autoReplace); fullView.setEmojiContext(context);
   }
   @Override public void onUpdateSelection(int a,int b,int x,int y,int cs,int ce) {
     super.onUpdateSelection(a,b,x,y,cs,ce); if (x != a || y != b) refresh();

@@ -69,7 +69,57 @@ public final class WordDictionary {
     }
 
     public boolean contains(String lower) { return ranks.containsKey(lower); }
+    public int rankOf(String lower) { Integer r = ranks.get(lower); return r == null ? -1 : r; }
     public int size() { return words.size(); }
+
+    private static final String[] COMMON_TWO_LETTER = {
+        "to", "of", "in", "it", "is", "be", "as", "at", "so", "we",
+        "he", "by", "or", "on", "do", "if", "me", "my", "up", "an",
+        "go", "no", "us", "am"
+    };
+
+    /** Fixes 2-letter non-words one transposition or adjacent key away from a common 2-letter word ("fo"->"of", "tk"->"to"). */
+    public String bestTwoLetterFix(String lower) {
+        if (lower == null || lower.length() != 2 || contains(lower)) return null;
+        char a = lower.charAt(0), b = lower.charAt(1);
+        // 1. Prefer exact transposition ("ot" -> "to", "fo" -> "of", "si" -> "is")
+        for (String w : COMMON_TWO_LETTER) {
+            if (a == w.charAt(1) && b == w.charAt(0)) return w;
+        }
+        // 2. Single adjacent-key substitution ("tk" -> "to")
+        for (String w : COMMON_TWO_LETTER) {
+            char wa = w.charAt(0), wb = w.charAt(1);
+            if ((a == wa && isAdjacentKey(b, wb)) || (b == wb && isAdjacentKey(a, wa))) return w;
+        }
+        return null;
+    }
+
+    /** Splits a missed-space compound ("upto"->"up to", "nevermind"->"never mind", "alot"->"a lot") into two common words. */
+    public String splitMissedSpace(String lower) {
+        if (lower == null || lower.length() < 4 || lower.length() > 18 || contains(lower) || ranks.isEmpty()) return null;
+        String best = null;
+        int bestScore = Integer.MAX_VALUE;
+        for (int i = 1; i < lower.length(); i++) {
+            String left = lower.substring(0, i);
+            String right = lower.substring(i);
+            int rl = splitWordRank(left);
+            int rr = splitWordRank(right);
+            if (rl < 0 || rr < 0) continue;
+            // Both halves must be high-frequency words (top 4000) so obscure splits never fire.
+            if (rl > 4000 || rr > 4000) continue;
+            int score = rl + rr;
+            if (score < bestScore) {
+                bestScore = score;
+                best = left + " " + right;
+            }
+        }
+        return best;
+    }
+
+    private int splitWordRank(String part) {
+        if (part.length() == 1) return ("a".equals(part) || "i".equals(part)) ? 10 : -1;
+        return rankOf(part);
+    }
 
     /** Returns up to `limit` best 1-edit candidates ordered by (cost, frequencyRank). */
     public List<Candidate> bestEdits(String lower, int limit) {

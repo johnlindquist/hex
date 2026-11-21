@@ -66,7 +66,8 @@ public final class FullKeyboardView extends FrameLayout {
         if("listening".equalsIgnoreCase(state)||"recording".equalsIgnoreCase(state)||"transcribing".equalsIgnoreCase(state)) closeEmoji();
         strip.state(state,meterLevels);
     }
-    public void setSuggestions(List<String> items) { strip.suggestions(items==null?List.of():items); }
+    public void setSuggestions(List<String> items) { setSuggestions(items, false); }
+    public void setSuggestions(List<String> items, boolean autoReplace) { strip.suggestions(items==null?List.of():items, autoReplace); }
     public void setUndoVisible(boolean visible) { strip.setUndo(visible); }
     public void showNotice(String message, boolean openApp) { closeEmoji(); strip.showNotice(message, openApp); }
     public void setFieldKind(KeyboardLayout.FieldKind kind,String returnLabel) { closeEmoji(); plane.field(kind,returnLabel); }

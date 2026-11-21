@@ -16,6 +16,7 @@ public final class SuggestionStripView extends FrameLayout {
     private final TextView clock, noticeText, noticeAction;
     private final Runnable clearNotice = () -> showNotice(null, false);
     private List<String> items=List.of();
+    private boolean autoReplace;
     private String emojiContext;
     private final View finish;
     private final android.os.Handler timer=new android.os.Handler(android.os.Looper.getMainLooper());
@@ -128,17 +129,15 @@ public final class SuggestionStripView extends FrameLayout {
         noticeText.setText(message); noticeAction.setVisibility(openApp?VISIBLE:GONE);
         noticeBar.setVisibility(VISIBLE); updateContent(); timer.postDelayed(clearNotice,4000);
     }
-    void suggestions(List<String> values) {
-        if(!items.equals(values)) { items=List.copyOf(values); renderSlots(); }
+    void suggestions(List<String> values, boolean willAutoReplace) {
+        if(!items.equals(values) || autoReplace!=willAutoReplace) { items=List.copyOf(values); autoReplace=willAutoReplace; renderSlots(); }
     }
     void contextEmoji(String value) { if(!java.util.Objects.equals(value,emojiContext)){emojiContext=value; renderSlots();} }
     private void renderSlots() {
         Context c=getContext(); slots.removeAllViews();
         String first=items.isEmpty()?"":items.get(0);
         boolean lone=emojiContext!=null && (items.isEmpty() || items.size()==1 && first.equals(emojiContext));
-        boolean correction=isQuoted(first) && items.size()>1 && !items.get(1).isBlank() && !items.get(1).equals(emojiContext)
-                // Vocabulary completions extend the verbatim prefix (case-insensitively).
-                && !items.get(1).regionMatches(true,0,first,1,first.length()-2);
+        boolean correction=autoReplace && isQuoted(first) && items.size()>1 && !items.get(1).isBlank() && !items.get(1).equals(emojiContext);
         String[] values=new String[3]; String[] words=new String[3];
         for(int i=0;i<3;i++) {
             values[i]=lone?(i==1?emojiContext:""):i<items.size()?items.get(i):"";
