@@ -66,8 +66,6 @@ public final class KeyPlaneView extends View {
     private String face(Key k) {
         return switch (k.kind()) {
             case CHAR -> casing(k.label());
-            case SHIFT -> shift.state()==ShiftStateMachine.State.CAPS_LOCK ? "⇪" : "⇧";
-            case DELETE -> "⌫"; case GLOBE -> "🌐"; case EMOJI -> "☺";
             case RETURN -> action.isBlank() ? "↵" : action;
             default -> k.label();
         };
@@ -76,7 +74,10 @@ public final class KeyPlaneView extends View {
         paint.setColor(fill); c.drawRoundRect(l,t,r,b,8.5f,8.5f,paint);
     }
     private void text(Canvas c,String s,float x,float y,float size,float maxWidth) {
-        paint.setColor(TEXT); paint.setTextSize(size*getResources().getDisplayMetrics().scaledDensity/density());
+        text(c,s,x,y,size,maxWidth,TEXT);
+    }
+    private void text(Canvas c,String s,float x,float y,float size,float maxWidth,int color) {
+        paint.setColor(color); paint.setTextSize(size*getResources().getDisplayMetrics().scaledDensity/density());
         float measured = paint.measureText(s);
         if (measured > maxWidth && maxWidth > 0) paint.setTextSize(paint.getTextSize()*maxWidth/measured);
         c.drawText(s,x,y-(paint.ascent()+paint.descent())/2,paint);
@@ -87,10 +88,19 @@ public final class KeyPlaneView extends View {
         for (Key k : layout.keys()) {
             boolean primary = k.kind()==KeyKind.RETURN && !action.isBlank();
             boolean active = k==down || (k.kind()==KeyKind.SHIFT && shift.isUppercase());
-            box(c,k.left(),k.top(),k.right(),k.bottom(),primary ? (active?ACTION_PRESSED:ACTION_FILL) : (active?KEY_PRESSED:KEY_FILL));
+            box(c,k.left(),k.top(),k.right(),k.bottom(),k.kind()==KeyKind.SHIFT && shift.isUppercase() ? TEXT : primary ? (active?ACTION_PRESSED:ACTION_FILL) : (active?KEY_PRESSED:KEY_FILL));
             String s = face(k);
             float size = k.kind()!=KeyKind.CHAR ? 18 : Character.isLowerCase(s.codePointAt(0)) ? 22.5f : 21;
-            text(c,s,(k.left()+k.right())/2,(k.top()+k.bottom())/2,size,k.right()-k.left()-3);
+            float x=(k.left()+k.right())/2, y=(k.top()+k.bottom())/2;
+            switch(k.kind()) {
+                case GLOBE -> KeyIcons.drawGlobe(c,x,y,20,TEXT);
+                case EMOJI -> KeyIcons.drawSmiley(c,x,y,20,TEXT);
+                case SHIFT -> KeyIcons.drawShift(c,x,y,20,shift.state(),shift.isUppercase()?BACKDROP:TEXT);
+                case DELETE -> KeyIcons.drawDelete(c,x,y,20,TEXT);
+                case RETURN -> { if(s.equals("↵")) KeyIcons.drawReturn(c,x,y,20,TEXT); else text(c,s,x,y,size,k.right()-k.left()-3); }
+                default -> { if(!(k==down && k.kind()==KeyKind.CHAR && (variants!=null || popups && !landscape())))
+                    text(c,s,x,y,size,k.right()-k.left()-3,k.kind()==KeyKind.SPACE?TEXT_MUTED:TEXT); }
+            }
         }
         if (down!=null && down.kind()==KeyKind.CHAR && (variants!=null || (popups && !landscape()))) {
             float width = getWidth()/density();
