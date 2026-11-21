@@ -49,6 +49,8 @@ public final class HexBubbleService extends AccessibilityService {
   private int words, selectionA, selectionB;
   private MicStrip strip;
   private WindowManager.LayoutParams params;
+  private AnywhereHandleView anywhereHandle;
+  private WindowManager.LayoutParams anywhereParams;
   private AlertDialog review;
   private Take take;
   private SpeechSession last;
@@ -206,15 +208,14 @@ public final class HexBubbleService extends AccessibilityService {
   public void launchTypeAnywhere() {
     if (!connected || !unlocked() || !labs.isEnabled(LabId.TYPE_ANYWHERE))
       return;
+    if (anywhereHandle != null) anywhereHandle.setVisibility(View.INVISIBLE);
     int request = ++captureRequest;
     TypeAnywhereStore.clear(this);
     try {
       takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
         public void onFailure(int code) {
           openAnywhere(request, null,
-              code == ERROR_TAKE_SCREENSHOT_SECURE_WINDOW
-                  ? "Protected screen — type your question"
-                  : "Screen unavailable — type your question");
+              code == ERROR_TAKE_SCREENSHOT_SECURE_WINDOW ? "Protected" : "No screen");
         }
         public void onSuccess(ScreenshotResult result) {
           Bitmap pixels = null;
@@ -351,12 +352,69 @@ public final class HexBubbleService extends AccessibilityService {
       main.postDelayed(this, fastImeTicks > 0 ? 100 : 500);
     }
   };
+  private void renderAnywhereHandle(WindowManager wm) {
+    boolean show = connected && unlocked() && !calling()
+        && labs.isEnabled(LabId.TYPE_ANYWHERE) && !TypeAnywhereActivity.visible;
+    if (!show) {
+      if (anywhereHandle != null) {
+        try { wm.removeView(anywhereHandle); } catch (RuntimeException ignored) {}
+        anywhereHandle = null;
+      }
+      return;
+    }
+    if (anywhereHandle != null) {
+      if (anywhereHandle.getVisibility() != View.VISIBLE) anywhereHandle.setVisibility(View.VISIBLE);
+      return;
+    }
+    var bounds = wm.getCurrentWindowMetrics().getBounds();
+    int pad = HexTheme.dp(this, 6);
+    int size = HexTheme.dp(this, 28);
+    SharedPreferences prefs = getSharedPreferences("hex_settings", MODE_PRIVATE);
+    boolean left = prefs.getBoolean("anywhere_edge_left", false);
+    float yRatio = prefs.getFloat("anywhere_y_ratio", 0.42f);
+    anywhereParams = new WindowManager.LayoutParams(size, size,
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+        PixelFormat.TRANSLUCENT);
+    anywhereParams.gravity = Gravity.TOP | Gravity.START;
+    anywhereParams.x = left ? pad : Math.max(pad, bounds.width() - size - pad);
+    anywhereParams.y = Math.max(HexTheme.dp(this, 60),
+        Math.min(bounds.height() - size - HexTheme.dp(this, 80), Math.round(bounds.height() * yRatio)));
+    anywhereParams.setTitle("Hex Type anywhere");
+    anywhereHandle = new AnywhereHandleView(this, new AnywhereHandleView.Listener() {
+      @Override public void onTap() {
+        if (anywhereHandle != null) anywhereHandle.setVisibility(View.INVISIBLE);
+        main.postDelayed(HexBubbleService.this::launchTypeAnywhere, 60);
+      }
+      @Override public void onDrag(float rawX, float rawY, boolean done) {
+        if (anywhereHandle == null || anywhereParams == null) return;
+        var b = wm.getCurrentWindowMetrics().getBounds();
+        int maxY = Math.max(HexTheme.dp(HexBubbleService.this, 60), b.height() - size - HexTheme.dp(HexBubbleService.this, 80));
+        int ny = Math.max(HexTheme.dp(HexBubbleService.this, 60), Math.min(maxY, Math.round(rawY - size * 0.5f)));
+        int nx = done
+            ? (rawX < b.width() * 0.5f ? pad : Math.max(pad, b.width() - size - pad))
+            : Math.max(pad, Math.min(b.width() - size - pad, Math.round(rawX - size * 0.5f)));
+        anywhereParams.x = nx;
+        anywhereParams.y = ny;
+        try { wm.updateViewLayout(anywhereHandle, anywhereParams); } catch (RuntimeException ignored) {}
+        if (done) {
+          prefs.edit()
+              .putBoolean("anywhere_edge_left", rawX < b.width() * 0.5f)
+              .putFloat("anywhere_y_ratio", Math.max(0.1f, Math.min(0.85f, ny / (float) Math.max(1, b.height()))))
+              .apply();
+        }
+      }
+    });
+    try { wm.addView(anywhereHandle, anywhereParams); } catch (RuntimeException ignored) { anywhereHandle = null; }
+  }
   private void render() {
     if (notification != null) {
       if (state.equals("idle")) { notification.dismiss(); notification = null; }
       else if (state.equals("listening") || state.equals("transcribing")) notification.show(state.equals("listening"));
     }
     WindowManager wm = getSystemService(WindowManager.class);
+    renderAnywhereHandle(wm);
     if (!connected || !editor || !unlocked() || calling() || KeyboardPresence.isImeVisible()
         || KeyboardPresence.isHexKeyboardDefault(this)) {
       main.removeCallbacks(imeWatch);
