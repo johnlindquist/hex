@@ -9,7 +9,7 @@ public final class MicStrip extends LinearLayout {
   private int imeBottom;
   private final HexBubbleService host;
   private final DotScopeView scope;
-  private final TextView cancel, action, count, review;
+  private final TextView cancel, action, count, review, undo;
   public MicStrip(HexBubbleService h) {
     super(h);
     host = h;
@@ -35,6 +35,7 @@ public final class MicStrip extends LinearLayout {
       if (!"ok".equals(code))
         Toast.makeText(h, code.replace('_', ' '), Toast.LENGTH_SHORT).show();
     });
+    undo = tile("↶", "Undo last dictation", h::undoLast);
     review = tile("✦", "Review cleanup", () -> h.reviewCleanup(h.passageId()));
     dragOrClick(action);
     dragOrClick(scope);
@@ -98,6 +99,7 @@ public final class MicStrip extends LinearLayout {
             : live                     ? "Finish dictation"
                                        : "Processing dictation");
     action.setEnabled(!busy || live);
+    undo.setVisibility(!busy && host.canUndoLast() ? VISIBLE : GONE);
     review.setVisibility(!busy && canReview ? VISIBLE : GONE);
   }
   public void meter(int[] targets) {

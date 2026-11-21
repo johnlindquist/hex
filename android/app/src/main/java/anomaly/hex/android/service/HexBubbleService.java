@@ -15,6 +15,7 @@ import android.view.accessibility.AccessibilityEvent;
 import android.view.inputmethod.*;
 import android.widget.*;
 import anomaly.hex.android.cleanup.*;
+import anomaly.hex.android.control.DictationNotification;
 import anomaly.hex.android.core.*;
 import anomaly.hex.android.recovery.Drafts;
 import anomaly.hex.android.speech.*;
@@ -42,6 +43,66 @@ public final class HexBubbleService extends AccessibilityService {
   private SpeechSession last;
   private final ArrayDeque<Runnable> pending = new ArrayDeque<>();
   private boolean confirming;
+  private DictationNotification notification;
+  private String undoTarget, undoText, editPrefix, editSuffix;
+  private int undoStart, undoEnd;
+  private boolean undoInvalid;
+  private DictationEditTracker tracker;
+  public void setFixListener(DictationEditTracker.FixListener listener) {
+    disarmEdits();
+    tracker = listener == null ? null : new DictationEditTracker(listener);
+  }
+  private void disarmEdits() {
+    main.removeCallbacks(expireEdits);
+    main.removeCallbacks(observeEdits);
+    editPrefix = editSuffix = null;
+    if (tracker != null) tracker.disarm();
+  }
+  private final Runnable expireEdits = this::settleEdits;
+  private void settleEdits() { observeEdits.run(); disarmEdits(); }
+  private final Runnable observeEdits = () -> {
+    if (editSuffix == null || tracker == null || isBusy()) return;
+    SurroundingText s = spanContext();
+    if (s == null) { disarmEdits(); return; }
+    String text = s.getText().toString();
+    int start = undoStart - s.getOffset();
+    // Require a complete right edge, not a cursor-relative or truncated guess.
+    if (start < editPrefix.length() || !text.regionMatches(start - editPrefix.length(), editPrefix, 0, editPrefix.length()) || text.length()-s.getSelectionEnd() >= DictationEditTracker.LIMIT || !text.endsWith(editSuffix)
+        || start > text.length()-editSuffix.length()) { disarmEdits(); return; }
+    tracker.onTextSnapshot(target, text.substring(start, text.length()-editSuffix.length()));
+  };
+  private void clearUndo() { undoTarget = undoText = null; disarmEdits(); }
+  private SurroundingText spanContext() {
+    if (undoTarget == null || !undoTarget.equals(target)) return null;
+    InputMethod.AccessibilityInputConnection ic = connection();
+    SurroundingText s = ic == null ? null : ic.getSurroundingText(DictationEditTracker.LIMIT, DictationEditTracker.LIMIT, 0);
+    return s != null && s.getOffset() >= 0 ? s : null;
+  }
+  public boolean canUndoLast() {
+    if (undoInvalid || isBusy() || review != null || applying) return false;
+    SurroundingText s = spanContext();
+    if (s == null) return false;
+    int a = undoStart-s.getOffset(), b = undoEnd-s.getOffset();
+    if (a < 0) return false;
+    if (b > s.getText().length()) {
+      if (a <= s.getText().length() && s.getText().length() - s.getSelectionEnd() < DictationEditTracker.LIMIT) undoInvalid = true;
+      return false;
+    }
+    undoInvalid = !undoText.contentEquals(s.getText().subSequence(a,b));
+    return !undoInvalid;
+  }
+  public String undoLast() {
+    if (!canUndoLast()) return "stale_passage";
+    InputMethod.AccessibilityInputConnection ic = connection();
+    if (ic == null) return "no_editor";
+    ic.setSelection(undoStart, undoEnd);
+    SurroundingText s = ic.getSurroundingText(1, 1, 0);
+    if (s == null || s.getOffset() < 0 || absolute(s,true) != undoStart || absolute(s,false) != undoEnd
+        || !undoText.contentEquals(s.getText().subSequence(s.getSelectionStart(),s.getSelectionEnd()))) return "stale_passage";
+    ic.commitText("",1,null);
+    clearUndo(); invalidateCleanup(); render();
+    return "ok";
+  }
   private final class Take {
     final String id = UUID.randomUUID().toString(), owner = target;
     final TranscriptStyle style = settings.style();
@@ -104,6 +165,10 @@ public final class HexBubbleService extends AccessibilityService {
         super.onUpdateSelection(os, oe, ns, ne, cs, ce);
         selectionA = ns;
         selectionB = ne;
+        if (!isBusy() && undoTarget != null) {
+          render();
+          if (editSuffix != null) { main.removeCallbacks(observeEdits); main.postDelayed(observeEdits, 1200); }
+        }
         if (os != ns || oe != ne) {
           if (take != null && (ns != take.a || ne != take.b))
             cancel("cursor_changed");
@@ -133,6 +198,7 @@ public final class HexBubbleService extends AccessibilityService {
     cancel("interrupted");
   }
   private void loseEditor() {
+    clearUndo();
     editor = false;
     target = "";
     pkg = "";
@@ -205,6 +271,10 @@ public final class HexBubbleService extends AccessibilityService {
     }
   };
   private void render() {
+    if (notification != null) {
+      if (state.equals("idle")) { notification.dismiss(); notification = null; }
+      else if (state.equals("listening") || state.equals("transcribing")) notification.show(state.equals("listening"));
+    }
     WindowManager wm = getSystemService(WindowManager.class);
     if (!connected || !editor || !unlocked() || calling()) {
       main.removeCallbacks(imeWatch);
@@ -366,6 +436,8 @@ public final class HexBubbleService extends AccessibilityService {
             }
           }
         });
+    clearUndo();
+    notification = new DictationNotification(this, 7101, this::stop, () -> cancel("cancelled"));
     words = 0;
     state = "starting";
     outcome = "none";
@@ -481,6 +553,24 @@ public final class HexBubbleService extends AccessibilityService {
         return;
       }
       words += sent.trim().split("\\s+").length;
+      String inserted = undoTarget != null && undoEnd == start ? undoText + sent : sent;
+      int first = undoTarget != null && undoEnd == start ? undoStart : start;
+      clearUndo();
+      if (inserted.length() <= DictationEditTracker.LIMIT) {
+        undoInvalid = false; undoTarget = target; undoStart = first; undoEnd = t.a; undoText = inserted;
+        if (tracker != null) {
+          InputMethod.AccessibilityInputConnection current = connection();
+          SurroundingText s = current == null ? null : current.getSurroundingText(inserted.length()+32, 33, 0);
+          if (s != null && s.getOffset() >= 0 && absolute(s,true) == undoEnd
+              && s.getText().length()-s.getSelectionEnd() < 33 && first-s.getOffset() >= Math.min(32, first)) {
+            int a = first-s.getOffset();
+            editPrefix = s.getText().subSequence(a-Math.min(32,first),a).toString();
+            editSuffix = s.getText().subSequence(s.getSelectionEnd(),s.getText().length()).toString();
+            tracker.arm(target, undoStart, undoEnd, inserted);
+            main.postDelayed(expireEdits, 60_000);
+          }
+        }
+      }
       history.record(raw, sent.trim(), t.style, ms, settings.historyRetention());
       if (labs.isEnabled(LabId.GEMMA_CLEANUP)) {
         if (cleanup == null)
@@ -624,6 +714,7 @@ public final class HexBubbleService extends AccessibilityService {
     InputMethod.AccessibilityInputConnection ic = connection();
     if (ic == null)
       return;
+    clearUndo();
     applying = true;
     int epoch = generation;
     ic.setSelection(p.start, p.end);
