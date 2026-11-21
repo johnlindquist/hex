@@ -162,9 +162,9 @@ public final class DotScopeView extends View {
       c.drawBitmap(basePlate, 0f, 0f, null);
     if (!live && !demo) {
       if (!drawPlate) {
-        dots.setColor(HexTheme.WARM_PEARL_BASE);
+        dots.setColor(HexTheme.WARM_PEARL);
         for (int x = 0; x < xCoords.length; x++) {
-          dots.setAlpha(Math.round((18 + 20 * sinPiU[x]) * edgeAlpha[x]));
+          dots.setAlpha(Math.round((68 + 64 * sinPiU[x]) * edgeAlpha[x]));
           int offset = Math.round(u8[x] * sinPiU[x]);
           c.drawPoint(xCoords[x], yCoords[4 + offset], dots);
           if (offset != 0)
@@ -203,7 +203,7 @@ public final class DotScopeView extends View {
       float u = (i - 1f) / (BUCKETS - 2);
       dots.setColor(
           Color.rgb(Math.round(219 + 31 * u), Math.round(212 + 33 * u), Math.round(196 + 39 * u)));
-      dots.setAlpha(250 * i / (BUCKETS - 1));
+      dots.setAlpha(!drawPlate && live ? 95 + 155 * i / (BUCKETS - 1) : 250 * i / (BUCKETS - 1));
       c.drawPoints(points[i], 0, counts[i], dots);
     }
   }

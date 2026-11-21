@@ -29,6 +29,7 @@ public final class HexHomeActivity extends Activity {
   private HexHistory history;
   private CustomVocabulary vocabulary;
   private LinearLayout root, body, group, footer, nav, header;
+  private View footerDivider;
   private ScrollView scroll;
   private String screen = "";
   private final LinearLayout[] items = new LinearLayout[4];
@@ -69,6 +70,8 @@ public final class HexHomeActivity extends Activity {
       scratch = b.getString("scratch", "");
     }
     buildShell();
+    getWindow().getInsetsController().setSystemBarsAppearance(
+        0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
   }
   @Override
   public void onSaveInstanceState(Bundle b) {
@@ -178,7 +181,9 @@ public final class HexHomeActivity extends Activity {
       if (imeVisible && !wasIme && practice != null && practice.hasFocus()) {
         scroll.post(() -> {
           if (practice != null && practice.getParent() instanceof View parent) {
-            scroll.smoothScrollTo(0, Math.max(0, parent.getTop() - d(12)));
+            int idx = body.indexOfChild(parent);
+            View anchor = idx > 0 ? body.getChildAt(idx - 1) : parent;
+            scroll.smoothScrollTo(0, Math.max(0, anchor.getTop() - d(8)));
           }
         });
       }
@@ -193,7 +198,7 @@ public final class HexHomeActivity extends Activity {
     body.setPadding(d(20), 0, d(20), d(24));
     scroll.addView(body);
     root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-    divider(root);
+    footerDivider = divider(root, 0);
     footer = new LinearLayout(this);
     footer.setGravity(Gravity.CENTER_VERTICAL);
     footer.setPadding(d(16), d(8), d(16), d(8));
@@ -236,6 +241,7 @@ public final class HexHomeActivity extends Activity {
     if (!screen.equals(next))
       scroll.scrollTo(0, 0);
     screen = next;
+    footerDivider.setVisibility(setup ? View.GONE : View.VISIBLE);
     footer.setVisibility(setup ? View.VISIBLE : View.GONE);
     updateNav();
     boolean welcome = setup && settings.onboardingPage() == 0;
@@ -281,7 +287,7 @@ public final class HexHomeActivity extends Activity {
     if (box != group || box.getChildCount() > 0)
       divider(box, 0);
   }
-  private void divider(LinearLayout box, int gap) {
+  private View divider(LinearLayout box, int gap) {
     View line = new View(this);
     line.setBackgroundColor(LINE);
     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, Math.max(1, dp(this, .5f)));
@@ -289,13 +295,17 @@ public final class HexHomeActivity extends Activity {
       lp.setMarginStart(d(16));
     lp.topMargin = d(gap);
     box.addView(line, lp);
+    return line;
   }
   private void footerAction(String label, Runnable back, Runnable forward, boolean enabled) {
     if (back != null)
       footer.addView(button(this, "Back", false, back));
     Button next = button(this, label, true, forward);
     next.setEnabled(enabled);
-    next.setAlpha(enabled ? 1f : .45f);
+    if (!enabled) {
+      next.setBackground(shape(this, LAYER_02, 999, 0));
+      next.setTextColor(FAINT);
+    }
     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
     lp.leftMargin = back == null ? 0 : d(8);
     footer.addView(next, lp);
@@ -734,17 +744,40 @@ public final class HexHomeActivity extends Activity {
     r.addView(labels, lp);
     add(labels, text(this, label, 15, TEXT), 0);
     add(labels, text(this, summary, 12, MUTED), 3);
-    Switch toggle = new Switch(this);
-    toggle.setContentDescription(label + ". " + summary);
-    toggle.setChecked(value);
-    int[][] states = {{android.R.attr.state_checked}, {}};
-    toggle.setThumbTintList(
-        new android.content.res.ColorStateList(states, new int[] {0xffffffff, 0xffffffff}));
-    toggle.setTrackTintList(
-        new android.content.res.ColorStateList(states, new int[] {SUCCESS, 0xff565b64}));
-    toggle.setOnCheckedChangeListener((v, b) -> changed.accept(b));
-    r.addView(toggle);
-    r.setOnClickListener(v -> toggle.toggle());
+    FrameLayout toggle = new FrameLayout(this);
+    View thumb = new View(this);
+    thumb.setBackground(shape(this, Color.WHITE, 999, 0));
+    FrameLayout.LayoutParams thumbParams = new FrameLayout.LayoutParams(d(27), d(27), Gravity.LEFT | Gravity.CENTER_VERTICAL);
+    thumbParams.leftMargin = d(2);
+    toggle.addView(thumb, thumbParams);
+    r.addView(toggle, d(51), d(31));
+    Runnable paint = () -> {
+      boolean on = toggle.isSelected();
+      toggle.setBackground(shape(this, on ? SUCCESS : 0xff393c43, 15.5f, 0));
+      r.setStateDescription(on ? "On" : "Off");
+    };
+    toggle.setSelected(value);
+    paint.run();
+    thumb.setTranslationX(value ? d(20) : 0);
+    r.setContentDescription(label + ". " + summary);
+    r.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+      @Override public void onInitializeAccessibilityNodeInfo(View v, android.view.accessibility.AccessibilityNodeInfo info) {
+        super.onInitializeAccessibilityNodeInfo(v, info);
+        info.setClassName("android.widget.Switch");
+        info.setCheckable(true);
+        info.setChecked(toggle.isSelected());
+      }
+    });
+    labels.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+    toggle.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+    r.setFocusable(true);
+    r.setOnClickListener(v -> {
+      boolean on = !toggle.isSelected();
+      toggle.setSelected(on);
+      paint.run();
+      thumb.animate().translationX(on ? d(20) : 0).setDuration(150).start();
+      changed.accept(on);
+    });
   }
   private void segmentedRow(
       String title, String[] options, int selected, java.util.function.IntConsumer select) {
@@ -834,7 +867,9 @@ public final class HexHomeActivity extends Activity {
                   .show());
   }
   private void vocabularyEditor() {
+    divider(group);
     LinearLayout form = row(group, 10);
+    ((LinearLayout.LayoutParams) form.getLayoutParams()).bottomMargin = d(8);
     EditText entry = input(this, "New term");
     entry.setSingleLine();
     flexible(form, entry);
@@ -905,8 +940,11 @@ public final class HexHomeActivity extends Activity {
   private void historyResults(LinearLayout results) {
     results.removeAllViews();
     var rows = history.list(query, 100);
-    if (rows.isEmpty())
-      add(results, text(this, "No matching dictations.", 15, MUTED), 8);
+    if (rows.isEmpty()) {
+      TextView empty = text(this, "No matching dictations.", 15, MUTED);
+      empty.setPadding(0, 0, 0, d(12));
+      add(results, empty, 8);
+    }
     for (var e : rows) {
       divider(results, 10);
       TextView words = text(this, e.finalText, 16, TEXT);

@@ -37,7 +37,7 @@ public final class MicStrip extends LinearLayout {
     protected void onDraw(Canvas c) {
       float x = getWidth() / 2f, y = getHeight() / 2f;
       if (icon == Icon.MARK) {
-        drawHexMark(c, x, y, dp(host, 34), TEXT, MIC);
+        drawHexMark(c, x, y, dp(host, 22), TEXT, MIC);
         return;
       }
       c.save();
@@ -96,12 +96,12 @@ public final class MicStrip extends LinearLayout {
     scope = new DotScopeView(h);
     scope.setDrawPlate(false);
     scope.setBackground(shape(h, 0x0effffff, 999, 0));
+    addView(scope, dp(h, 56), dp(h, 28));
     action = new Tile(Icon.MARK, "Start dictation", () -> {
       String code = h.isBusy() ? h.stop() : h.start();
       if (!"ok".equals(code))
         Toast.makeText(h, code.replace('_', ' '), Toast.LENGTH_SHORT).show();
     }, 34);
-    addView(scope, dp(h, 56), dp(h, 28));
     undo = new Tile(Icon.UNDO, "Undo last dictation", h::undoLast, 32);
     review = new Tile(Icon.REVIEW, "Review cleanup", () -> h.reviewCleanup(h.passageId()), 32);
     dragOrClick(action);
@@ -147,9 +147,11 @@ public final class MicStrip extends LinearLayout {
   public void update(String state, int words, boolean canReview) {
     boolean busy = !state.equals("idle"), live = state.equals("listening");
     int width = dp(host, busy ? 92 : 56);
-    if (scope.getLayoutParams().width != width) {
-      removeView(scope);
-      addView(scope, busy ? 1 : 2, new LayoutParams(width, dp(host, busy ? 32 : 28)));
+    ViewGroup.LayoutParams lp = scope.getLayoutParams();
+    if (lp.width != width) {
+      lp.width = width;
+      lp.height = dp(host, busy ? 32 : 28);
+      scope.setLayoutParams(lp);
     }
     scope.update(live, null);
     cancel.setVisibility(busy ? VISIBLE : GONE);
