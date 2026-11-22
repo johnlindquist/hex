@@ -39,6 +39,9 @@ public final class HexInputMethodService extends InputMethodService implements F
   private long lastSpace, generation;
   private String state = "idle";
   private DictationUndo undo;
+  private String rewriteUndoOriginal, rewriteUndoApplied;
+  private long rewriteGen;
+  private String lastRewriteDraft;
   private final SelectionTrackpad trackpad = new SelectionTrackpad();
   private int trackpadOffset;
   private SpeechSession session;
@@ -135,7 +138,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     barView.setMeta(hexSettings.style(), id, SpeechLanguage.AUTO.equals(id) ? "Auto" : languageLabel(id));
     barView.setReturnAction(!actionLabel().isEmpty());
   }
-  private void resetEditor() { trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
+  private void resetEditor() { rewriteGen++; if (fullView != null) fullView.closeRewrite(); trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
   @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); super.onWindowHidden(); }
@@ -164,10 +167,16 @@ public final class HexInputMethodService extends InputMethodService implements F
     super.onUpdateSelection(a,b,x,y,cs,ce); if (x != a || y != b) refresh();
   }
   private void setUndo(DictationUndo value) {
-    main.removeCallbacks(expireUndo); undo = value;
+    main.removeCallbacks(expireUndo); undo = value; rewriteUndoOriginal = null; rewriteUndoApplied = null;
     if (fullView != null) fullView.setUndoVisible(value != null);
     if (barView != null) barView.setUndoVisible(value != null);
     if (value != null) main.postDelayed(expireUndo, 12000);
+  }
+  private void setRewriteUndo(String original, String applied) {
+    main.removeCallbacks(expireUndo); undo = null; rewriteUndoOriginal = original; rewriteUndoApplied = applied;
+    if (fullView != null) fullView.setUndoVisible(true, "Undo rewrite");
+    if (barView != null) barView.setUndoVisible(true);
+    main.postDelayed(expireUndo, 15000);
   }
   private void editing() { lastSpace = 0; autocorrect.clearUndo(); setUndo(null); }
   private void replace(int n, String s) {
@@ -282,9 +291,101 @@ public final class HexInputMethodService extends InputMethodService implements F
         && value.matches(s.getOffset()+s.getSelectionStart(), s.getText().subSequence(0,s.getSelectionStart()));
   }
   public void onUndoDictation() {
-    InputConnection c = ic(); DictationUndo value = undo;
+    InputConnection c = ic();
+    if (rewriteUndoOriginal != null && c != null) {
+      String orig = rewriteUndoOriginal;
+      String applied = rewriteUndoApplied;
+      setUndo(null);
+      String current = readFullMessage(c);
+      if (applied == null || current.equals(applied)) {
+        replaceEntireMessage(c, orig);
+      }
+      refresh();
+      return;
+    }
+    DictationUndo value = undo;
     if (value != null && c != null && at(c,value)) value.restore(c);
     setUndo(null); refresh();
+  }
+  private String readFullMessage(InputConnection c) {
+    if (c == null) return "";
+    ExtractedText et = c.getExtractedText(new ExtractedTextRequest(), 0);
+    if (et != null && et.text != null) return et.text.toString();
+    CharSequence before = c.getTextBeforeCursor(4000, 0);
+    CharSequence after = c.getTextAfterCursor(4000, 0);
+    return (before == null ? "" : before.toString()) + (after == null ? "" : after.toString());
+  }
+  private void replaceEntireMessage(InputConnection c, String replacement) {
+    if (c == null) return;
+    c.beginBatchEdit();
+    try {
+      c.finishComposingText();
+      ExtractedText et = c.getExtractedText(new ExtractedTextRequest(), 0);
+      if (et != null && et.text != null) {
+        c.setSelection(0, et.text.length());
+        c.commitText(replacement, 1);
+      } else {
+        CharSequence before = c.getTextBeforeCursor(4000, 0);
+        CharSequence after = c.getTextAfterCursor(4000, 0);
+        int bLen = before == null ? 0 : before.length();
+        int aLen = after == null ? 0 : after.length();
+        if (bLen > 0 || aLen > 0) c.deleteSurroundingText(bLen, aLen);
+        c.commitText(replacement, 1);
+      }
+    } finally {
+      c.endBatchEdit();
+    }
+  }
+  @Override public void onRewriteMessage() {
+    InputConnection c = ic();
+    if (c == null || fullView == null) return;
+    if (privateField) { notice("Rewrite unavailable in passwords"); return; }
+    String draft = readFullMessage(c).trim();
+    if (draft.isEmpty()) { notice("Type or dictate a message first"); return; }
+    lastRewriteDraft = draft;
+    startRewrite(draft);
+  }
+  @Override public void onRewriteRetry() {
+    InputConnection c = ic();
+    String draft = c != null ? readFullMessage(c).trim() : "";
+    if (draft.isEmpty() && lastRewriteDraft != null) draft = lastRewriteDraft;
+    if (draft.isEmpty()) return;
+    startRewrite(draft);
+  }
+  @Override public void onRewriteClose() {
+    rewriteGen++;
+  }
+  @Override public void onRewritePick(String replacement) {
+    rewriteGen++;
+    if (fullView != null) fullView.closeRewrite();
+    InputConnection c = ic();
+    if (c == null || replacement == null || replacement.isBlank()) return;
+    String original = readFullMessage(c);
+    replaceEntireMessage(c, replacement);
+    setRewriteUndo(original, replacement);
+    refresh();
+  }
+  private void startRewrite(String draft) {
+    if (fullView == null) return;
+    long ticket = ++rewriteGen;
+    fullView.showRewriteLoading(draft, true);
+    anomaly.hex.android.service.HexBubbleService.captureScreenForKeyboard(screen -> {
+      if (ticket != rewriteGen || fullView == null) {
+        if (screen != null && !screen.isRecycled()) screen.recycle();
+        return;
+      }
+      fullView.showRewriteLoading(draft, screen != null);
+      KeyboardRewriteClient.rewrite(this, draft, screen, new KeyboardRewriteClient.Callback() {
+        @Override public void onOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen) {
+          if (ticket != rewriteGen || fullView == null) return;
+          fullView.showRewriteOptions(options, usedScreen);
+        }
+        @Override public void onError(String message) {
+          if (ticket != rewriteGen || fullView == null) return;
+          fullView.showRewriteError(message);
+        }
+      });
+    });
   }
   private void drawState(String value,int[] levels) {
     state = value; if (fullView != null) fullView.setDictationState(value,levels); if (barView != null) barView.setDictationState(value,levels);

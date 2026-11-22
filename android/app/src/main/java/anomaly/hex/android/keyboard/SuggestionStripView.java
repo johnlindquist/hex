@@ -13,7 +13,7 @@ public final class SuggestionStripView extends FrameLayout {
     private final View emojiTool;
     private final FrameLayout center;
     private final LinearLayout undo, noticeBar;
-    private final TextView clock, noticeText, noticeAction;
+    private final TextView clock, noticeText, noticeAction, undoLabel;
     private final Runnable clearNotice = () -> showNotice(null, false);
     private List<String> items=List.of();
     private boolean autoReplace;
@@ -42,7 +42,7 @@ public final class SuggestionStripView extends FrameLayout {
         slots=row(c); center.addView(slots);
         undo=row(c); undo.setBackground(pill(CHIP_FILL)); undo.setPadding(dp(c,10),0,dp(c,10),0);
         View arrow=new View(c){protected void onDraw(android.graphics.Canvas canvas){KeyIcons.drawUndoArrow(canvas,getWidth()/2f,getHeight()/2f,dp(c,16),TEXT_MUTED);}};
-        undo.addView(arrow,dp(c,20),-1); TextView undoLabel=label(c,"Undo dictation",14); undoLabel.setTextSize(13.5f); undoLabel.setTextColor(TEXT_MUTED);
+        undo.addView(arrow,dp(c,20),-1); undoLabel=label(c,"Undo dictation",14); undoLabel.setTextSize(13.5f); undoLabel.setTextColor(TEXT_MUTED);
         undo.addView(undoLabel); undo.setContentDescription("Undo dictation"); undo.setOnClickListener(v->host.onUndoDictation());
         center.addView(undo,new LayoutParams(-2,dp(c,30),Gravity.CENTER));
         noticeBar=row(c); noticeBar.setBackground(pill(CHIP_FILL)); noticeBar.setPadding(dp(c,10),0,dp(c,6),0);
@@ -53,6 +53,16 @@ public final class SuggestionStripView extends FrameLayout {
         noticeAction.setOnClickListener(v->{ showNotice(null,false); host.onOpenApp(); });
         noticeBar.addView(noticeAction,nap); noticeBar.setVisibility(GONE);
         center.addView(noticeBar,new LayoutParams(-2,dp(c,30),Gravity.CENTER)); setUndo(false);
+        View rewriteBtn=new View(c) {
+            protected void onDraw(android.graphics.Canvas canvas) {
+                KeyIcons.drawSparkle(canvas,getWidth()/2f,getHeight()/2f,dp(c,18),TEXT_MUTED);
+            }
+        };
+        rewriteBtn.setContentDescription("Rewrite message");
+        rewriteBtn.setBackground(pressable(CHIP_FILL));
+        rewriteBtn.setOnClickListener(v->host.onRewriteMessage());
+        LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(dp(c,34),dp(c,34)); rp.leftMargin=dp(c,4);
+        typing.addView(rewriteBtn,rp);
         mark=new HexMarkView(c); mark.setBackground(pill(CHIP_FILL));
         LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(dp(c,34),dp(c,34)); mp.leftMargin=dp(c,4);
         typing.addView(mark,mp);
@@ -113,8 +123,11 @@ public final class SuggestionStripView extends FrameLayout {
         LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(c,32),dp(c,32)); p.leftMargin=dp(c,6);
         recording.addView(b,p); return b;
     }
-    void setUndo(boolean visible) {
+    void setUndo(boolean visible) { setUndo(visible, "Undo dictation"); }
+    void setUndo(boolean visible, String labelText) {
         if(visible) showNotice(null,false);
+        undoLabel.setText(labelText);
+        undo.setContentDescription(labelText);
         undo.setVisibility(visible?VISIBLE:GONE);
         updateContent();
     }

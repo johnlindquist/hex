@@ -210,6 +210,52 @@ public final class HexBubbleService extends AccessibilityService {
   private long holdCaptureAt;
   private boolean holdPendingOpen;
 
+  /** Captures the current screen for Hex Keyboard's screen-aware message rewrite, or null if unavailable. */
+  public static void captureScreenForKeyboard(java.util.function.Consumer<Bitmap> callback) {
+    HexBubbleService s = active;
+    if (s == null || !s.connected || !s.unlocked()) {
+      new Handler(Looper.getMainLooper()).post(() -> callback.accept(null));
+      return;
+    }
+    s.main.post(() -> {
+      if (!s.connected || !s.unlocked()) {
+        callback.accept(null);
+        return;
+      }
+      try {
+        s.takeScreenshot(Display.DEFAULT_DISPLAY, s.getMainExecutor(), new TakeScreenshotCallback() {
+          public void onFailure(int code) {
+            callback.accept(null);
+          }
+          public void onSuccess(ScreenshotResult result) {
+            Bitmap pixels = null;
+            try (HardwareBuffer buffer = result.getHardwareBuffer()) {
+              Bitmap wrapped = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
+              if (wrapped != null) {
+                try {
+                  pixels = wrapped.copy(Bitmap.Config.ARGB_8888, false);
+                  if (pixels.getWidth() > 1080) {
+                    Bitmap orig = pixels;
+                    pixels = Bitmap.createScaledBitmap(orig, 1080,
+                        Math.max(1, Math.round(orig.getHeight() * 1080f / orig.getWidth())), true);
+                    orig.recycle();
+                  }
+                } finally {
+                  wrapped.recycle();
+                }
+              }
+            } catch (RuntimeException | OutOfMemoryError e) {
+              pixels = null;
+            }
+            callback.accept(pixels);
+          }
+        });
+      } catch (RuntimeException e) {
+        callback.accept(null);
+      }
+    });
+  }
+
   public static void insertAnywhereText(String text) {
     HexBubbleService svc = active;
     if (svc == null || text == null || text.isBlank()) return;

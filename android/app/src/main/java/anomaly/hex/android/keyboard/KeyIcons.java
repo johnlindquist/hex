@@ -62,6 +62,21 @@ final class KeyIcons {
     static void drawSearch(Canvas c,float x,float y,float s,int color) {
         begin(c,x,y,s,color); c.drawCircle(-2,-2,5.8f,p); line(c,2,2,8,8); c.restore();
     }
+    static void drawSparkle(Canvas c,float x,float y,float s,int color) {
+        begin(c,x,y,s,color);
+        path.rewind();
+        path.moveTo(-1,-8); path.quadTo(-1,-1,-8,-1); path.quadTo(-1,-1,-1,6);
+        path.quadTo(-1,-1,6,-1); path.quadTo(-1,-1,-1,-8); path.close();
+        c.drawPath(path,p);
+        line(c,5.5f,3,5.5f,8); line(c,3,5.5f,8,5.5f);
+        c.restore();
+    }
+    static void drawRefresh(Canvas c,float x,float y,float s,int color) {
+        begin(c,x,y,s,color);
+        c.drawArc(-6.5f,-6.5f,6.5f,6.5f,-60,290,false,p);
+        line(c,3,-8.5f,6.5f,-5.5f,2.5f,-3.5f);
+        c.restore();
+    }
     static void drawEmojiCategory(Canvas c,int index,float x,float y,float s,int color) {
         if(index==1) { drawSmiley(c,x,y,s,color); return; }
         begin(c,x,y,s,color); path.rewind();
