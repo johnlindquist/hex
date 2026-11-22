@@ -8,7 +8,7 @@ public enum LabId {
     PUNCTUATION_DRUMS("punctuation_drums", "Live punctuation drums", "Keyboard", "Tap punctuation pads while dictating with the full Hex Keyboard."),
     TYPE_ANYWHERE("type_anywhere", "Type anywhere", "Keyboard", "Tap the accessibility button anywhere to capture the screen and ask AI."),
     EMOJI_KEYBOARD("emoji_keyboard", "Emoji keyboard", "Keyboard", "Adds an emoji key and searchable emoji panel to Hex Keyboard."),
-    SPATIAL_AUTOCORRECT("spatial_autocorrect", "Thumb-position autocorrect", "Keyboard", "Experimental: fix fat-thumb slips (like “tbks” → “this”) by QWERTY key position, with local Gemma context when installed.");
+    SPATIAL_AUTOCORRECT("spatial_autocorrect", "Thumb-position autocorrect", "Keyboard", "Experimental: fix fat-thumb slips by QWERTY position, pull words on screen into the dictionary, and learn from every word you type.");
     public final String id, title, group, summary;
     LabId(String id, String title, String group, String summary) {
         this.id = id; this.title = title; this.group = group; this.summary = summary;

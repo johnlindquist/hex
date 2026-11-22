@@ -63,7 +63,9 @@ public final class AutocorrectEngine {
     private final boolean allowLearning;
     private final Map<String, String> fixes = new HashMap<>();
     private final LinkedHashSet<String> suppressed = new LinkedHashSet<>();
+    private volatile ScreenContextVocabulary screenVocab = ScreenContextVocabulary.EMPTY;
     private Correction pending;
+    private String pendingPrevWord;
     private String undoContext;
 
     public AutocorrectEngine() { this(KeyboardLanguage.EN, null, null, false, SystemUserDictionary.Snapshot.EMPTY, false); }
@@ -131,14 +133,60 @@ public final class AutocorrectEngine {
         return tok;
     }
 
+    public void setScreenWords(ScreenContextVocabulary vocab) {
+        this.screenVocab = vocab == null ? ScreenContextVocabulary.EMPTY : vocab;
+    }
+
+    public void mergeScreenWords(java.util.Collection<String> words) {
+        if (words == null || words.isEmpty()) return;
+        this.screenVocab = this.screenVocab.merge(words);
+    }
+
+    public List<String> screenWordHints(int max) {
+        return screenVocab.promptHints(max);
+    }
+
+    /** Extracts the word immediately before the active token (for bigram context). */
+    public static String previousWord(String textBeforeCursor) {
+        if (textBeforeCursor == null || textBeforeCursor.isEmpty()) return "";
+        String current = currentToken(textBeforeCursor);
+        int end = textBeforeCursor.length() - current.length();
+        while (end > 0 && Character.isWhitespace(textBeforeCursor.charAt(end - 1))) end--;
+        if (end <= 0) return "";
+        return currentToken(textBeforeCursor.substring(0, end));
+    }
+
     private boolean isKnownValidWord(String lower) {
         if (SHORTHAND_ALLOWLIST.contains(lower)) return true;
         if (userDict.termsLower().contains(lower)) return true;
-        if (allowLearning && store != null && store.isKept(lower)) return true;
+        if (screenVocab.contains(lower)) return true;
+        if (allowLearning && store != null && store.isPersonalWord(lower)) return true;
         return english && dictionary != null && dictionary.contains(lower);
     }
 
+    private SpatialKeyboardDecoder.DecodeContext decodeContext(String prevWord) {
+        String prevLower = prevWord == null || prevWord.isEmpty() ? null : prevWord.toLowerCase(Locale.ROOT);
+        return new SpatialKeyboardDecoder.DecodeContext(
+                prevLower,
+                screenVocab.asMap(),
+                allowLearning ? store : null);
+    }
+
+    private String canonicalFor(String lower) {
+        String s = screenVocab.canonical(lower);
+        if (s != null) return s;
+        if (allowLearning && store != null) {
+            String p = store.personalCanonical(lower);
+            if (p != null) return p;
+        }
+        return lower;
+    }
+
     private Correction lookup(String word, List<String> spellSuggestions) {
+        return lookup(word, "", spellSuggestions);
+    }
+
+    private Correction lookup(String word, String prevWord, List<String> spellSuggestions) {
         if (word.isEmpty()) return null;
         String lower = word.toLowerCase(Locale.ROOT);
         if (suppressed.contains(lower)) return null;
@@ -152,6 +200,8 @@ public final class AutocorrectEngine {
 
         if (SHORTHAND_ALLOWLIST.contains(lower)) return null;
         if (userDict.termsLower().contains(lower)) return null;
+        if (screenVocab.contains(lower)) return null;
+        if (allowLearning && store != null && store.isPersonalWord(lower)) return null;
 
         boolean title = !word.equals(lower);
         if (title && !word.equals(capitalize(lower))) return null;
@@ -178,24 +228,32 @@ public final class AutocorrectEngine {
             }
         }
 
-        // 4. Full 30k English frequency dictionary + QWERTY spatial decoding (multi-key fat-thumb in spatialMode, else 1-edit)
+        // 4. Full 30k English frequency dictionary + screen/personal vocab + QWERTY spatial decoding
         if (english && dictionary != null && dictionary.size() > 0 && lower.length() >= 3 && isPlainWord(word)) {
             if (!dictionary.contains(lower)) {
                 if (spatialMode) {
-                    List<WordDictionary.Candidate> spatial = SpatialKeyboardDecoder.decode(dictionary, lower, 4);
+                    SpatialKeyboardDecoder.DecodeContext dc = decodeContext(prevWord);
+                    List<WordDictionary.Candidate> spatial = SpatialKeyboardDecoder.decode(dictionary, lower, 4, dc);
                     if (!spatial.isEmpty()) {
                         // Prefer local Gemma contextual pick if provided via spellSuggestions[0]
                         if (spellSuggestions != null && !spellSuggestions.isEmpty()) {
                             String reranked = spellSuggestions.get(0);
                             for (WordDictionary.Candidate c : spatial) {
                                 if (c.word().equalsIgnoreCase(reranked)) {
-                                    return new Correction(word, c.word(), matchCase(word, title, c.word()));
+                                    String canon = canonicalFor(c.word());
+                                    return new Correction(word, canon, matchCase(word, title, canon));
                                 }
                             }
                         }
                         WordDictionary.Candidate top = spatial.get(0);
-                        if (top.cost() <= 24 || (top.cost() <= 40 && top.rank() < 6000)) {
-                            return new Correction(word, top.word(), matchCase(word, title, top.word()));
+                        boolean fromDynamic = screenVocab.contains(top.word())
+                                || (allowLearning && store != null && store.isPersonalWord(top.word()));
+                        boolean accept = top.cost() <= 24
+                                || (top.cost() <= 46 && (top.rank() < 6000 || fromDynamic))
+                                || (lower.length() >= 7 && top.cost() <= 58 && top.rank() < 18000);
+                        if (accept) {
+                            String canon = canonicalFor(top.word());
+                            return new Correction(word, canon, matchCase(word, title, canon));
                         }
                     }
                     String split = dictionary.splitMissedSpace(lower);
@@ -236,8 +294,12 @@ public final class AutocorrectEngine {
     }
 
     public boolean willAutoReplace(String currentWord, List<String> spellSuggestions) {
+        return willAutoReplace(currentWord, "", spellSuggestions);
+    }
+
+    public boolean willAutoReplace(String currentWord, String prevWord, List<String> spellSuggestions) {
         if (currentWord == null || currentWord.isBlank()) return false;
-        return lookup(currentWord, spellSuggestions) != null;
+        return lookup(currentWord, prevWord, spellSuggestions) != null;
     }
 
     private static String matchCase(String original, boolean title, String replacement) {
@@ -255,18 +317,48 @@ public final class AutocorrectEngine {
     }
 
     public Correction correctOnSpace(String textBeforeCursor, List<String> spellSuggestions) {
+        commitPendingLearning();
         clearUndo();
         if (textBeforeCursor == null) return null;
         String token = currentToken(textBeforeCursor);
         if (token.isEmpty()) return null;
+        String prevWord = previousWord(textBeforeCursor);
         int tokenStart = textBeforeCursor.length() - token.length();
-        pending = lookup(token, spellSuggestions);
+        pending = lookup(token, prevWord, spellSuggestions);
+        pendingPrevWord = prevWord;
         if (pending != null) {
             // A bounded suffix also works when the editor gives a sliding window of context.
             int start = Math.max(0, tokenStart - 32);
             undoContext = textBeforeCursor.substring(start, tokenStart) + pending.caseMatched + " ";
+        } else if (allowLearning && store != null) {
+            // Learn from every word the user types cleanly so vocabulary & bigrams improve over time.
+            store.recordTypedWord(token);
+            if (!prevWord.isEmpty()) store.recordBigram(prevWord, token);
         }
         return pending;
+    }
+
+    /** Records a word committed by punctuation or Return (outside Space). */
+    public void recordCommittedWord(String textBeforeCursor) {
+        commitPendingLearning();
+        if (!allowLearning || store == null || textBeforeCursor == null) return;
+        String token = currentToken(textBeforeCursor);
+        if (token.isEmpty()) return;
+        String prevWord = previousWord(textBeforeCursor);
+        store.recordTypedWord(token);
+        if (!prevWord.isEmpty()) store.recordBigram(prevWord, token);
+    }
+
+    /** Finalizes learning for a pending auto-correction that the user did not undo. */
+    private void commitPendingLearning() {
+        if (pending != null && allowLearning && store != null) {
+            store.recordTypedWord(pending.replacement);
+            if (pendingPrevWord != null && !pendingPrevWord.isEmpty()) {
+                store.recordBigram(pendingPrevWord, pending.replacement);
+            }
+            store.recordWordSlips(pending.original, pending.replacement);
+        }
+        pendingPrevWord = null;
     }
 
     public Correction correct(String before, String inserted) {
@@ -275,7 +367,7 @@ public final class AutocorrectEngine {
         return null;
     }
 
-    public void clearUndo() { pending = null; undoContext = null; }
+    public void clearUndo() { pending = null; pendingPrevWord = null; undoContext = null; }
 
     public Correction checkBackspaceUndo(String textBeforeCursor) {
         Correction undo = pending != null && textBeforeCursor != null && textBeforeCursor.endsWith(undoContext) ? pending : null;
@@ -289,10 +381,18 @@ public final class AutocorrectEngine {
 
     /** Record user's explicit choice from the suggestion bar (slot 0 verbatim = reject, slot 1/2 = learn). */
     public void onSuggestionPicked(String typedWord, String pickedWord) {
+        onSuggestionPicked("", typedWord, pickedWord);
+    }
+
+    public void onSuggestionPicked(String prevWord, String typedWord, String pickedWord) {
         if (typedWord == null || typedWord.isBlank() || pickedWord == null || pickedWord.isBlank()) return;
         if (typedWord.equalsIgnoreCase(pickedWord)) {
             suppress(typedWord);
-            if (allowLearning && store != null) store.recordRejected(typedWord, true);
+            if (allowLearning && store != null) {
+                store.recordRejected(typedWord, true);
+                store.recordTypedWord(pickedWord);
+                if (prevWord != null && !prevWord.isEmpty()) store.recordBigram(prevWord, pickedWord);
+            }
         } else if (allowLearning && store != null && isPlainWord(typedWord)) {
             String stored = pickedWord;
             String typedLower = typedWord.toLowerCase(Locale.ROOT);
@@ -305,6 +405,8 @@ public final class AutocorrectEngine {
                 stored = pickedLower;
             }
             store.recordAccepted(typedWord, stored);
+            store.recordTypedWord(stored);
+            if (prevWord != null && !prevWord.isEmpty()) store.recordBigram(prevWord, stored);
         }
     }
 
@@ -355,11 +457,11 @@ public final class AutocorrectEngine {
         if (english && dictionary != null && dictionary.size() > 0 && isPlainWord(currentWord) && result.size() < 3) {
             if (!dictionary.contains(lower) && lower.length() >= 3) {
                 List<WordDictionary.Candidate> cands = spatialMode
-                        ? SpatialKeyboardDecoder.decode(dictionary, lower, 3)
+                        ? SpatialKeyboardDecoder.decode(dictionary, lower, 3, decodeContext(""))
                         : dictionary.bestEdits(lower, 3);
                 for (WordDictionary.Candidate c : cands) {
                     if (result.size() == 3) break;
-                    String m = matchCase(currentWord, title, c.word());
+                    String m = matchCase(currentWord, title, canonicalFor(c.word()));
                     if (!result.contains(m)) result.add(m);
                 }
             }
@@ -402,15 +504,20 @@ public final class AutocorrectEngine {
 
     /** Returns top spatial candidate words for optional local Gemma contextual reranking. */
     public List<String> spatialCandidates(String currentWord) {
+        return spatialCandidates("", currentWord);
+    }
+
+    public List<String> spatialCandidates(String contextBeforeCursor, String currentWord) {
         if (!spatialMode || !english || dictionary == null || currentWord == null || currentWord.length() < 3 || !isPlainWord(currentWord)) {
             return List.of();
         }
         String lower = currentWord.toLowerCase(Locale.ROOT);
-        if (dictionary.contains(lower)) return List.of();
-        List<WordDictionary.Candidate> cands = SpatialKeyboardDecoder.decode(dictionary, lower, 4);
+        if (isKnownValidWord(lower)) return List.of();
+        String prevWord = previousWord(contextBeforeCursor);
+        List<WordDictionary.Candidate> cands = SpatialKeyboardDecoder.decode(dictionary, lower, 4, decodeContext(prevWord));
         if (cands.size() < 2) return List.of();
         List<String> out = new ArrayList<>(cands.size());
-        for (WordDictionary.Candidate c : cands) out.add(c.word());
+        for (WordDictionary.Candidate c : cands) out.add(canonicalFor(c.word()));
         return out;
     }
 

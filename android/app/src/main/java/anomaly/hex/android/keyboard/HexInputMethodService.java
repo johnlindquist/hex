@@ -11,6 +11,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.inputmethod.*;
 import android.widget.*;
+import anomaly.hex.android.cleanup.HexHintWindowService;
 import anomaly.hex.android.core.*;
 import anomaly.hex.android.speech.*;
 import anomaly.hex.android.ui.HexHomeActivity;
@@ -69,6 +70,7 @@ public final class HexInputMethodService extends InputMethodService implements F
           KeyboardLanguage lang = KeyboardLanguage.resolve(kbSettings.layoutLanguage(), Locale.getDefault());
           boolean allowLearn = !privateField && (editor.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
           autocorrect = new AutocorrectEngine(lang, englishDictionary, personalStore, allowLearn, userDictionary, spatialAutocorrect);
+          if (words && !privateField) refreshScreenContext(editor);
           refresh();
         }
       });
@@ -112,6 +114,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     KeyboardLanguage language = KeyboardLanguage.resolve(kbSettings.layoutLanguage(), Locale.getDefault());
     boolean allowLearn = !privateField && (info.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
     autocorrect = new AutocorrectEngine(language, englishDictionary, personalStore, allowLearn, userDictionary, spatialAutocorrect);
+    if (words && !privateField) refreshScreenContext(info);
     if (words && kbSettings.autocorrect() && !spatialAutocorrect) spellChecker.open(this, Locale.forLanguageTag(language.code()));
     else spellChecker.close();
     CustomVocabulary vocab = new CustomVocabulary(this); vocabulary = vocab.isEnabled() ? vocab.terms() : List.of();
@@ -143,7 +146,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     barView.setMeta(hexSettings.style(), id, SpeechLanguage.AUTO.equals(id) ? "Auto" : languageLabel(id));
     barView.setReturnAction(!actionLabel().isEmpty());
   }
-  private void resetEditor() { commitPendingQuickFixLearning(); rewriteGen++; rewriteSession = null; if (fullView != null) { fullView.setQuickFixBusy(false); fullView.closeRewrite(); } trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
+  private void resetEditor() { commitPendingQuickFixLearning(); if (autocorrect != null) autocorrect.setScreenWords(ScreenContextVocabulary.EMPTY); rewriteGen++; rewriteSession = null; if (fullView != null) { fullView.setQuickFixBusy(false); fullView.closeRewrite(); } trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); if (fullView != null) fullView.resetSession(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
   @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); if (fullView != null) fullView.resetSession(); super.onWindowHidden(); }
@@ -153,6 +156,23 @@ public final class HexInputMethodService extends InputMethodService implements F
   private String before(int n) {
     InputConnection c = ic(); CharSequence s = c == null ? null : c.getTextBeforeCursor(n, 0); return s == null ? "" : s.toString();
   }
+  private String after(int n) {
+    InputConnection c = ic(); CharSequence s = c == null ? null : c.getTextAfterCursor(n, 0); return s == null ? "" : s.toString();
+  }
+  private void refreshScreenContext(EditorInfo info) {
+    if (autocorrect == null || !words || privateField) return;
+    String editorText = before(2000) + " " + after(1000);
+    autocorrect.setScreenWords(ScreenContextVocabulary.fromText(editorText));
+    if (info != null && info.packageName != null && HexHintWindowService.isConnected()) {
+      final long gen = generation;
+      HexHintWindowService.readVisibleWords(info.packageName, screenWords -> main.post(() -> {
+        if (generation == gen && autocorrect != null && words && !privateField) {
+          autocorrect.mergeScreenWords(screenWords);
+          refresh();
+        }
+      }));
+    }
+  }
   private static String word(String context) { return AutocorrectEngine.currentToken(context); }
   private void refresh() {
     InputConnection c = ic(); if (fullView == null || c == null) return;
@@ -161,9 +181,10 @@ public final class HexInputMethodService extends InputMethodService implements F
     fullView.setAutoCap(!privateField && c.getCursorCapsMode(capFlags) != 0);
     String context = words ? before(256) : "";
     String current = word(context);
+    String prevWord = AutocorrectEngine.previousWord(context);
     List<String> extraHints = lookupHints(context, current);
     List<String> suggestions = new ArrayList<>(autocorrect.suggestions(current, vocabulary, extraHints));
-    boolean autoReplace = words && kbSettings.autocorrect() && autocorrect.willAutoReplace(current, extraHints);
+    boolean autoReplace = words && kbSettings.autocorrect() && autocorrect.willAutoReplace(current, prevWord, extraHints);
     String emoji = emojiEnabled ? EmojiCatalog.suggestForContext(context) : null;
     if (emoji != null) { if (suggestions.size() == 3) suggestions.remove(2); suggestions.add(emoji); }
     fullView.setSuggestions(suggestions, autoReplace); fullView.setEmojiContext(context);
@@ -207,12 +228,21 @@ public final class HexInputMethodService extends InputMethodService implements F
     c.beginBatchEdit(); try { if (n == 0 || c.deleteSurroundingText(n, 0)) c.commitText(s, 1); }
     finally { c.endBatchEdit(); } refresh();
   }
-  public void onCharacter(String s) { if (ic() != null) { editing(); replace(0, s); } }
+  public void onCharacter(String s) {
+    if (ic() == null) return;
+    if (words && s != null && s.length() == 1 && ".!?,;:".indexOf(s.charAt(0)) >= 0) {
+      autocorrect.recordCommittedWord(before(256));
+    }
+    editing();
+    replace(0, s);
+  }
   public void onEmojiPick(String s) { onCharacter(s); }
   public void onSuggestionPick(String s) {
     if (ic() != null && words) {
-      String typed = word(before(256));
-      autocorrect.onSuggestionPicked(typed, s);
+      String ctx = before(256);
+      String typed = word(ctx);
+      String prev = AutocorrectEngine.previousWord(ctx);
+      autocorrect.onSuggestionPicked(prev, typed, s);
       editing();
       replace(typed.length(), s + " ");
     }
@@ -220,13 +250,13 @@ public final class HexInputMethodService extends InputMethodService implements F
   private List<String> lookupHints(String context, String current) {
     if (!words || !kbSettings.autocorrect() || current == null || current.isEmpty()) return List.of();
     if (spatialAutocorrect) {
-      List<String> cands = autocorrect.spatialCandidates(current);
+      List<String> cands = autocorrect.spatialCandidates(context, current);
       if (cands.size() < 2) return List.of();
       String beforeWord = context.length() > current.length()
           ? context.substring(0, context.length() - current.length()) : "";
       String cached = spatialReranker.lookupCached(beforeWord, current, cands);
       if (cached != null) return List.of(cached);
-      spatialReranker.requestRerank(this, beforeWord, current, cands, this::refresh);
+      spatialReranker.requestRerank(this, beforeWord, current, cands, autocorrect.screenWordHints(20), this::refresh);
       return List.of();
     }
     return spellChecker != null ? spellChecker.lookupOrQuery(current) : List.of();
@@ -302,6 +332,7 @@ public final class HexInputMethodService extends InputMethodService implements F
   public void onSelectionEnd() { trackpad.end(); }
   public void onReturn() {
     if (ic() == null) return;
+    if (words) autocorrect.recordCommittedWord(before(256));
     editing(); String label = actionLabel();
     if (EditorDeletePolicy.sendEnter(editor.inputType, label)) sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER);
     else if (label.isEmpty()) replace(0,"\n");

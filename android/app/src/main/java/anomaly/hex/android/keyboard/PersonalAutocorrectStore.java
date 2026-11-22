@@ -11,28 +11,42 @@ import java.util.*;
  */
 public final class PersonalAutocorrectStore {
     public static final int MIN_LEARN_COUNT = 2;
+    public static final int MIN_PERSONAL_WORD_COUNT = 2;
     private static final int MAX_ENTRIES = 2000;
+    private static final int MAX_PERSONAL_WORDS = 3000;
+    private static final int MAX_BIGRAMS = 2000;
     private static final String PREFS = "hex_autocorrect_learn";
     private static final String KEY_LEARNED = "learned_pairs";
     private static final String KEY_PENDING = "pending_pairs";
     private static final String KEY_KEEP = "keep_words";
     private static final String KEY_REJECTS = "reject_counts";
+    private static final String KEY_WORD_COUNTS = "word_counts";
+    private static final String KEY_BIGRAMS = "bigram_counts";
+    private static final String KEY_CHAR_SLIPS = "char_slips";
 
     private record PendingFix(String replacement, int count) {}
+    public record WordUsage(String canonical, int count) {}
 
     private final SharedPreferences prefs;
     private final LinkedHashMap<String, String> learned = new LinkedHashMap<>();
     private final LinkedHashMap<String, PendingFix> pending = new LinkedHashMap<>();
     private final LinkedHashSet<String> keepWords = new LinkedHashSet<>();
     private final HashMap<String, Integer> rejectCounts = new HashMap<>();
+    private final LinkedHashMap<String, WordUsage> wordCounts = new LinkedHashMap<>();
+    private final LinkedHashMap<String, Integer> bigramCounts = new LinkedHashMap<>();
+    private final HashMap<String, Integer> charSlips = new HashMap<>();
 
     public PersonalAutocorrectStore(Context ctx) {
-        this.prefs = ctx == null ? null : ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        this(ctx == null ? null : ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE));
+    }
+
+    PersonalAutocorrectStore(SharedPreferences prefs) {
+        this.prefs = prefs;
         load();
     }
 
     /** In-memory store for unit tests. */
-    public static PersonalAutocorrectStore inMemory() { return new PersonalAutocorrectStore(null); }
+    public static PersonalAutocorrectStore inMemory() { return new PersonalAutocorrectStore((SharedPreferences) null); }
 
     public synchronized String lookupLearned(String lowerWord) {
         if (lowerWord == null || keepWords.contains(lowerWord)) return null;
@@ -50,6 +64,126 @@ public final class PersonalAutocorrectStore {
 
     public synchronized boolean isKept(String lowerWord) {
         return lowerWord != null && keepWords.contains(lowerWord);
+    }
+
+    /** Records every word the user types so the keyboard adapts to their vocabulary and frequencies over time. */
+    public synchronized void recordTypedWord(String word) {
+        if (word == null) return;
+        String w = word.trim().replace('’', '\'');
+        if (w.length() < 2 || w.length() > 24) return;
+        for (int i = 0; i < w.length(); i++) {
+            char c = w.charAt(i);
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c == '\'' && i > 0 && i + 1 < w.length()))) {
+                return;
+            }
+        }
+        String lower = w.toLowerCase(Locale.ROOT);
+        WordUsage prev = wordCounts.remove(lower);
+        int nextCount = prev == null ? 1 : Math.min(100000, prev.count() + 1);
+        String canon;
+        if (prev == null) {
+            canon = w;
+        } else if (hasInternalUpper(w)) {
+            canon = w; // Preserve camelCase / PascalCase / acronyms like "PostgreSQL", "TypeScript", "FastAPI"
+        } else if (hasInternalUpper(prev.canonical())) {
+            canon = prev.canonical();
+        } else if (w.equals(lower)) {
+            canon = lower; // Seen lowercase mid-sentence -> not a mandatory proper noun
+        } else {
+            canon = prev.canonical();
+        }
+        wordCounts.put(lower, new WordUsage(canon, nextCount));
+        while (wordCounts.size() > MAX_PERSONAL_WORDS) {
+            wordCounts.remove(wordCounts.keySet().iterator().next());
+        }
+        save();
+    }
+
+    public synchronized int wordCount(String lowerWord) {
+        if (lowerWord == null) return 0;
+        WordUsage u = wordCounts.get(lowerWord);
+        return u == null ? 0 : u.count();
+    }
+
+    public synchronized boolean isPersonalWord(String lowerWord) {
+        return lowerWord != null && (keepWords.contains(lowerWord) || wordCount(lowerWord) >= MIN_PERSONAL_WORD_COUNT);
+    }
+
+    public synchronized String personalCanonical(String lowerWord) {
+        if (lowerWord == null) return null;
+        WordUsage u = wordCounts.get(lowerWord);
+        return u != null ? u.canonical() : null;
+    }
+
+    /** Returns a snapshot of learned personal words (count >= 2) mapped from lower -> canonical spelling. */
+    public synchronized Map<String, String> personalVocabularySnapshot() {
+        if (wordCounts.isEmpty()) return Map.of();
+        LinkedHashMap<String, String> out = new LinkedHashMap<>();
+        for (var e : wordCounts.entrySet()) {
+            if (e.getValue().count() >= MIN_PERSONAL_WORD_COUNT) {
+                out.put(e.getKey(), e.getValue().canonical());
+            }
+        }
+        return out;
+    }
+
+    /** Records a personal word-to-word bigram so contextual disambiguation improves with usage. */
+    public synchronized void recordBigram(String prevWord, String word) {
+        if (prevWord == null || word == null) return;
+        String a = prevWord.trim().toLowerCase(Locale.ROOT);
+        String b = word.trim().toLowerCase(Locale.ROOT);
+        if (a.length() < 2 || b.length() < 2 || a.length() > 24 || b.length() > 24) return;
+        String key = a + "\t" + b;
+        Integer prev = bigramCounts.remove(key);
+        bigramCounts.put(key, prev == null ? 1 : Math.min(10000, prev + 1));
+        while (bigramCounts.size() > MAX_BIGRAMS) {
+            bigramCounts.remove(bigramCounts.keySet().iterator().next());
+        }
+        save();
+    }
+
+    public synchronized int bigramCount(String prevLower, String wordLower) {
+        if (prevLower == null || wordLower == null || prevLower.isEmpty() || wordLower.isEmpty()) return 0;
+        Integer c = bigramCounts.get(prevLower + "\t" + wordLower);
+        return c == null ? 0 : c;
+    }
+
+    /** Records adjacent QWERTY key slips observed when a user accepts a fat-thumb correction. */
+    public synchronized void recordWordSlips(String typed, String intended) {
+        if (typed == null || intended == null) return;
+        String a = typed.trim().toLowerCase(Locale.ROOT);
+        String b = intended.trim().toLowerCase(Locale.ROOT);
+        if (a.length() != b.length() || a.length() < 3 || a.equals(b)) return;
+        boolean changed = false;
+        int slips = 0;
+        for (int i = 0; i < a.length(); i++) {
+            char ca = a.charAt(i), cb = b.charAt(i);
+            if (ca == cb) continue;
+            if (!WordDictionary.isAdjacentKey(ca, cb)) return; // Not a clean adjacent-key slip
+            slips++;
+            if (slips > 4) return;
+        }
+        for (int i = 0; i < a.length(); i++) {
+            char ca = a.charAt(i), cb = b.charAt(i);
+            if (ca == cb) continue;
+            String key = ca + ":" + cb;
+            charSlips.put(key, Math.min(1000, charSlips.getOrDefault(key, 0) + 1));
+            changed = true;
+        }
+        if (changed) save();
+    }
+
+    public synchronized int slipCount(char typed, char intended) {
+        Integer c = charSlips.get(typed + ":" + intended);
+        return c == null ? 0 : c;
+    }
+
+    private static boolean hasInternalUpper(String w) {
+        for (int i = 1; i < w.length(); i++) {
+            char c = w.charAt(i);
+            if (c >= 'A' && c <= 'Z') return true;
+        }
+        return false;
     }
 
     /**
@@ -75,6 +209,7 @@ public final class PersonalAutocorrectStore {
         }
         keepWords.remove(key);
         rejectCounts.remove(key);
+        recordWordSlips(key, valLower);
 
         String existing = learned.get(key);
         if (existing != null) {
@@ -164,6 +299,36 @@ public final class PersonalAutocorrectStore {
                 }
             }
         }
+        String wc = prefs.getString(KEY_WORD_COUNTS, "");
+        if (wc != null && !wc.isEmpty()) {
+            for (String line : wc.split("\n")) {
+                String[] parts = line.split("\t", 3);
+                if (parts.length == 3) {
+                    try { wordCounts.put(parts[0], new WordUsage(parts[1], Integer.parseInt(parts[2]))); }
+                    catch (NumberFormatException ignored) {}
+                }
+            }
+        }
+        String bg = prefs.getString(KEY_BIGRAMS, "");
+        if (bg != null && !bg.isEmpty()) {
+            for (String line : bg.split("\n")) {
+                String[] parts = line.split("\t", 3);
+                if (parts.length == 3) {
+                    try { bigramCounts.put(parts[0] + "\t" + parts[1], Integer.parseInt(parts[2])); }
+                    catch (NumberFormatException ignored) {}
+                }
+            }
+        }
+        String sl = prefs.getString(KEY_CHAR_SLIPS, "");
+        if (sl != null && !sl.isEmpty()) {
+            for (String line : sl.split("\n")) {
+                int tab = line.indexOf('\t');
+                if (tab > 0 && tab + 1 < line.length()) {
+                    try { charSlips.put(line.substring(0, tab), Integer.parseInt(line.substring(tab + 1))); }
+                    catch (NumberFormatException ignored) {}
+                }
+            }
+        }
     }
 
     private void save() {
@@ -176,11 +341,20 @@ public final class PersonalAutocorrectStore {
         for (String w : keepWords) sbKeep.append(w).append('\n');
         StringBuilder sbRej = new StringBuilder();
         for (var e : rejectCounts.entrySet()) sbRej.append(e.getKey()).append('\t').append(e.getValue()).append('\n');
+        StringBuilder sbWc = new StringBuilder();
+        for (var e : wordCounts.entrySet()) sbWc.append(e.getKey()).append('\t').append(e.getValue().canonical()).append('\t').append(e.getValue().count()).append('\n');
+        StringBuilder sbBg = new StringBuilder();
+        for (var e : bigramCounts.entrySet()) sbBg.append(e.getKey()).append('\t').append(e.getValue()).append('\n');
+        StringBuilder sbSl = new StringBuilder();
+        for (var e : charSlips.entrySet()) sbSl.append(e.getKey()).append('\t').append(e.getValue()).append('\n');
         prefs.edit()
                 .putString(KEY_LEARNED, sbLearned.toString())
                 .putString(KEY_PENDING, sbPending.toString())
                 .putString(KEY_KEEP, sbKeep.toString())
                 .putString(KEY_REJECTS, sbRej.toString())
+                .putString(KEY_WORD_COUNTS, sbWc.toString())
+                .putString(KEY_BIGRAMS, sbBg.toString())
+                .putString(KEY_CHAR_SLIPS, sbSl.toString())
                 .apply();
     }
 }

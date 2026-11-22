@@ -20,7 +20,7 @@ final class LocalSpatialReranker {
   private static final int MAX_CACHE = 64;
 
   private record PendingJob(Context ctx, String cacheKey, String contextTail, String typed,
-                            List<String> candidates, Runnable onReady) {}
+                            List<String> candidates, List<String> screenHints, Runnable onReady) {}
 
   private final Handler main = new Handler(Looper.getMainLooper());
   private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
@@ -51,18 +51,19 @@ final class LocalSpatialReranker {
 
   /** Schedules an async local Gemma rerank if the model is installed and no cached answer exists. */
   void requestRerank(Context context, String contextBeforeWord, String typedWord,
-                     List<String> candidates, Runnable onReady) {
+                     List<String> candidates, List<String> screenHints, Runnable onReady) {
     if (context == null || typedWord == null || typedWord.length() < 3
         || candidates == null || candidates.size() < 2) return;
     Context appCtx = context.getApplicationContext();
     File model = new File(appCtx.getNoBackupFilesDir(), MODEL_FILE);
     if (!model.isFile()) return;
     String tail = contextTail(contextBeforeWord);
-    if (tail.isEmpty()) return;
+    List<String> hints = screenHints == null ? List.of() : List.copyOf(screenHints);
+    if (tail.isEmpty() && hints.isEmpty()) return;
     String key = tail + "|" + typedWord.toLowerCase(Locale.ROOT);
     if (cache.containsKey(key)) return;
 
-    PendingJob job = new PendingJob(appCtx, key, tail, typedWord, List.copyOf(candidates), onReady);
+    PendingJob job = new PendingJob(appCtx, key, tail, typedWord, List.copyOf(candidates), hints, onReady);
     if (latest.getAndSet(job) == null) {
       worker.execute(this::drainLoop);
     }
@@ -84,7 +85,7 @@ final class LocalSpatialReranker {
       if (job == null) return;
       if (cache.containsKey(job.cacheKey())) continue;
       try {
-        String pick = runGemma(job.ctx(), job.contextTail(), job.typed(), job.candidates());
+        String pick = runGemma(job.ctx(), job.contextTail(), job.typed(), job.candidates(), job.screenHints());
         if (pick != null) {
           cache.put(job.cacheKey(), pick);
           if (job.onReady() != null) main.post(job.onReady());
@@ -95,7 +96,7 @@ final class LocalSpatialReranker {
     }
   }
 
-  private String runGemma(Context c, String tail, String typed, List<String> candidates) throws Exception {
+  private String runGemma(Context c, String tail, String typed, List<String> candidates, List<String> screenHints) throws Exception {
     File model = new File(c.getNoBackupFilesDir(), MODEL_FILE);
     if (!model.isFile()) return null;
     if (engine == null) {
@@ -106,11 +107,7 @@ final class LocalSpatialReranker {
       created.initialize();
       engine = created;
     }
-    String prompt = "Pick the single best word to replace the fat-thumb typo based on context. "
-        + "Reply with ONLY one word from the choices.\n"
-        + "Context: \"" + tail + "\"\n"
-        + "Typed: \"" + typed + "\"\n"
-        + "Choices: " + String.join(", ", candidates);
+    String prompt = buildPrompt(tail, typed, candidates, screenHints);
     ConversationConfig cc = new ConversationConfig(
         Contents.Companion.of("You choose the best word from the given choices. Reply with one word only."),
         Collections.emptyList(), Collections.emptyList(), new SamplerConfig(1, 1.0, 0.0, 17), false);
@@ -123,6 +120,21 @@ final class LocalSpatialReranker {
       }
       return matchCandidate(sb.toString(), candidates);
     }
+  }
+
+  static String buildPrompt(String tail, String typed, List<String> candidates, List<String> screenHints) {
+    StringBuilder sb = new StringBuilder(256);
+    sb.append("Pick the single best word to replace the fat-thumb typo based on context. ")
+        .append("Reply with ONLY one word from the choices.\n");
+    if (tail != null && !tail.isEmpty()) {
+      sb.append("Context: \"").append(tail).append("\"\n");
+    }
+    if (screenHints != null && !screenHints.isEmpty()) {
+      sb.append("Words on screen: ").append(String.join(", ", screenHints)).append('\n');
+    }
+    sb.append("Typed: \"").append(typed).append("\"\n");
+    sb.append("Choices: ").append(String.join(", ", candidates));
+    return sb.toString();
   }
 
   static String matchCandidate(String rawReply, List<String> candidates) {
