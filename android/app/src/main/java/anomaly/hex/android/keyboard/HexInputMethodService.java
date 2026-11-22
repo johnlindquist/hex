@@ -123,6 +123,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     if (fullView != null) {
       fullView.enableDrums(labs.isEnabled(LabId.PUNCTUATION_DRUMS));
       fullView.setSettings(language, kbSettings.keyPopups(), kbSettings.haptics(), emojiEnabled && !privateField && !EditorDeletePolicy.raw(type));
+      fullView.setTwoThumbSpace(labs.isEnabled(LabId.TWO_THUMB_SPACE));
       fullView.setPrivateField(privateField);
       fullView.setFieldKind(kind, actionLabel(), KeyboardLayout.initialLayerForInputClass(cls), !restarting);
     }

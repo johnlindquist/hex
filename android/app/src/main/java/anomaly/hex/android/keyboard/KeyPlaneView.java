@@ -42,7 +42,7 @@ public final class KeyPlaneView extends View {
     private int pointer = -1, heldShiftPointer = -1, selection;
     private float origin, cursor, lastX, pickerLeft, cell;
     private String[] variants;
-    private boolean dragging, selecting, searching, popups = true, haptics = true, emoji;
+    private boolean dragging, selecting, searching, popups = true, haptics = true, emoji, twoThumbSpace, chordConsumed;
 
     KeyPlaneView(Context c, Input host, Runnable openEmoji) {
         super(c); this.host = host; this.openEmoji = openEmoji;
@@ -57,6 +57,9 @@ public final class KeyPlaneView extends View {
     }
     void settings(KeyboardLanguage lang, boolean popup, boolean haptic, boolean emojis) {
         language = lang; popups = popup; haptics = haptic; emoji = emojis; reset(); rebuild(getWidth()); requestLayout();
+    }
+    void setTwoThumbSpace(boolean enabled) {
+        twoThumbSpace = enabled;
     }
     void field(FieldKind kind, String label) {
         field(kind, label, Layer.LETTERS, true);
@@ -247,24 +250,40 @@ public final class KeyPlaneView extends View {
         if(heldShiftPointer!=-1 || (down!=null && down.kind()==KeyKind.SHIFT)) shift.onShiftUp();
         if(selecting) { selecting=false; host.onSelectionEnd(); }
         heldShiftPointer=-1;
-        down=null; pointer=-1; variants=null; dragging=false; invalidate();
+        down=null; pointer=-1; variants=null; dragging=false; chordConsumed=false; invalidate();
     }
     @Override protected void onDetachedFromWindow() { reset(); super.onDetachedFromWindow(); }
     @Override public boolean onTouchEvent(MotionEvent e) {
         int a=e.getActionMasked();
+        if(chordConsumed) {
+            if(a==MotionEvent.ACTION_UP || a==MotionEvent.ACTION_CANCEL) { reset(); }
+            return true;
+        }
         if(a==MotionEvent.ACTION_POINTER_UP && e.getPointerId(e.getActionIndex())==heldShiftPointer) {
             shift.onShiftUp(); heldShiftPointer=-1; invalidate(); return true;
         }
         if(a==MotionEvent.ACTION_DOWN || a==MotionEvent.ACTION_POINTER_DOWN) {
             int i=e.getActionIndex();
+            float tx=e.getX(i)/density(), ty=e.getY(i)/density();
+            Key hit=layout.hitTest(tx, ty);
             if(a==MotionEvent.ACTION_DOWN) reset();
             else {
                 if(dragging) return true;
+                if(down!=null && hit!=null && TwoThumbSpaceDetector.isSimultaneousThumbTap(
+                        twoThumbSpace, down.kind(), origin, started,
+                        hit.kind(), tx, e.getEventTime(), getWidth()/density())) {
+                    removeCallbacks(repeat); removeCallbacks(accent);
+                    down=null; pointer=-1; variants=null; dragging=false; chordConsumed=true;
+                    if(haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                    host.onSpace();
+                    invalidate();
+                    return true;
+                }
                 if(down!=null && down.kind()==KeyKind.SHIFT) heldShiftPointer=pointer;
                 else if(down!=null && down.kind()==KeyKind.CHAR) commit();
                 removeCallbacks(repeat); removeCallbacks(accent); variants=null; dragging=false;
             }
-            origin=cursor=lastX=e.getX(i)/density(); down=layout.hitTest(origin,e.getY(i)/density());
+            origin=cursor=lastX=tx; down=hit;
             if(down==null) return a!=MotionEvent.ACTION_DOWN;
             pointer=e.getPointerId(i); started=e.getEventTime();
             if(haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);

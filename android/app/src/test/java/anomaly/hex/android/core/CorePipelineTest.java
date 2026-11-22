@@ -53,9 +53,10 @@ public class CorePipelineTest {
     }
     @Test public void labsIndependentAndStaleWritesRejected() {
         Memory c=new Memory(); HexLabs a=new HexLabs(c), b=new HexLabs(c);
-        assertEquals(8,LabId.values().length);
+        assertEquals(9,LabId.values().length);
         assertEquals(LabId.EMOJI_KEYBOARD, LabId.fromId("emoji_keyboard"));
         assertEquals(LabId.SPATIAL_AUTOCORRECT, LabId.fromId("spatial_autocorrect"));
+        assertEquals(LabId.TWO_THUMB_SPACE, LabId.fromId("two_thumb_space"));
         for (LabId l:LabId.values()) { assertFalse(a.isEnabled(l)); assertEquals(l,LabId.fromId(l.id)); }
         assertTrue(a.setEnabled(LabId.GEMMA_CLEANUP,true,0)); assertFalse(b.setEnabled(LabId.WORDS_ON_SCREEN,true,0));
         assertFalse(b.isEnabled(LabId.WORDS_ON_SCREEN)); assertTrue(b.isEnabled(LabId.GEMMA_CLEANUP));

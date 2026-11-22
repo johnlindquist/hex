@@ -194,6 +194,9 @@ public final class FullKeyboardView extends FrameLayout {
         if(!emojiEnabled) { closeEmoji(); emojiContext=null; strip.contextEmoji(null); }
         plane.settings(language,keyPopups,haptics,emojiEnabled);
     }
+    public void setTwoThumbSpace(boolean enabled) {
+        plane.setTwoThumbSpace(enabled);
+    }
     private final class PlaneHost implements KeyPlaneView.Input {
         private boolean inRewritePrompt() { return rewriteOpen && rewritePanel!=null && rewritePanel.prompting(); }
         public void onCharacter(String s) { if(emojiOpen) panel.append(s); else if(inRewritePrompt()) rewritePanel.append(s); else host.onCharacter(s); }
