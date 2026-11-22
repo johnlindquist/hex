@@ -205,6 +205,117 @@ public final class HexBubbleService extends AccessibilityService {
     };
   }
   private int captureRequest;
+  private SpeechSession holdVoiceSession;
+  private final StringBuilder holdTranscript = new StringBuilder();
+  private long holdCaptureAt;
+  private boolean holdPendingOpen;
+
+  public static void insertAnywhereText(String text) {
+    HexBubbleService svc = active;
+    if (svc == null || text == null || text.isBlank()) return;
+    svc.main.postDelayed(() -> {
+      InputMethod.AccessibilityInputConnection ic = svc.connection();
+      if (ic != null) {
+        ic.commitText(text, 1, null);
+      } else {
+        Toast.makeText(svc, "Copied — paste into field", Toast.LENGTH_SHORT).show();
+      }
+    }, 220);
+  }
+
+  private void startHoldToSpeak() {
+    if (!connected || !unlocked() || !labs.isEnabled(LabId.TYPE_ANYWHERE)) return;
+    if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+        || !Engine.get(this).isAvailable()) {
+      launchTypeAnywhere();
+      return;
+    }
+    holdTranscript.setLength(0);
+    holdCaptureAt = 0;
+    holdPendingOpen = false;
+    int request = ++captureRequest;
+    TypeAnywhereStore.clear(this);
+    try {
+      takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
+        public void onFailure(int code) {
+          TypeAnywhereStore c = TypeAnywhereStore.put(HexBubbleService.this, null);
+          holdCaptureAt = c.capturedAt;
+        }
+        public void onSuccess(ScreenshotResult result) {
+          Bitmap pixels = decodeScreenshot(request, result);
+          TypeAnywhereStore c = TypeAnywhereStore.put(HexBubbleService.this, pixels);
+          holdCaptureAt = c.capturedAt;
+          if (pixels != null)
+            new Thread(() -> TypeAnywhereStore.persist(HexBubbleService.this, c), "ScreenHandoff").start();
+        }
+      });
+    } catch (RuntimeException ignored) {}
+
+    holdVoiceSession = new SpeechSession(this, Engine.get(this),
+        () -> new Microphone(this, settings.preferBuiltInMic()), raw -> raw,
+        new SpeechSession.Sink() {
+          public void onMeter(int[] targets) {}
+          public void onCheckpoint(byte[] pcmBytes) {}
+          public void onError(String code, String detail) {
+            main.post(() -> finishHoldAndOpen());
+          }
+          public void onPhraseReady(String rawText, String processedText, long durationMs) {
+            synchronized (holdTranscript) {
+              if (holdTranscript.length() > 0) holdTranscript.append(' ');
+              holdTranscript.append(rawText.trim());
+            }
+          }
+          public void onStateChanged(String s) {
+            if (s.equals("finished") || s.equals("cancelled") || s.equals("error")) {
+              main.post(() -> finishHoldAndOpen());
+            }
+          }
+        });
+    holdVoiceSession.start();
+  }
+
+  private void endHoldToSpeak() {
+    if (holdVoiceSession == null) return;
+    holdPendingOpen = true;
+    holdVoiceSession.finish();
+  }
+
+  private void finishHoldAndOpen() {
+    if (!holdPendingOpen && holdVoiceSession == null) return;
+    holdPendingOpen = false;
+    holdVoiceSession = null;
+    String q;
+    synchronized (holdTranscript) {
+      q = holdTranscript.toString().trim();
+      holdTranscript.setLength(0);
+    }
+    if (anywhereHandle != null) anywhereHandle.setVisibility(View.INVISIBLE);
+    startActivity(TypeAnywhereActivity.intent(this, holdCaptureAt, null, q.isEmpty() ? null : q));
+  }
+
+  private Bitmap decodeScreenshot(int request, ScreenshotResult result) {
+    Bitmap pixels = null;
+    try (HardwareBuffer buffer = result.getHardwareBuffer()) {
+      if (request != captureRequest) return null;
+      Bitmap wrapped = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
+      if (wrapped != null)
+        try {
+          pixels = wrapped.copy(Bitmap.Config.ARGB_8888, false);
+          if (pixels.getWidth() > 1080) {
+            Bitmap original = pixels;
+            pixels = Bitmap.createScaledBitmap(original, 1080,
+                Math.max(1, Math.round(original.getHeight() * 1080f / original.getWidth())), true);
+            original.recycle();
+          }
+        } finally {
+          wrapped.recycle();
+        }
+    } catch (RuntimeException | OutOfMemoryError e) {
+      pixels = null;
+    }
+    return pixels;
+  }
+
   public void launchTypeAnywhere() {
     if (!connected || !unlocked() || !labs.isEnabled(LabId.TYPE_ANYWHERE))
       return;
@@ -218,32 +329,11 @@ public final class HexBubbleService extends AccessibilityService {
               code == ERROR_TAKE_SCREENSHOT_SECURE_WINDOW ? "Protected" : "No screen");
         }
         public void onSuccess(ScreenshotResult result) {
-          Bitmap pixels = null;
-          try (HardwareBuffer buffer = result.getHardwareBuffer()) {
-            if (request != captureRequest)
-              return;
-            Bitmap wrapped = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
-            if (wrapped != null)
-              try {
-                pixels = wrapped.copy(Bitmap.Config.ARGB_8888, false);
-                if (pixels.getWidth() > 1080) {
-                  Bitmap original = pixels;
-                  pixels = Bitmap.createScaledBitmap(original, 1080,
-                      Math.max(1, Math.round(original.getHeight() * 1080f / original.getWidth())),
-                      true);
-                  original.recycle();
-                }
-              } finally {
-                wrapped.recycle();
-              }
-          } catch (RuntimeException | OutOfMemoryError e) {
-            pixels = null;
-          }
-          openAnywhere(request, pixels, "Screen unavailable — type your question");
+          openAnywhere(request, decodeScreenshot(request, result), "No screen");
         }
       });
     } catch (RuntimeException e) {
-      openAnywhere(request, null, "Screen unavailable — type your question");
+      openAnywhere(request, null, "No screen");
     }
   }
   private void openAnywhere(int request, Bitmap pixels, String note) {
@@ -395,6 +485,12 @@ public final class HexBubbleService extends AccessibilityService {
       @Override public void onTap() {
         if (anywhereHandle != null) anywhereHandle.setVisibility(View.INVISIBLE);
         main.postDelayed(HexBubbleService.this::launchTypeAnywhere, 60);
+      }
+      @Override public void onHoldStart() {
+        startHoldToSpeak();
+      }
+      @Override public void onHoldEnd() {
+        endHoldToSpeak();
       }
       @Override public void onDragStart() {
         if (anywhereParams == null) return;

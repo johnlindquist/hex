@@ -62,4 +62,31 @@ public class TypeAnywhereTest {
     assertEquals(anomaly.hex.android.core.HexSettings.ANYWHERE_SIZE_MAX_DP,
         anomaly.hex.android.core.HexSettings.clampAnywhereSize(120));
   }
+  @Test
+  public void screenActionsExtractsCalendarMapPhoneEmailAndUrl() {
+    String text = "Meet Friday at 3:30 pm at 123 Main Street.\n"
+        + "Call (555) 234-5678 or email alex@example.com.\n"
+        + "Details: https://anoma.ly/hex";
+    var actions = ScreenActions.extract(text);
+    assertEquals(5, actions.size());
+    assertEquals(ScreenActions.Kind.CALENDAR, actions.get(0).kind);
+    assertEquals(ScreenActions.Kind.MAP, actions.get(1).kind);
+    assertEquals("123 Main Street.", actions.get(1).value);
+    assertEquals(ScreenActions.Kind.PHONE, actions.get(2).kind);
+    assertEquals("(555) 234-5678", actions.get(2).value);
+    assertEquals(ScreenActions.Kind.EMAIL, actions.get(3).kind);
+    assertEquals("alex@example.com", actions.get(3).value);
+    assertEquals(ScreenActions.Kind.LINK, actions.get(4).kind);
+    assertEquals("https://anoma.ly/hex", actions.get(4).value);
+  }
+  @Test
+  public void screenActionsHandlesEmptyOrPlainText() {
+    assertTrue(ScreenActions.extract(null).isEmpty());
+    assertTrue(ScreenActions.extract("Just a short note with no actions.").isEmpty());
+  }
+  @Test
+  public void quickPromptsDefaultsAndPresetsAreNonEmpty() {
+    assertEquals(4, QuickPromptsStore.DEFAULTS.size());
+    assertTrue(QuickPromptsStore.PRESETS.size() >= 8);
+  }
 }

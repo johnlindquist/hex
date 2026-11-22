@@ -20,7 +20,15 @@ public final class AnywhereIcons {
     SEND,
     CLOSE,
     HISTORY,
-    TRASH
+    TRASH,
+    INSERT,
+    UNDO,
+    LINK,
+    CALENDAR,
+    MAP,
+    PHONE,
+    EMAIL,
+    PLUS
   }
 
   public static IconButton button(
@@ -160,6 +168,59 @@ public final class AnywhereIcons {
         c.drawLine(2.5f, -4.5f, 2f, -6.8f, p);
         c.drawLine(-2f, -6.8f, 2f, -6.8f, p);
         line(c, p, path, -4.8f, -4.5f, -4f, 6.5f, 4f, 6.5f, 4.8f, -4.5f);
+      }
+      case INSERT -> {
+        line(c, p, path, -6.5f, 2f, -6.5f, 6.5f, 6.5f, 6.5f, 6.5f, 2f);
+        c.drawLine(0f, -6.5f, 0f, 3f, p);
+        line(c, p, path, -3.8f, -0.8f, 0f, 3f, 3.8f, -0.8f);
+      }
+      case UNDO -> {
+        line(c, p, path, -3f, -6f, -7f, -2f, -3f, 2f);
+        path.rewind();
+        path.moveTo(-6.5f, -2f);
+        path.lineTo(1.5f, -2f);
+        path.cubicTo(7.5f, -2f, 7.5f, 6f, 1.5f, 6f);
+        c.drawPath(path, p);
+      }
+      case LINK -> {
+        line(c, p, path, -1f, -6f, -6f, -6f, -6f, 6f, 6f, 6f, 6f, 1f);
+        line(c, p, path, 1f, -6.5f, 6.5f, -6.5f, 6.5f, -1f);
+        c.drawLine(-0.5f, 0.5f, 6.5f, -6.5f, p);
+      }
+      case CALENDAR -> {
+        c.drawRoundRect(-6.5f, -5f, 6.5f, 6.5f, 1.8f, 1.8f, p);
+        c.drawLine(-6.5f, -1.2f, 6.5f, -1.2f, p);
+        c.drawLine(-3f, -7.2f, -3f, -4f, p);
+        c.drawLine(3f, -7.2f, 3f, -4f, p);
+      }
+      case MAP -> {
+        path.rewind();
+        path.moveTo(0f, 7.5f);
+        path.cubicTo(-6.5f, 1f, -6.5f, -7f, 0f, -7f);
+        path.cubicTo(6.5f, -7f, 6.5f, 1f, 0f, 7.5f);
+        c.drawPath(path, p);
+        c.drawCircle(0f, -1.8f, 2f, p);
+      }
+      case PHONE -> {
+        path.rewind();
+        path.moveTo(-5.5f, -5.5f);
+        path.lineTo(-2.5f, -6.5f);
+        path.lineTo(-1f, -3f);
+        path.lineTo(-3f, -1.2f);
+        path.quadTo(-1.5f, 1.8f, 1.2f, 3f);
+        path.lineTo(3f, 1f);
+        path.lineTo(6.5f, 2.5f);
+        path.lineTo(5.5f, 5.5f);
+        path.quadTo(-4.5f, 6f, -5.5f, -5.5f);
+        c.drawPath(path, p);
+      }
+      case EMAIL -> {
+        c.drawRoundRect(-7f, -5f, 7f, 5f, 1.6f, 1.6f, p);
+        line(c, p, path, -6.2f, -4.2f, 0f, 0.8f, 6.2f, -4.2f);
+      }
+      case PLUS -> {
+        c.drawLine(-5.5f, 0f, 5.5f, 0f, p);
+        c.drawLine(0f, -5.5f, 0f, 5.5f, p);
       }
     }
     c.restore();

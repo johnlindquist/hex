@@ -1116,6 +1116,7 @@ public final class HexHomeActivity extends Activity {
 
       if (lab == LabId.TYPE_ANYWHERE && labs.isEnabled(lab)) {
         anywhereSizeRow();
+        act("Customize quick prompts", false, this::configureQuickPrompts);
         act("Open accessibility settings", false, this::accessibility);
         act("Hex API proxy (Gemini 4 Hydrogen)", false, this::configureAnywhereKey);
       }
@@ -1165,5 +1166,63 @@ public final class HexHomeActivity extends Activity {
     lp.topMargin = d(8);
     box.addView(slider, lp);
     group.addView(box);
+  }
+  private void configureQuickPrompts() {
+    var slots = anomaly.hex.android.anywhere.QuickPromptsStore.load(this);
+    String[] items = new String[slots.size()];
+    for (int i = 0; i < slots.size(); i++) {
+      var s = slots.get(i);
+      items[i] = (i + 1) + ". " + s.label + " — " + s.prompt;
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Quick prompt slots")
+        .setItems(items, (d, which) -> editQuickPromptSlot(which, slots.get(which)))
+        .setNeutralButton("Reset defaults", (d, w) -> {
+          anomaly.hex.android.anywhere.QuickPromptsStore.reset(this);
+          Toast.makeText(this, "Quick prompts reset", Toast.LENGTH_SHORT).show();
+        })
+        .setNegativeButton("Done", null)
+        .show();
+  }
+  private void editQuickPromptSlot(int index, anomaly.hex.android.anywhere.QuickPromptsStore.Slot current) {
+    LinearLayout box = new LinearLayout(this);
+    box.setOrientation(LinearLayout.VERTICAL);
+    box.setPadding(d(20), d(12), d(20), d(4));
+
+    EditText label = new EditText(this);
+    label.setHint("Short label (e.g. Fact-check)");
+    label.setText(current.label);
+    label.setSingleLine();
+    box.addView(label);
+
+    EditText prompt = new EditText(this);
+    prompt.setHint("Prompt sent to Gemini");
+    prompt.setText(current.prompt);
+    box.addView(prompt);
+
+    new AlertDialog.Builder(this)
+        .setTitle("Slot " + (index + 1))
+        .setView(box)
+        .setPositiveButton("Save", (d, w) -> {
+          anomaly.hex.android.anywhere.QuickPromptsStore.save(
+              this, index, label.getText().toString(), prompt.getText().toString());
+          configureQuickPrompts();
+        })
+        .setNeutralButton("Presets", (d, w) -> {
+          var presets = anomaly.hex.android.anywhere.QuickPromptsStore.PRESETS;
+          String[] names = new String[presets.size()];
+          for (int i = 0; i < presets.size(); i++) names[i] = presets.get(i).label;
+          new AlertDialog.Builder(this)
+              .setTitle("Choose preset for slot " + (index + 1))
+              .setItems(names, (pd, pIdx) -> {
+                var chosen = presets.get(pIdx);
+                anomaly.hex.android.anywhere.QuickPromptsStore.save(this, index, chosen.label, chosen.prompt);
+                configureQuickPrompts();
+              })
+              .setNegativeButton("Cancel", null)
+              .show();
+        })
+        .setNegativeButton("Cancel", null)
+        .show();
   }
 }
