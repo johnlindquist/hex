@@ -41,7 +41,7 @@ public final class HexInputMethodService extends InputMethodService implements F
   private DictationUndo undo;
   private String rewriteUndoOriginal, rewriteUndoApplied;
   private long rewriteGen;
-  private String lastRewriteDraft;
+  private String lastRewriteDraft, lastRewriteInstruction;
   private final SelectionTrackpad trackpad = new SelectionTrackpad();
   private int trackpadOffset;
   private SpeechSession session;
@@ -343,14 +343,32 @@ public final class HexInputMethodService extends InputMethodService implements F
     String draft = readFullMessage(c).trim();
     if (draft.isEmpty()) { notice("Type or dictate a message first"); return; }
     lastRewriteDraft = draft;
-    startRewrite(draft);
+    lastRewriteInstruction = null;
+    startRewrite(draft, null);
+  }
+  @Override public void onRewriteWithPrompt() {
+    InputConnection c = ic();
+    if (c == null || fullView == null) return;
+    if (privateField) { notice("Rewrite unavailable in passwords"); return; }
+    lastRewriteDraft = readFullMessage(c).trim();
+    fullView.showRewritePrompt(lastRewriteInstruction);
+  }
+  @Override public void onRewriteSubmitPrompt(String instruction) {
+    InputConnection c = ic();
+    if (c == null || fullView == null) return;
+    String inst = instruction == null ? "" : instruction.trim();
+    if (inst.isEmpty()) return;
+    String draft = readFullMessage(c).trim();
+    lastRewriteDraft = draft;
+    lastRewriteInstruction = inst;
+    startRewrite(draft, inst);
   }
   @Override public void onRewriteRetry() {
     InputConnection c = ic();
     String draft = c != null ? readFullMessage(c).trim() : "";
     if (draft.isEmpty() && lastRewriteDraft != null) draft = lastRewriteDraft;
-    if (draft.isEmpty()) return;
-    startRewrite(draft);
+    if (draft.isEmpty() && (lastRewriteInstruction == null || lastRewriteInstruction.isBlank())) return;
+    startRewrite(draft, lastRewriteInstruction);
   }
   @Override public void onRewriteClose() {
     rewriteGen++;
@@ -365,20 +383,20 @@ public final class HexInputMethodService extends InputMethodService implements F
     setRewriteUndo(original, replacement);
     refresh();
   }
-  private void startRewrite(String draft) {
+  private void startRewrite(String draft, String instruction) {
     if (fullView == null) return;
     long ticket = ++rewriteGen;
-    fullView.showRewriteLoading(draft, true);
+    fullView.showRewriteLoading(draft, instruction, true);
     anomaly.hex.android.service.HexBubbleService.captureScreenForKeyboard(screen -> {
       if (ticket != rewriteGen || fullView == null) {
         if (screen != null && !screen.isRecycled()) screen.recycle();
         return;
       }
-      fullView.showRewriteLoading(draft, screen != null);
-      KeyboardRewriteClient.rewrite(this, draft, screen, new KeyboardRewriteClient.Callback() {
-        @Override public void onOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen) {
+      fullView.showRewriteLoading(draft, instruction, screen != null);
+      KeyboardRewriteClient.rewrite(this, draft, instruction, screen, new KeyboardRewriteClient.Callback() {
+        @Override public void onOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb) {
           if (ticket != rewriteGen || fullView == null) return;
-          fullView.showRewriteOptions(options, usedScreen);
+          fullView.showRewriteOptions(options, usedScreen, usedWeb);
         }
         @Override public void onError(String message) {
           if (ticket != rewriteGen || fullView == null) return;

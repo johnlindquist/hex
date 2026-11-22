@@ -53,6 +53,16 @@ public final class SuggestionStripView extends FrameLayout {
         noticeAction.setOnClickListener(v->{ showNotice(null,false); host.onOpenApp(); });
         noticeBar.addView(noticeAction,nap); noticeBar.setVisibility(GONE);
         center.addView(noticeBar,new LayoutParams(-2,dp(c,30),Gravity.CENTER)); setUndo(false);
+        View promptRewriteBtn=new View(c) {
+            protected void onDraw(android.graphics.Canvas canvas) {
+                KeyIcons.drawPromptRewrite(canvas,getWidth()/2f,getHeight()/2f,dp(c,18),TEXT_MUTED);
+            }
+        };
+        promptRewriteBtn.setContentDescription("Rewrite with prompt");
+        promptRewriteBtn.setBackground(pressable(CHIP_FILL));
+        promptRewriteBtn.setOnClickListener(v->host.onRewriteWithPrompt());
+        LinearLayout.LayoutParams prp=new LinearLayout.LayoutParams(dp(c,34),dp(c,34)); prp.leftMargin=dp(c,4);
+        typing.addView(promptRewriteBtn,prp);
         View rewriteBtn=new View(c) {
             protected void onDraw(android.graphics.Canvas canvas) {
                 KeyIcons.drawSparkle(canvas,getWidth()/2f,getHeight()/2f,dp(c,18),TEXT_MUTED);

@@ -39,5 +39,8 @@ public class KeyboardRewriteTest {
     assertTrue(KeyboardRewriteClient.parseResponse(null).isEmpty());
     assertTrue(KeyboardRewriteClient.parseResponse("not json").isEmpty());
     assertTrue(KeyboardRewriteClient.parseResponse("{}").isEmpty());
+    assertFalse(KeyboardRewriteClient.parseSearched(null));
+    assertFalse(KeyboardRewriteClient.parseSearched("{}"));
+    assertTrue(KeyboardRewriteClient.parseSearched("{\"searched\":true,\"options\":[]}"));
   }
 }

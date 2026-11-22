@@ -27,7 +27,7 @@ public final class KeyboardRewriteClient {
   }
 
   public interface Callback {
-    void onOptions(List<Option> options, boolean usedScreen);
+    void onOptions(List<Option> options, boolean usedScreen, boolean usedWeb);
     void onError(String message);
   }
 
@@ -68,10 +68,24 @@ public final class KeyboardRewriteClient {
     }
   }
 
+  public static boolean parseSearched(String json) {
+    if (json == null || json.isBlank()) return false;
+    try {
+      return new JSONObject(json).optBoolean("searched", false);
+    } catch (JSONException e) {
+      return false;
+    }
+  }
+
   public static void rewrite(Context context, String draft, Bitmap screen, Callback cb) {
+    rewrite(context, draft, null, screen, cb);
+  }
+
+  public static void rewrite(Context context, String draft, String instruction, Bitmap screen, Callback cb) {
     Context c = context.getApplicationContext();
     Handler main = new Handler(Looper.getMainLooper());
     boolean hasScreen = screen != null;
+    String inst = instruction == null ? "" : instruction.trim();
     try {
       worker.execute(() -> {
         String token = TypeAnywhereAiClient.key(c);
@@ -82,6 +96,7 @@ public final class KeyboardRewriteClient {
         String url = rewriteEndpoint(TypeAnywhereAiClient.endpoint(c));
         try {
           JSONObject payload = new JSONObject().put("draft", draft == null ? "" : draft.trim());
+          if (!inst.isEmpty()) payload.put("instruction", inst);
           if (screen != null && !screen.isRecycled()) {
             ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
             if (screen.compress(Bitmap.CompressFormat.JPEG, 72, jpeg)) {
@@ -110,10 +125,11 @@ public final class KeyboardRewriteClient {
               throw new IOException("HTTP " + code + ": " + resp);
             }
             List<Option> options = parseResponse(resp);
+            boolean usedWeb = parseSearched(resp);
             if (options.isEmpty()) {
               throw new IOException("No rewrite options returned.");
             }
-            main.post(() -> cb.onOptions(options, hasScreen));
+            main.post(() -> cb.onOptions(options, hasScreen, usedWeb));
           } finally {
             conn.disconnect();
           }

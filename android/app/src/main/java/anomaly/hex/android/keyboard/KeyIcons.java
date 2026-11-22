@@ -71,6 +71,13 @@ final class KeyIcons {
         line(c,5.5f,3,5.5f,8); line(c,3,5.5f,8,5.5f);
         c.restore();
     }
+    static void drawPromptRewrite(Canvas c,float x,float y,float s,int color) {
+        begin(c,x,y,s,color);
+        // Diagonal pencil + small sparkle at top-left
+        line(c,-6,7,-4,1,4,-7,7,-4,-1,4,-6,7);
+        line(c,-6,-7,-6,-3); line(c,-8,-5,-4,-5);
+        c.restore();
+    }
     static void drawRefresh(Canvas c,float x,float y,float s,int color) {
         begin(c,x,y,s,color);
         c.drawArc(-6.5f,-6.5f,6.5f,6.5f,-60,290,false,p);

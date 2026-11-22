@@ -21,6 +21,8 @@ public final class FullKeyboardView extends FrameLayout {
         void onEmojiPick(String emoji);
         void onUndoDictation();
         void onRewriteMessage();
+        void onRewriteWithPrompt();
+        void onRewriteSubmitPrompt(String instruction);
         void onRewritePick(String replacement);
         void onRewriteRetry();
         void onRewriteClose();
@@ -70,23 +72,45 @@ public final class FullKeyboardView extends FrameLayout {
             rewritePanel=new RewritePanelView(
                 getContext(),
                 opt -> host.onRewritePick(opt.text),
+                instruction -> {
+                    plane.setSearching(false);
+                    plane.setVisibility(INVISIBLE);
+                    requestLayout();
+                    host.onRewriteSubmitPrompt(instruction);
+                },
+                host::onRewriteWithPrompt,
                 host::onRewriteRetry,
                 () -> { closeRewrite(); host.onRewriteClose(); });
-            addView(rewritePanel,new LayoutParams(-1,-1));
+            addView(rewritePanel,indexOfChild(plane),new LayoutParams(-1,-1));
         }
     }
-    public void showRewriteLoading(String draft, boolean readingScreen) {
+    public void showRewritePrompt(String initialPrompt) {
         closeEmoji();
         ensureRewritePanel();
         rewriteOpen=true;
-        rewritePanel.showLoading(draft, readingScreen);
+        rewritePanel.openPrompt(initialPrompt);
         rewritePanel.setVisibility(VISIBLE);
         strip.setVisibility(INVISIBLE);
-        plane.setVisibility(INVISIBLE);
+        plane.letters();
+        plane.setSearching(true);
+        plane.autoCap(false);
+        plane.setVisibility(VISIBLE);
+        requestLayout();
     }
-    public void showRewriteOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen) {
+    public void showRewriteLoading(String draft, String instruction, boolean readingScreen) {
+        closeEmoji();
+        ensureRewritePanel();
+        rewriteOpen=true;
+        rewritePanel.showLoading(draft, instruction, readingScreen);
+        rewritePanel.setVisibility(VISIBLE);
+        strip.setVisibility(INVISIBLE);
+        plane.setSearching(false);
+        plane.setVisibility(INVISIBLE);
+        requestLayout();
+    }
+    public void showRewriteOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb) {
         if(!rewriteOpen || rewritePanel==null) return;
-        rewritePanel.showOptions(options, usedScreen);
+        rewritePanel.showOptions(options, usedScreen, usedWeb);
     }
     public void showRewriteError(String error) {
         if(!rewriteOpen || rewritePanel==null) return;
@@ -96,10 +120,13 @@ public final class FullKeyboardView extends FrameLayout {
         if(!rewriteOpen) return;
         rewriteOpen=false;
         if(rewritePanel!=null) rewritePanel.setVisibility(GONE);
+        plane.setSearching(false);
         if(!emojiOpen) {
+            plane.letters();
             plane.setVisibility(VISIBLE);
             strip.setVisibility(VISIBLE);
         }
+        requestLayout();
     }
     private void toggleSearch() {
         boolean search=!panel.searching(); panel.search(search); plane.letters(); plane.setSearching(search); if(search) plane.autoCap(false); plane.setVisibility(search?VISIBLE:INVISIBLE); requestLayout();
@@ -131,29 +158,34 @@ public final class FullKeyboardView extends FrameLayout {
     public void setUndoVisible(boolean visible, String label) { strip.setUndo(visible, label); }
     public void showNotice(String message, boolean openApp) { closeEmoji(); closeRewrite(); strip.showNotice(message, openApp); }
     public void setFieldKind(KeyboardLayout.FieldKind kind,String returnLabel) { closeEmoji(); closeRewrite(); plane.field(kind,returnLabel); }
-    public void setAutoCap(boolean value) { if(!(emojiOpen && panel!=null && panel.searching())) plane.autoCap(value); }
+    public void setAutoCap(boolean value) {
+        boolean typingInPanel = (emojiOpen && panel!=null && panel.searching()) || (rewriteOpen && rewritePanel!=null && rewritePanel.prompting());
+        if(!typingInPanel) plane.autoCap(value);
+    }
     public void setSettings(KeyboardLanguage language,boolean keyPopups,boolean haptics,boolean emojiEnabled) {
         this.emojiEnabled=emojiEnabled; strip.setEmojiEnabled(emojiEnabled);
         if(!emojiEnabled) { closeEmoji(); emojiContext=null; strip.contextEmoji(null); }
         plane.settings(language,keyPopups,haptics,emojiEnabled);
     }
     private final class PlaneHost implements KeyPlaneView.Input {
-        public void onCharacter(String s) { if(emojiOpen) panel.append(s); else host.onCharacter(s); }
-        public void onDeleteChar() { if(emojiOpen) panel.erase(); else host.onDeleteChar(); }
-        public void onDeleteWord() { if(emojiOpen) panel.eraseWord(); else host.onDeleteWord(); }
-        public void onSpace() { if(emojiOpen) panel.append(" "); else host.onSpace(); }
-        public void onReturn() { if(emojiOpen) toggleSearch(); else host.onReturn(); }
-        public void onSelectionStart() { if(!emojiOpen) host.onSelectionStart(); }
-        public void onSelectionExtend(int d) { if(!emojiOpen) host.onSelectionExtend(d); }
+        private boolean inRewritePrompt() { return rewriteOpen && rewritePanel!=null && rewritePanel.prompting(); }
+        public void onCharacter(String s) { if(emojiOpen) panel.append(s); else if(inRewritePrompt()) rewritePanel.append(s); else host.onCharacter(s); }
+        public void onDeleteChar() { if(emojiOpen) panel.erase(); else if(inRewritePrompt()) rewritePanel.erase(); else host.onDeleteChar(); }
+        public void onDeleteWord() { if(emojiOpen) panel.eraseWord(); else if(inRewritePrompt()) rewritePanel.eraseWord(); else host.onDeleteWord(); }
+        public void onSpace() { if(emojiOpen) panel.append(" "); else if(inRewritePrompt()) rewritePanel.append(" "); else host.onSpace(); }
+        public void onReturn() { if(emojiOpen) toggleSearch(); else if(inRewritePrompt()) rewritePanel.submitPrompt(); else host.onReturn(); }
+        public void onSelectionStart() { if(!emojiOpen && !inRewritePrompt()) host.onSelectionStart(); }
+        public void onSelectionExtend(int d) { if(!emojiOpen && !inRewritePrompt()) host.onSelectionExtend(d); }
         public void onSelectionEnd() { host.onSelectionEnd(); }
-        public void onCursorMove(int d) { if(!emojiOpen) host.onCursorMove(d); }
+        public void onCursorMove(int d) { if(!emojiOpen && !inRewritePrompt()) host.onCursorMove(d); }
         public void onSwitchKeyboard() { host.onSwitchKeyboard(); }
     }
     @Override protected void onMeasure(int w,int h) {
         plane.measure(w,MeasureSpec.makeMeasureSpec(0,MeasureSpec.UNSPECIFIED));
         strip.getLayoutParams().height=dp(getContext(),plane.landscape()?42:50);
         if(drums!=null) ((LayoutParams)drums.getLayoutParams()).topMargin=strip.getLayoutParams().height;
-        int lift=emojiOpen && panel.searching()?dp(getContext(),96)-strip.getLayoutParams().height:0;
+        boolean lifted = (emojiOpen && panel!=null && panel.searching()) || (rewriteOpen && rewritePanel!=null && rewritePanel.prompting());
+        int lift=lifted ? dp(getContext(),96)-strip.getLayoutParams().height : 0;
         ((LayoutParams)plane.getLayoutParams()).topMargin=lift;
         super.onMeasure(w,MeasureSpec.makeMeasureSpec(resolveSize(plane.getMeasuredHeight()+lift,h),MeasureSpec.EXACTLY));
     }
