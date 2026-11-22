@@ -56,6 +56,7 @@ public final class AutocorrectEngine {
             "shell", "she'll"
     );
     private final boolean english;
+    private final boolean spatialMode;
     private final WordDictionary dictionary;
     private final PersonalAutocorrectStore store;
     private final SystemUserDictionary.Snapshot userDict;
@@ -65,14 +66,19 @@ public final class AutocorrectEngine {
     private Correction pending;
     private String undoContext;
 
-    public AutocorrectEngine() { this(KeyboardLanguage.EN, null, null, false, SystemUserDictionary.Snapshot.EMPTY); }
-    public AutocorrectEngine(KeyboardLanguage language) { this(language, null, null, false, SystemUserDictionary.Snapshot.EMPTY); }
+    public AutocorrectEngine() { this(KeyboardLanguage.EN, null, null, false, SystemUserDictionary.Snapshot.EMPTY, false); }
+    public AutocorrectEngine(KeyboardLanguage language) { this(language, null, null, false, SystemUserDictionary.Snapshot.EMPTY, false); }
     public AutocorrectEngine(KeyboardLanguage language, WordDictionary dictionary, PersonalAutocorrectStore store, boolean allowLearning) {
-        this(language, dictionary, store, allowLearning, SystemUserDictionary.Snapshot.EMPTY);
+        this(language, dictionary, store, allowLearning, SystemUserDictionary.Snapshot.EMPTY, false);
     }
     public AutocorrectEngine(KeyboardLanguage language, WordDictionary dictionary, PersonalAutocorrectStore store,
                              boolean allowLearning, SystemUserDictionary.Snapshot userDict) {
+        this(language, dictionary, store, allowLearning, userDict, false);
+    }
+    public AutocorrectEngine(KeyboardLanguage language, WordDictionary dictionary, PersonalAutocorrectStore store,
+                             boolean allowLearning, SystemUserDictionary.Snapshot userDict, boolean spatialMode) {
         english = language == KeyboardLanguage.EN;
+        this.spatialMode = spatialMode;
         this.dictionary = dictionary;
         this.store = store;
         this.allowLearning = allowLearning;
@@ -172,9 +178,32 @@ public final class AutocorrectEngine {
             }
         }
 
-        // 4. Full 30k English frequency dictionary + QWERTY spatial-proximity 1-edit + missed-space split
+        // 4. Full 30k English frequency dictionary + QWERTY spatial decoding (multi-key fat-thumb in spatialMode, else 1-edit)
         if (english && dictionary != null && dictionary.size() > 0 && lower.length() >= 3 && isPlainWord(word)) {
             if (!dictionary.contains(lower)) {
+                if (spatialMode) {
+                    List<WordDictionary.Candidate> spatial = SpatialKeyboardDecoder.decode(dictionary, lower, 4);
+                    if (!spatial.isEmpty()) {
+                        // Prefer local Gemma contextual pick if provided via spellSuggestions[0]
+                        if (spellSuggestions != null && !spellSuggestions.isEmpty()) {
+                            String reranked = spellSuggestions.get(0);
+                            for (WordDictionary.Candidate c : spatial) {
+                                if (c.word().equalsIgnoreCase(reranked)) {
+                                    return new Correction(word, c.word(), matchCase(word, title, c.word()));
+                                }
+                            }
+                        }
+                        WordDictionary.Candidate top = spatial.get(0);
+                        if (top.cost() <= 24 || (top.cost() <= 40 && top.rank() < 6000)) {
+                            return new Correction(word, top.word(), matchCase(word, title, top.word()));
+                        }
+                    }
+                    String split = dictionary.splitMissedSpace(lower);
+                    if (split != null) {
+                        return new Correction(word, split, matchCase(word, title, split));
+                    }
+                    return null; // In spatial mode, skip distant traditional spellcheck.
+                }
                 List<WordDictionary.Candidate> edits = dictionary.bestEdits(lower, 1);
                 String split = dictionary.splitMissedSpace(lower);
                 if (!edits.isEmpty()) {
@@ -196,7 +225,7 @@ public final class AutocorrectEngine {
         }
 
         // 5. System SpellCheckerSession recommendation (e.g. 2-edit typos or non-English locales)
-        if (spellSuggestions != null && !spellSuggestions.isEmpty() && lower.length() >= 3 && isPlainWord(word)) {
+        if (!spatialMode && spellSuggestions != null && !spellSuggestions.isEmpty() && lower.length() >= 3 && isPlainWord(word)) {
             String best = spellSuggestions.get(0);
             if (best != null && !best.isBlank() && !best.equalsIgnoreCase(word)
                     && (dictionary == null || !english || !dictionary.contains(lower))) {
@@ -325,7 +354,10 @@ public final class AutocorrectEngine {
         // Secondary dictionary edits or prefix completions
         if (english && dictionary != null && dictionary.size() > 0 && isPlainWord(currentWord) && result.size() < 3) {
             if (!dictionary.contains(lower) && lower.length() >= 3) {
-                for (WordDictionary.Candidate c : dictionary.bestEdits(lower, 3)) {
+                List<WordDictionary.Candidate> cands = spatialMode
+                        ? SpatialKeyboardDecoder.decode(dictionary, lower, 3)
+                        : dictionary.bestEdits(lower, 3);
+                for (WordDictionary.Candidate c : cands) {
                     if (result.size() == 3) break;
                     String m = matchCase(currentWord, title, c.word());
                     if (!result.contains(m)) result.add(m);
@@ -366,6 +398,20 @@ public final class AutocorrectEngine {
             }
         }
         return List.copyOf(result);
+    }
+
+    /** Returns top spatial candidate words for optional local Gemma contextual reranking. */
+    public List<String> spatialCandidates(String currentWord) {
+        if (!spatialMode || !english || dictionary == null || currentWord == null || currentWord.length() < 3 || !isPlainWord(currentWord)) {
+            return List.of();
+        }
+        String lower = currentWord.toLowerCase(Locale.ROOT);
+        if (dictionary.contains(lower)) return List.of();
+        List<WordDictionary.Candidate> cands = SpatialKeyboardDecoder.decode(dictionary, lower, 4);
+        if (cands.size() < 2) return List.of();
+        List<String> out = new ArrayList<>(cands.size());
+        for (WordDictionary.Candidate c : cands) out.add(c.word());
+        return out;
     }
 
     private static boolean isPlainWord(String word) {

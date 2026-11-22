@@ -29,12 +29,13 @@ public final class HexInputMethodService extends InputMethodService implements F
   private AutocorrectEngine autocorrect;
   private PersonalAutocorrectStore personalStore;
   private SystemSpellChecker spellChecker;
+  private final LocalSpatialReranker spatialReranker = new LocalSpatialReranker();
   private volatile WordDictionary englishDictionary;
   private volatile SystemUserDictionary.Snapshot userDictionary = SystemUserDictionary.Snapshot.EMPTY;
   private SpeechLanguage speechLang;
   private List<String> vocabulary = List.of();
   private EditorInfo editor;
-  private boolean privateField, words, emojiEnabled;
+  private boolean privateField, words, emojiEnabled, spatialAutocorrect;
   private int action;
   private long lastSpace, generation;
   private String state = "idle";
@@ -67,7 +68,7 @@ public final class HexInputMethodService extends InputMethodService implements F
         if (editor != null && autocorrect != null) {
           KeyboardLanguage lang = KeyboardLanguage.resolve(kbSettings.layoutLanguage(), Locale.getDefault());
           boolean allowLearn = !privateField && (editor.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
-          autocorrect = new AutocorrectEngine(lang, englishDictionary, personalStore, allowLearn, userDictionary);
+          autocorrect = new AutocorrectEngine(lang, englishDictionary, personalStore, allowLearn, userDictionary, spatialAutocorrect);
           refresh();
         }
       });
@@ -107,10 +108,11 @@ public final class HexInputMethodService extends InputMethodService implements F
     };
     words = text && !privateField && kind == KeyboardLayout.FieldKind.TEXT && (type & InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS) == 0;
     emojiEnabled = labs.isEnabled(LabId.EMOJI_KEYBOARD);
+    spatialAutocorrect = labs.isEnabled(LabId.SPATIAL_AUTOCORRECT);
     KeyboardLanguage language = KeyboardLanguage.resolve(kbSettings.layoutLanguage(), Locale.getDefault());
     boolean allowLearn = !privateField && (info.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
-    autocorrect = new AutocorrectEngine(language, englishDictionary, personalStore, allowLearn, userDictionary);
-    if (words && kbSettings.autocorrect()) spellChecker.open(this, Locale.forLanguageTag(language.code()));
+    autocorrect = new AutocorrectEngine(language, englishDictionary, personalStore, allowLearn, userDictionary, spatialAutocorrect);
+    if (words && kbSettings.autocorrect() && !spatialAutocorrect) spellChecker.open(this, Locale.forLanguageTag(language.code()));
     else spellChecker.close();
     CustomVocabulary vocab = new CustomVocabulary(this); vocabulary = vocab.isEnabled() ? vocab.terms() : List.of();
     action = (text && (type & InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0 || (info.imeOptions & EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0)
@@ -145,8 +147,8 @@ public final class HexInputMethodService extends InputMethodService implements F
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); if (fullView != null) fullView.resetSession(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
   @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); if (fullView != null) fullView.resetSession(); super.onWindowHidden(); }
-  @Override public void onDestroy() { KeyboardPresence.setImeVisible(false); if (spellChecker != null) spellChecker.close(); resetEditor(); main.removeCallbacksAndMessages(null); super.onDestroy(); }
-  @Override public void onTrimMemory(int level) { super.onTrimMemory(level); if (session == null && level >= TRIM_MEMORY_BACKGROUND) Engine.get(this).releaseIfIdle(); }
+  @Override public void onDestroy() { KeyboardPresence.setImeVisible(false); if (spellChecker != null) spellChecker.close(); spatialReranker.release(); resetEditor(); main.removeCallbacksAndMessages(null); super.onDestroy(); }
+  @Override public void onTrimMemory(int level) { super.onTrimMemory(level); if (level >= TRIM_MEMORY_BACKGROUND) { spatialReranker.release(); if (session == null) Engine.get(this).releaseIfIdle(); } }
   private InputConnection ic() { return editor == null ? null : getCurrentInputConnection(); }
   private String before(int n) {
     InputConnection c = ic(); CharSequence s = c == null ? null : c.getTextBeforeCursor(n, 0); return s == null ? "" : s.toString();
@@ -159,9 +161,9 @@ public final class HexInputMethodService extends InputMethodService implements F
     fullView.setAutoCap(!privateField && c.getCursorCapsMode(capFlags) != 0);
     String context = words ? before(256) : "";
     String current = word(context);
-    List<String> spellSugs = words && kbSettings.autocorrect() && spellChecker != null ? spellChecker.lookupOrQuery(current) : List.of();
-    List<String> suggestions = new ArrayList<>(autocorrect.suggestions(current, vocabulary, spellSugs));
-    boolean autoReplace = words && kbSettings.autocorrect() && autocorrect.willAutoReplace(current, spellSugs);
+    List<String> extraHints = lookupHints(context, current);
+    List<String> suggestions = new ArrayList<>(autocorrect.suggestions(current, vocabulary, extraHints));
+    boolean autoReplace = words && kbSettings.autocorrect() && autocorrect.willAutoReplace(current, extraHints);
     String emoji = emojiEnabled ? EmojiCatalog.suggestForContext(context) : null;
     if (emoji != null) { if (suggestions.size() == 3) suggestions.remove(2); suggestions.add(emoji); }
     fullView.setSuggestions(suggestions, autoReplace); fullView.setEmojiContext(context);
@@ -215,13 +217,27 @@ public final class HexInputMethodService extends InputMethodService implements F
       replace(typed.length(), s + " ");
     }
   }
+  private List<String> lookupHints(String context, String current) {
+    if (!words || !kbSettings.autocorrect() || current == null || current.isEmpty()) return List.of();
+    if (spatialAutocorrect) {
+      List<String> cands = autocorrect.spatialCandidates(current);
+      if (cands.size() < 2) return List.of();
+      String beforeWord = context.length() > current.length()
+          ? context.substring(0, context.length() - current.length()) : "";
+      String cached = spatialReranker.lookupCached(beforeWord, current, cands);
+      if (cached != null) return List.of(cached);
+      spatialReranker.requestRerank(this, beforeWord, current, cands, this::refresh);
+      return List.of();
+    }
+    return spellChecker != null ? spellChecker.lookupOrQuery(current) : List.of();
+  }
   public void onSpace() {
     if (ic() == null) return; setUndo(null);
     long now = SystemClock.uptimeMillis(); String s = words ? before(256) : "";
     if (lastSpace != 0 && now - lastSpace < 350 && s.endsWith(" ")) { editing(); replace(1, ". "); return; }
     lastSpace = now;
-    List<String> spellSugs = words && kbSettings.autocorrect() && spellChecker != null ? spellChecker.lookupOrQuery(word(s)) : List.of();
-    var fix = words && kbSettings.autocorrect() ? autocorrect.correctOnSpace(s, spellSugs) : null;
+    List<String> extraHints = lookupHints(s, word(s));
+    var fix = words && kbSettings.autocorrect() ? autocorrect.correctOnSpace(s, extraHints) : null;
     replace(fix == null ? 0 : fix.original().length(), fix == null ? " " : fix.caseMatched() + " ");
   }
   public void onDelete() { onDeleteChar(); }

@@ -28,19 +28,25 @@ public final class WordDictionary {
 
     private final HashMap<String, Integer> ranks;
     private final List<String> words;
+    private final Map<Integer, List<String>> wordsByLength;
 
     public WordDictionary(List<String> frequencyOrderedWords) {
         HashMap<String, Integer> map = new HashMap<>(frequencyOrderedWords.size() * 2);
         List<String> list = new ArrayList<>(frequencyOrderedWords.size());
+        Map<Integer, List<String>> byLen = new HashMap<>();
         for (int i = 0; i < frequencyOrderedWords.size(); i++) {
             String w = frequencyOrderedWords.get(i).trim().toLowerCase(Locale.ROOT);
             if (!w.isEmpty() && !map.containsKey(w)) {
                 map.put(w, list.size());
                 list.add(w);
+                if (w.length() >= 2 && w.length() <= 20) {
+                    byLen.computeIfAbsent(w.length(), k -> new ArrayList<>()).add(w);
+                }
             }
         }
         this.ranks = map;
         this.words = list;
+        this.wordsByLength = byLen;
     }
 
     public static WordDictionary loadEnglish(Context ctx) {
@@ -71,6 +77,10 @@ public final class WordDictionary {
     public boolean contains(String lower) { return ranks.containsKey(lower); }
     public int rankOf(String lower) { Integer r = ranks.get(lower); return r == null ? -1 : r; }
     public int size() { return words.size(); }
+    public List<String> wordsOfLength(int length) {
+        List<String> bucket = wordsByLength.get(length);
+        return bucket == null ? List.of() : bucket;
+    }
 
     private static final String[] COMMON_TWO_LETTER = {
         "to", "of", "in", "it", "is", "be", "as", "at", "so", "we",
@@ -213,10 +223,14 @@ public final class WordDictionary {
         return 9500;
     }
 
-    static boolean isAdjacentKey(char a, char b) {
-        if (a < 'a' || a > 'z' || b < 'a' || b > 'z') return false;
+    public static float keyDistanceSq(char a, char b) {
+        if (a < 'a' || a > 'z' || b < 'a' || b > 'z') return Float.MAX_VALUE;
         float dx = KEY_X[a - 'a'] - KEY_X[b - 'a'];
         float dy = KEY_Y[a - 'a'] - KEY_Y[b - 'a'];
-        return dx * dx + dy * dy <= 1.55f;
+        return dx * dx + dy * dy;
+    }
+
+    public static boolean isAdjacentKey(char a, char b) {
+        return keyDistanceSq(a, b) <= 1.55f;
     }
 }

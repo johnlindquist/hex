@@ -169,4 +169,34 @@ public class DictionaryAutocorrectTest {
         assertNotNull(c);
         assertEquals("definitely", c.caseMatched());
     }
+
+    @Test public void spatialAutocorrectDecodesMultiKeyFatThumbSlips() {
+        var spatial = new AutocorrectEngine(
+                KeyboardLanguage.EN, dict, PersonalAutocorrectStore.inMemory(), true,
+                SystemUserDictionary.Snapshot.EMPTY, true);
+        String[][] cases = {
+            {"tbks", "this"},
+            {"wjaf", "what"},
+            {"wpyld", "would"},
+            {"rbeir", "their"},
+            {"kblw", "know"},
+            {"thiks", "this"},
+            {"yku", "you"},
+            {"feom", "from"},
+            {"thst", "that"},
+            {"tbe", "the"},
+            {"gokd", "good"},
+            {"coyld", "could"},
+        };
+        for (String[] c : cases) {
+            var fix = spatial.correctOnSpace(c[0]);
+            assertNotNull("Expected spatial correction for " + c[0], fix);
+            assertEquals("For " + c[0], c[1], fix.caseMatched());
+        }
+        // Distant non-adjacent typos must NOT fire in spatial mode.
+        assertNull("Distant non-adjacent typo should not fire in spatial mode", spatial.correctOnSpace("qzxz"));
+        // Local Gemma reranker helper only accepts choices from the spatial candidate list.
+        assertEquals("tabs", LocalSpatialReranker.matchCandidate("  tabs. ", List.of("this", "tabs")));
+        assertNull(LocalSpatialReranker.matchCandidate("banana", List.of("this", "tabs")));
+    }
 }
