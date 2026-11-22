@@ -1054,31 +1054,132 @@ public final class HexHomeActivity extends Activity {
   }
   private void configureAnywhereKey() {
     SharedPreferences prefs = getSharedPreferences("hex_settings", MODE_PRIVATE);
+    String currentGemini = anomaly.hex.android.anywhere.TypeAnywhereAiClient.geminiKey(this);
+    String currentProxy = anomaly.hex.android.anywhere.TypeAnywhereAiClient.proxyToken(this);
+    String currentModel = anomaly.hex.android.anywhere.TypeAnywhereAiClient.model(this);
+
+    ScrollView scroll = new ScrollView(this);
     LinearLayout box = new LinearLayout(this);
     box.setOrientation(LinearLayout.VERTICAL);
     int p = dp(this, 16);
-    box.setPadding(p, dp(this, 8), p, 0);
+    box.setPadding(p, dp(this, 8), p, dp(this, 4));
+    scroll.addView(box);
+
+    TextView note = new TextView(this);
+    note.setText("Your key is encrypted in Android Keystore. Screenshots and prompts go directly to Google Gemini — Hex never sees your key or screen.\n\nTip: Restrict the key to Generative Language API and set a monthly budget cap in Google Cloud.");
+    note.setTextSize(12.5f);
+    note.setTextColor(0xFFB8BCC6);
+    note.setPadding(0, 0, 0, dp(this, 10));
+    box.addView(note);
+
+    Button getKeyBtn = new Button(this);
+    getKeyBtn.setText("Get API key in Google AI Studio ↗");
+    getKeyBtn.setAllCaps(false);
+    getKeyBtn.setOnClickListener(v -> {
+      try {
+        startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://aistudio.google.com/apikey")));
+      } catch (Exception ignored) {}
+    });
+    box.addView(getKeyBtn);
+
+    EditText keyInput = new EditText(this);
+    keyInput.setSingleLine();
+    keyInput.setHint(currentGemini.isEmpty()
+        ? "Gemini API key (AIza…)"
+        : "Saved: " + anomaly.hex.android.core.SecretStore.mask(currentGemini) + " (leave blank to keep)");
+    keyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+    box.addView(keyInput);
+
+    EditText modelInput = new EditText(this);
+    modelInput.setSingleLine();
+    modelInput.setHint("Model (default: " + anomaly.hex.android.anywhere.GeminiDirectClient.DEFAULT_MODEL + ")");
+    modelInput.setText(currentModel);
+    box.addView(modelInput);
+
+    TextView testStatus = new TextView(this);
+    testStatus.setTextSize(12.5f);
+    testStatus.setPadding(0, dp(this, 4), 0, dp(this, 6));
+    testStatus.setVisibility(View.GONE);
+
+    Button testBtn = new Button(this);
+    testBtn.setText("Test Gemini key (free)");
+    testBtn.setAllCaps(false);
+    testBtn.setOnClickListener(v -> {
+      String typed = keyInput.getText().toString().trim();
+      String candidate = typed.isEmpty() ? currentGemini : typed;
+      String candidateModel = modelInput.getText().toString().trim();
+      testBtn.setEnabled(false);
+      testStatus.setVisibility(View.VISIBLE);
+      testStatus.setTextColor(0xFFB8BCC6);
+      testStatus.setText("Checking key with Google…");
+      new Thread(() -> {
+        var res = anomaly.hex.android.anywhere.GeminiDirectClient.testKey(candidate, candidateModel);
+        runOnUiThread(() -> {
+          testBtn.setEnabled(true);
+          testStatus.setTextColor(res.ok ? 0xFF34C759 : 0xFFFF6B6B);
+          testStatus.setText((res.ok ? "✓ " : "✗ ") + res.message);
+        });
+      }, "hex-key-test").start();
+    });
+    box.addView(testBtn);
+    box.addView(testStatus);
+
+    LinearLayout advBox = new LinearLayout(this);
+    advBox.setOrientation(LinearLayout.VERTICAL);
+    advBox.setVisibility(currentProxy.isEmpty() ? View.GONE : View.VISIBLE);
+
+    TextView advToggle = new TextView(this);
+    advToggle.setText((advBox.getVisibility() == View.VISIBLE ? "▾ " : "▸ ") + "Advanced: Custom proxy (optional)");
+    advToggle.setTextSize(13f);
+    advToggle.setTextColor(0xFF9EA4B0);
+    advToggle.setPadding(0, dp(this, 10), 0, dp(this, 4));
+    advToggle.setOnClickListener(v -> {
+      boolean show = advBox.getVisibility() != View.VISIBLE;
+      advBox.setVisibility(show ? View.VISIBLE : View.GONE);
+      advToggle.setText((show ? "▾ " : "▸ ") + "Advanced: Custom proxy (optional)");
+    });
+    box.addView(advToggle);
+
     EditText endpoint = new EditText(this);
     endpoint.setSingleLine();
     endpoint.setHint(anomaly.hex.android.anywhere.TypeAnywhereAiClient.DEFAULT_ENDPOINT);
-    endpoint.setText(anomaly.hex.android.anywhere.TypeAnywhereAiClient.endpoint(this));
-    EditText key = new EditText(this);
-    key.setSingleLine();
-    key.setHint("Hex API bearer token");
-    key.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-    box.addView(endpoint);
-    box.addView(key);
-    AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Connect Hex API (Gemini 4 Hydrogen)")
-        .setMessage("Asking a question sends the captured screen and your question to your locked-down Hex API proxy. Remove the token to use on-device answers only.")
-        .setView(box).setNegativeButton("Cancel", null)
-        .setNeutralButton("Remove token", (d,n) -> prefs.edit().remove("type_anywhere_api_key").apply())
-        .setPositiveButton("Save", (d,n) -> {
+    endpoint.setText(anomaly.hex.android.anywhere.TypeAnywhereAiClient.customEndpoint(this));
+    advBox.addView(endpoint);
+
+    EditText proxyToken = new EditText(this);
+    proxyToken.setSingleLine();
+    proxyToken.setHint(currentProxy.isEmpty()
+        ? "Custom proxy bearer token (used only if Gemini key is empty)"
+        : "Saved proxy token: " + anomaly.hex.android.core.SecretStore.mask(currentProxy));
+    proxyToken.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+    advBox.addView(proxyToken);
+    box.addView(advBox);
+
+    AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Gemini API key (BYOK)")
+        .setView(scroll)
+        .setNegativeButton("Cancel", null)
+        .setNeutralButton("Remove keys", (d, n) -> {
+          anomaly.hex.android.anywhere.TypeAnywhereAiClient.setGeminiKey(this, "");
+          anomaly.hex.android.anywhere.TypeAnywhereAiClient.setProxyToken(this, "");
+          render();
+        })
+        .setPositiveButton("Save", (d, n) -> {
+          String newKey = keyInput.getText().toString().trim();
+          if (!newKey.isEmpty()) {
+            anomaly.hex.android.anywhere.TypeAnywhereAiClient.setGeminiKey(this, newKey);
+          }
+          String newModel = modelInput.getText().toString().trim();
+          anomaly.hex.android.anywhere.TypeAnywhereAiClient.setModel(this, newModel);
           String url = endpoint.getText().toString().trim();
-          String value = key.getText().toString().trim();
           SharedPreferences.Editor ed = prefs.edit();
-          if (!url.isEmpty()) ed.putString("type_anywhere_endpoint", url);
-          if (!value.isEmpty()) ed.putString("type_anywhere_api_key", value);
+          if (url.isEmpty()) ed.remove("type_anywhere_endpoint");
+          else ed.putString("type_anywhere_endpoint", url);
           ed.apply();
+          String newProxy = proxyToken.getText().toString().trim();
+          if (!newProxy.isEmpty()) {
+            anomaly.hex.android.anywhere.TypeAnywhereAiClient.setProxyToken(this, newProxy);
+          }
+          render();
         }).create();
     dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
     dialog.show();
@@ -1118,7 +1219,8 @@ public final class HexHomeActivity extends Activity {
         anywhereSizeRow();
         act("Customize quick prompts", false, this::configureQuickPrompts);
         act("Open accessibility settings", false, this::accessibility);
-        act("Hex API proxy (Gemini 4 Hydrogen)", false, this::configureAnywhereKey);
+        act("Gemini API key · " + anomaly.hex.android.anywhere.TypeAnywhereAiClient.connectionSummary(this),
+            false, this::configureAnywhereKey);
       }
       if (lab == LabId.WORDS_ON_SCREEN && labs.isEnabled(lab))
         act("Configure window access", false, this::accessibility);

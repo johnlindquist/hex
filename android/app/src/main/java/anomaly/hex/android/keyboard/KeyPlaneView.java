@@ -59,9 +59,23 @@ public final class KeyPlaneView extends View {
         language = lang; popups = popup; haptics = haptic; emoji = emojis; reset(); rebuild(getWidth()); requestLayout();
     }
     void field(FieldKind kind, String label) {
+        field(kind, label, Layer.LETTERS, true);
+    }
+    void field(FieldKind kind, String label, Layer initialLayer, boolean resetLayer) {
         field = kind;
         action = (label == null || label.isBlank() || label.equals("↵") || label.equalsIgnoreCase("return")) ? "" : label;
+        if (resetLayer) {
+            layer = initialLayer == null ? Layer.LETTERS : initialLayer;
+            shift.reset();
+        }
         reset(); rebuild(getWidth());
+    }
+    void resetSession() {
+        layer = Layer.LETTERS;
+        shift.reset();
+        searching = false;
+        reset();
+        if (getWidth() > 0) rebuild(getWidth());
     }
     void setSearching(boolean value) { if (searching != value) { searching = value; invalidate(); } }
     void letters() { layer = Layer.LETTERS; reset(); rebuild(getWidth()); }

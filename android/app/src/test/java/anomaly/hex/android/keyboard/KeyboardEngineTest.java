@@ -82,6 +82,21 @@ public class KeyboardEngineTest {
         m.onCharacterInserted(); assertEquals(OFF,m.state()); m.applyAutoCap(true); assertTrue(m.isUppercase());
     }
 
+    @Test public void shiftResetClearsCapsLockAndInitialLayerDefaultsToLetters() {
+        var m = new ShiftStateMachine();
+        m.onShiftDown(0); m.onShiftUp(); m.onShiftDown(150); m.onShiftUp();
+        assertEquals(CAPS_LOCK, m.state());
+        m.reset();
+        assertEquals(OFF, m.state());
+        assertFalse(m.isUppercase());
+
+        assertEquals(Layer.LETTERS, KeyboardLayout.initialLayerForInputClass(0)); // TYPE_NULL
+        assertEquals(Layer.LETTERS, KeyboardLayout.initialLayerForInputClass(1)); // TYPE_CLASS_TEXT
+        assertEquals(Layer.NUMBERS, KeyboardLayout.initialLayerForInputClass(2)); // TYPE_CLASS_NUMBER
+        assertEquals(Layer.NUMBERS, KeyboardLayout.initialLayerForInputClass(3)); // TYPE_CLASS_PHONE
+        assertEquals(Layer.NUMBERS, KeyboardLayout.initialLayerForInputClass(4)); // TYPE_CLASS_DATETIME
+    }
+
     @Test public void accentsPreserveLanguageOrderAndDedicatedKeys() {
         assertEquals("aàáâäæãåā", String.join("", AccentTable.accentsFor("a", EN)));
         assertEquals("aáàäâãåąæāª", String.join("", AccentTable.accentsFor("a", ES)));

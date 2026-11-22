@@ -116,7 +116,8 @@ public final class HexInputMethodService extends InputMethodService implements F
     if (fullView != null) {
       fullView.enableDrums(labs.isEnabled(LabId.PUNCTUATION_DRUMS));
       fullView.setSettings(language, kbSettings.keyPopups(), kbSettings.haptics(), emojiEnabled && !privateField && !EditorDeletePolicy.raw(type));
-      fullView.setFieldKind(kind, actionLabel());
+      fullView.setPrivateField(privateField);
+      fullView.setFieldKind(kind, actionLabel(), KeyboardLayout.initialLayerForInputClass(cls), !restarting);
     }
     meta(); drawState(idleState(), null); refresh(); Engine.get(this).prewarmAsync();
   }
@@ -139,9 +140,9 @@ public final class HexInputMethodService extends InputMethodService implements F
     barView.setReturnAction(!actionLabel().isEmpty());
   }
   private void resetEditor() { rewriteGen++; if (fullView != null) fullView.closeRewrite(); trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
-  @Override public void onFinishInputView(boolean finishing) { resetEditor(); super.onFinishInputView(finishing); }
+  @Override public void onFinishInputView(boolean finishing) { resetEditor(); if (fullView != null) fullView.resetSession(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
-  @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); super.onWindowHidden(); }
+  @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); if (fullView != null) fullView.resetSession(); super.onWindowHidden(); }
   @Override public void onDestroy() { KeyboardPresence.setImeVisible(false); if (spellChecker != null) spellChecker.close(); resetEditor(); main.removeCallbacksAndMessages(null); super.onDestroy(); }
   @Override public void onTrimMemory(int level) { super.onTrimMemory(level); if (session == null && level >= TRIM_MEMORY_BACKGROUND) Engine.get(this).releaseIfIdle(); }
   private InputConnection ic() { return editor == null ? null : getCurrentInputConnection(); }

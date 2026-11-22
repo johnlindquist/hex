@@ -39,4 +39,11 @@ public final class ShiftStateMachine {
     public void applyAutoCap(boolean shouldCap) {
         if (!held && state != State.CAPS_LOCK) state = shouldCap ? State.SHIFTED : State.OFF;
     }
+
+    public void reset() {
+        state = State.OFF;
+        held = false;
+        typedWhileHeld = false;
+        lastTap = -1;
+    }
 }

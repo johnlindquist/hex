@@ -16,6 +16,12 @@ import org.json.*;
 
 public final class TypeAnywhereAiClient {
   public static final String DEFAULT_ENDPOINT = "https://hex-api-five.vercel.app/api/ask";
+  public static final String SECRET_GEMINI_KEY = "gemini_api_key";
+  public static final String SECRET_PROXY_TOKEN = "proxy_api_token";
+  private static final String LEGACY_PREFS = "hex_settings";
+  private static final String LEGACY_KEY = "type_anywhere_api_key";
+  private static final String PREF_ENDPOINT = "type_anywhere_endpoint";
+  private static final String PREF_MODEL = "gemini_model";
 
   public static final class Turn {
     public final String role;
@@ -43,13 +49,57 @@ public final class TypeAnywhereAiClient {
   private static final ExecutorService worker =
       new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new SynchronousQueue<>());
 
+  public static String geminiKey(Context c) {
+    return SecretStore.get(c, SECRET_GEMINI_KEY);
+  }
+
+  public static boolean setGeminiKey(Context c, String key) {
+    return SecretStore.put(c, SECRET_GEMINI_KEY, key);
+  }
+
+  public static String model(Context c) {
+    String raw = c.getSharedPreferences(LEGACY_PREFS, 0).getString(PREF_MODEL, "");
+    return GeminiDirectClient.normalizeModel(raw);
+  }
+
+  public static void setModel(Context c, String model) {
+    String normalized = GeminiDirectClient.normalizeModel(model);
+    c.getSharedPreferences(LEGACY_PREFS, 0).edit().putString(PREF_MODEL, normalized).apply();
+  }
+
+  public static String proxyToken(Context c) {
+    SecretStore.migrateFromPlaintext(c, LEGACY_PREFS, LEGACY_KEY, SECRET_PROXY_TOKEN);
+    return SecretStore.get(c, SECRET_PROXY_TOKEN);
+  }
+
+  public static boolean setProxyToken(Context c, String token) {
+    c.getSharedPreferences(LEGACY_PREFS, 0).edit().remove(LEGACY_KEY).apply();
+    return SecretStore.put(c, SECRET_PROXY_TOKEN, token);
+  }
+
   public static String key(Context c) {
-    return c.getSharedPreferences("hex_settings", 0).getString("type_anywhere_api_key", "").trim();
+    return proxyToken(c);
+  }
+
+  public static String customEndpoint(Context c) {
+    return c.getSharedPreferences(LEGACY_PREFS, 0).getString(PREF_ENDPOINT, "").trim();
   }
 
   public static String endpoint(Context c) {
-    String custom = c.getSharedPreferences("hex_settings", 0).getString("type_anywhere_endpoint", "").trim();
+    String custom = customEndpoint(c);
     return custom.isEmpty() ? DEFAULT_ENDPOINT : custom;
+  }
+
+  public static String connectionSummary(Context c) {
+    String gKey = geminiKey(c);
+    if (!gKey.isEmpty()) {
+      return "Direct Gemini (" + SecretStore.mask(gKey) + ")";
+    }
+    String pTok = proxyToken(c);
+    if (!pTok.isEmpty()) {
+      return "Custom proxy (" + SecretStore.mask(pTok) + ")";
+    }
+    return "Not set — on-device only";
   }
 
   static void ask(Context context, Bitmap image, Bitmap secondImage, String text, String question,
@@ -63,12 +113,22 @@ public final class TypeAnywhereAiClient {
           main.post(() -> cb.onError("Type anywhere is off."));
           return;
         }
-        String token = key(c), url = endpoint(c);
+        String gKey = geminiKey(c);
+        String pToken = proxyToken(c);
+        String modelName = model(c);
+        String url = endpoint(c);
         String prompt = TypeAnywhereEngine.buildPrompt(text, question);
         File model = new File(c.getNoBackupFilesDir(), "gemma-4-E2B-it.litertlm");
+        boolean hasCloud = !gKey.isEmpty() || !pToken.isEmpty();
         try {
-          if (!token.isEmpty()) {
-            ProxyResult res = askProxy(url, token, text, question, image, secondImage, historyCopy);
+          if (!gKey.isEmpty()) {
+            String img1 = image != null ? encodeJpeg(image) : null;
+            String img2 = secondImage != null ? encodeJpeg(secondImage) : null;
+            GeminiDirectClient.AskResult res = GeminiDirectClient.ask(
+                gKey, modelName, text, question, img1, img2, historyCopy);
+            main.post(() -> cb.onAnswer(res.sourceLabel, res.answer, res.sources));
+          } else if (!pToken.isEmpty()) {
+            ProxyResult res = askProxy(url, pToken, text, question, image, secondImage, historyCopy);
             main.post(() -> cb.onAnswer(res.sourceLabel, res.answer, res.sources));
           } else if (model.isFile()) {
             String answer = gemma(c, model, prompt);
@@ -78,9 +138,12 @@ public final class TypeAnywhereAiClient {
             main.post(() -> cb.onAnswer("On-device screen analysis", answer, Collections.emptyList()));
           }
         } catch (Exception | LinkageError | OutOfMemoryError e) {
-          if (token.isEmpty())
+          if (!hasCloud)
             main.post(() -> cb.onAnswer("On-device screen analysis",
                 TypeAnywhereEngine.answerLocally(text, question), Collections.emptyList()));
+          else if (!gKey.isEmpty())
+            main.post(() -> cb.onError(
+                "Gemini couldn’t answer. Check your connection and API key in Hex › Labs › Type anywhere."));
           else
             main.post(() -> cb.onError(
                 "Hex API couldn’t answer. Check your connection and proxy token, then try again."));
@@ -129,6 +192,7 @@ public final class TypeAnywhereAiClient {
       }
       payload.put("history", arr);
     }
+    GeminiDirectClient.validateHttpsUrl(endpointUrl);
     byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
     HttpURLConnection conn = (HttpURLConnection) new URL(endpointUrl).openConnection();
     try {

@@ -10,7 +10,7 @@ import static anomaly.hex.android.keyboard.KeyboardPalette.*;
 public final class SuggestionStripView extends FrameLayout {
     private final FullKeyboardView.Host host;
     private final LinearLayout typing, recording, slots, toolbar;
-    private final View emojiTool;
+    private final View emojiTool, promptRewriteBtn, rewriteBtn;
     private final FrameLayout center;
     private final LinearLayout undo, noticeBar;
     private final TextView clock, noticeText, noticeAction, undoLabel;
@@ -53,7 +53,7 @@ public final class SuggestionStripView extends FrameLayout {
         noticeAction.setOnClickListener(v->{ showNotice(null,false); host.onOpenApp(); });
         noticeBar.addView(noticeAction,nap); noticeBar.setVisibility(GONE);
         center.addView(noticeBar,new LayoutParams(-2,dp(c,30),Gravity.CENTER)); setUndo(false);
-        View promptRewriteBtn=new View(c) {
+        promptRewriteBtn=new View(c) {
             protected void onDraw(android.graphics.Canvas canvas) {
                 KeyIcons.drawPromptRewrite(canvas,getWidth()/2f,getHeight()/2f,dp(c,18),TEXT_MUTED);
             }
@@ -63,7 +63,7 @@ public final class SuggestionStripView extends FrameLayout {
         promptRewriteBtn.setOnClickListener(v->host.onRewriteWithPrompt());
         LinearLayout.LayoutParams prp=new LinearLayout.LayoutParams(dp(c,34),dp(c,34)); prp.leftMargin=dp(c,4);
         typing.addView(promptRewriteBtn,prp);
-        View rewriteBtn=new View(c) {
+        rewriteBtn=new View(c) {
             protected void onDraw(android.graphics.Canvas canvas) {
                 KeyIcons.drawSparkle(canvas,getWidth()/2f,getHeight()/2f,dp(c,18),TEXT_MUTED);
             }
@@ -107,6 +107,11 @@ public final class SuggestionStripView extends FrameLayout {
         states.addState(new int[0],pill(fill)); return states;
     }
     void setEmojiEnabled(boolean enabled) { emojiTool.setVisibility(enabled?VISIBLE:GONE); }
+    void setPrivateField(boolean priv) {
+        int vis = priv ? GONE : VISIBLE;
+        promptRewriteBtn.setVisibility(vis);
+        rewriteBtn.setVisibility(vis);
+    }
     private void updateContent() {
         boolean available=undo.getVisibility()!=VISIBLE && noticeBar.getVisibility()!=VISIBLE;
         boolean idle=items.isEmpty() && emojiContext==null;

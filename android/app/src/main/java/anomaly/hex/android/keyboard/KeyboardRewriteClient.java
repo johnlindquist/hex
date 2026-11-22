@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Base64;
+import anomaly.hex.android.anywhere.GeminiDirectClient;
 import anomaly.hex.android.anywhere.TypeAnywhereAiClient;
 import java.io.*;
 import java.net.*;
@@ -88,21 +89,33 @@ public final class KeyboardRewriteClient {
     String inst = instruction == null ? "" : instruction.trim();
     try {
       worker.execute(() -> {
-        String token = TypeAnywhereAiClient.key(c);
-        if (token.isEmpty()) {
-          main.post(() -> cb.onError("Set your Hex API token in Hex › Labs › Type anywhere."));
+        String geminiKey = TypeAnywhereAiClient.geminiKey(c);
+        String proxyToken = TypeAnywhereAiClient.proxyToken(c);
+        if (geminiKey.isEmpty() && proxyToken.isEmpty()) {
+          main.post(() -> cb.onError("Add your Gemini API key in Hex › Labs › Type anywhere."));
           return;
         }
-        String url = rewriteEndpoint(TypeAnywhereAiClient.endpoint(c));
         try {
-          JSONObject payload = new JSONObject().put("draft", draft == null ? "" : draft.trim());
-          if (!inst.isEmpty()) payload.put("instruction", inst);
+          String imgBase64 = null;
           if (screen != null && !screen.isRecycled()) {
             ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
             if (screen.compress(Bitmap.CompressFormat.JPEG, 72, jpeg)) {
-              payload.put("imageBase64", Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP));
-              payload.put("imageMimeType", "image/jpeg");
+              imgBase64 = Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP);
             }
+          }
+          if (!geminiKey.isEmpty()) {
+            GeminiDirectClient.RewriteResult res = GeminiDirectClient.rewrite(
+                geminiKey, TypeAnywhereAiClient.model(c), draft, inst, imgBase64);
+            main.post(() -> cb.onOptions(res.options, hasScreen, res.searched));
+            return;
+          }
+          String url = rewriteEndpoint(TypeAnywhereAiClient.endpoint(c));
+          GeminiDirectClient.validateHttpsUrl(url);
+          JSONObject payload = new JSONObject().put("draft", draft == null ? "" : draft.trim());
+          if (!inst.isEmpty()) payload.put("instruction", inst);
+          if (imgBase64 != null) {
+            payload.put("imageBase64", imgBase64);
+            payload.put("imageMimeType", "image/jpeg");
           }
           byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
           HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
@@ -114,7 +127,7 @@ public final class KeyboardRewriteClient {
             conn.setDoOutput(true);
             conn.setFixedLengthStreamingMode(body.length);
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-            conn.setRequestProperty("Authorization", "Bearer " + token);
+            conn.setRequestProperty("Authorization", "Bearer " + proxyToken);
             try (OutputStream out = conn.getOutputStream()) {
               out.write(body);
             }
@@ -122,7 +135,7 @@ public final class KeyboardRewriteClient {
             InputStream stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
             String resp = stream == null ? "" : readBounded(stream, 256 * 1024);
             if (code < 200 || code >= 300) {
-              throw new IOException("HTTP " + code + ": " + resp);
+              throw new IOException("HTTP " + code);
             }
             List<Option> options = parseResponse(resp);
             boolean usedWeb = parseSearched(resp);
@@ -134,7 +147,7 @@ public final class KeyboardRewriteClient {
             conn.disconnect();
           }
         } catch (Exception | OutOfMemoryError e) {
-          main.post(() -> cb.onError("Couldn’t rewrite right now. Check connection and try again."));
+          main.post(() -> cb.onError("Couldn’t rewrite right now. Check connection and API key."));
         } finally {
           if (screen != null && !screen.isRecycled()) {
             try { screen.recycle(); } catch (RuntimeException ignored) {}

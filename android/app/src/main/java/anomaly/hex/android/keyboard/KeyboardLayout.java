@@ -8,6 +8,11 @@ public final class KeyboardLayout {
     public enum Layer { LETTERS, NUMBERS, SYMBOLS }
     public enum FieldKind { TEXT, URL, EMAIL }
     public enum KeyKind { CHAR, SHIFT, LAYER, DELETE, SPACE, RETURN, GLOBE, EMOJI }
+
+    /** Numeric/phone/datetime fields open on NUMBERS; all other fields open on LETTERS. */
+    public static Layer initialLayerForInputClass(int inputClass) {
+        return (inputClass == 2 || inputClass == 3 || inputClass == 4) ? Layer.NUMBERS : Layer.LETTERS;
+    }
     public record Key(KeyKind kind, int row, String label, String text,
                       float left, float top, float right, float bottom,
                       float hitLeft, float hitTop, float hitRight, float hitBottom) {

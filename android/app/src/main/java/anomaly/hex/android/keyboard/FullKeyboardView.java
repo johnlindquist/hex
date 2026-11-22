@@ -157,7 +157,19 @@ public final class FullKeyboardView extends FrameLayout {
     public void setUndoVisible(boolean visible) { strip.setUndo(visible); }
     public void setUndoVisible(boolean visible, String label) { strip.setUndo(visible, label); }
     public void showNotice(String message, boolean openApp) { closeEmoji(); closeRewrite(); strip.showNotice(message, openApp); }
-    public void setFieldKind(KeyboardLayout.FieldKind kind,String returnLabel) { closeEmoji(); closeRewrite(); plane.field(kind,returnLabel); }
+    public void setFieldKind(KeyboardLayout.FieldKind kind,String returnLabel) {
+        setFieldKind(kind, returnLabel, KeyboardLayout.Layer.LETTERS, true);
+    }
+    public void setFieldKind(KeyboardLayout.FieldKind kind,String returnLabel,KeyboardLayout.Layer initialLayer,boolean resetLayer) {
+        if(resetLayer) { closeEmoji(); closeRewrite(); }
+        plane.field(kind,returnLabel,initialLayer,resetLayer);
+    }
+    public void resetSession() {
+        closeEmoji(); closeRewrite(); plane.resetSession();
+    }
+    public void setPrivateField(boolean privateField) {
+        strip.setPrivateField(privateField);
+    }
     public void setAutoCap(boolean value) {
         boolean typingInPanel = (emojiOpen && panel!=null && panel.searching()) || (rewriteOpen && rewritePanel!=null && rewritePanel.prompting());
         if(!typingInPanel) plane.autoCap(value);
