@@ -12,7 +12,7 @@ public final class SuggestionStripView extends FrameLayout {
     private final LinearLayout typing, recording, slots, toolbar;
     private final View emojiTool, promptRewriteBtn, rewriteBtn;
     private final FrameLayout center;
-    private final LinearLayout undo, noticeBar;
+    private final LinearLayout undoBar, undo, rewriteOptionsPill, noticeBar;
     private final TextView clock, noticeText, noticeAction, undoLabel;
     private final Runnable clearNotice = () -> showNotice(null, false);
     private List<String> items=List.of();
@@ -40,11 +40,24 @@ public final class SuggestionStripView extends FrameLayout {
         emojiTool=addTool(true,"Emoji picker",toggleEmoji); emojiTool.setVisibility(GONE);
         addTool(false,"Open Hex",host::onOpenApp);
         slots=row(c); center.addView(slots);
-        undo=row(c); undo.setBackground(pill(CHIP_FILL)); undo.setPadding(dp(c,10),0,dp(c,10),0);
+        undoBar=row(c);
+        undo=row(c); undo.setBackground(pressable(CHIP_FILL)); undo.setPadding(dp(c,10),0,dp(c,10),0);
         View arrow=new View(c){protected void onDraw(android.graphics.Canvas canvas){KeyIcons.drawUndoArrow(canvas,getWidth()/2f,getHeight()/2f,dp(c,16),TEXT_MUTED);}};
         undo.addView(arrow,dp(c,20),-1); undoLabel=label(c,"Undo dictation",14); undoLabel.setTextSize(13.5f); undoLabel.setTextColor(TEXT_MUTED);
         undo.addView(undoLabel); undo.setContentDescription("Undo dictation"); undo.setOnClickListener(v->host.onUndoDictation());
-        center.addView(undo,new LayoutParams(-2,dp(c,30),Gravity.CENTER));
+        undoBar.addView(undo,new LinearLayout.LayoutParams(-2,dp(c,30)));
+        rewriteOptionsPill=row(c); rewriteOptionsPill.setBackground(pressable(CHIP_FILL)); rewriteOptionsPill.setPadding(dp(c,10),0,dp(c,10),0);
+        View spIcon=new View(c){protected void onDraw(android.graphics.Canvas canvas){KeyIcons.drawSparkle(canvas,getWidth()/2f,getHeight()/2f,dp(c,15),anomaly.hex.android.ui.HexTheme.MIC);}};
+        rewriteOptionsPill.addView(spIcon,dp(c,18),-1);
+        TextView optsLbl=label(c,"Options",14); optsLbl.setTextSize(13.5f); optsLbl.setTextColor(TEXT);
+        LinearLayout.LayoutParams ollp=new LinearLayout.LayoutParams(-2,-2); ollp.leftMargin=dp(c,4);
+        rewriteOptionsPill.addView(optsLbl,ollp);
+        rewriteOptionsPill.setContentDescription("Show rewrite options");
+        rewriteOptionsPill.setOnClickListener(v->host.onRewriteReopen());
+        LinearLayout.LayoutParams rop=new LinearLayout.LayoutParams(-2,dp(c,30)); rop.leftMargin=dp(c,6);
+        undoBar.addView(rewriteOptionsPill,rop);
+        rewriteOptionsPill.setVisibility(GONE);
+        center.addView(undoBar,new LayoutParams(-2,dp(c,30),Gravity.CENTER));
         noticeBar=row(c); noticeBar.setBackground(pill(CHIP_FILL)); noticeBar.setPadding(dp(c,10),0,dp(c,6),0);
         noticeText=label(c,"",13); noticeText.setTextColor(TEXT); noticeBar.addView(noticeText);
         noticeAction=label(c,"Open",13); noticeAction.setTextColor(ON_PILL_TEXT);
@@ -113,7 +126,7 @@ public final class SuggestionStripView extends FrameLayout {
         rewriteBtn.setVisibility(vis);
     }
     private void updateContent() {
-        boolean available=undo.getVisibility()!=VISIBLE && noticeBar.getVisibility()!=VISIBLE;
+        boolean available=undoBar.getVisibility()!=VISIBLE && noticeBar.getVisibility()!=VISIBLE;
         boolean idle=items.isEmpty() && emojiContext==null;
         showContent(toolbar,available && idle); showContent(slots,available && !idle);
     }
@@ -138,12 +151,14 @@ public final class SuggestionStripView extends FrameLayout {
         LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(c,32),dp(c,32)); p.leftMargin=dp(c,6);
         recording.addView(b,p); return b;
     }
-    void setUndo(boolean visible) { setUndo(visible, "Undo dictation"); }
-    void setUndo(boolean visible, String labelText) {
+    void setUndo(boolean visible) { setUndo(visible, "Undo dictation", false); }
+    void setUndo(boolean visible, String labelText) { setUndo(visible, labelText, false); }
+    void setUndo(boolean visible, String labelText, boolean showOptions) {
         if(visible) showNotice(null,false);
         undoLabel.setText(labelText);
         undo.setContentDescription(labelText);
-        undo.setVisibility(visible?VISIBLE:GONE);
+        rewriteOptionsPill.setVisibility(visible && showOptions ? VISIBLE : GONE);
+        undoBar.setVisibility(visible?VISIBLE:GONE);
         updateContent();
     }
     void showNotice(String message, boolean openApp) {
@@ -153,7 +168,7 @@ public final class SuggestionStripView extends FrameLayout {
             updateContent();
             return;
         }
-        undo.setVisibility(GONE);
+        undoBar.setVisibility(GONE);
         noticeText.setText(message); noticeAction.setVisibility(openApp?VISIBLE:GONE);
         noticeBar.setVisibility(VISIBLE); updateContent(); timer.postDelayed(clearNotice,4000);
     }

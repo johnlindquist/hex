@@ -24,6 +24,7 @@ public final class FullKeyboardView extends FrameLayout {
         void onRewriteWithPrompt();
         void onRewriteSubmitPrompt(String instruction);
         void onRewritePick(String replacement);
+        void onRewriteReopen();
         void onRewriteRetry();
         void onRewriteClose();
         void onStartDictation();
@@ -109,8 +110,19 @@ public final class FullKeyboardView extends FrameLayout {
         requestLayout();
     }
     public void showRewriteOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb) {
-        if(!rewriteOpen || rewritePanel==null) return;
-        rewritePanel.showOptions(options, usedScreen, usedWeb);
+        showRewriteOptions(options, usedScreen, usedWeb, null, null);
+    }
+    public void showRewriteOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb,
+                                   String originalDraft, String appliedText) {
+        closeEmoji();
+        ensureRewritePanel();
+        rewriteOpen=true;
+        rewritePanel.showOptions(options, usedScreen, usedWeb, originalDraft, appliedText);
+        rewritePanel.setVisibility(VISIBLE);
+        strip.setVisibility(INVISIBLE);
+        plane.setSearching(false);
+        plane.setVisibility(INVISIBLE);
+        requestLayout();
     }
     public void showRewriteError(String error) {
         if(!rewriteOpen || rewritePanel==null) return;
@@ -155,7 +167,8 @@ public final class FullKeyboardView extends FrameLayout {
     public void setSuggestions(List<String> items) { setSuggestions(items, false); }
     public void setSuggestions(List<String> items, boolean autoReplace) { strip.suggestions(items==null?List.of():items, autoReplace); }
     public void setUndoVisible(boolean visible) { strip.setUndo(visible); }
-    public void setUndoVisible(boolean visible, String label) { strip.setUndo(visible, label); }
+    public void setUndoVisible(boolean visible, String label) { strip.setUndo(visible, label, false); }
+    public void setRewriteUndoVisible(boolean visible) { strip.setUndo(visible, "Original", visible); }
     public void showNotice(String message, boolean openApp) { closeEmoji(); closeRewrite(); strip.showNotice(message, openApp); }
     public void setFieldKind(KeyboardLayout.FieldKind kind,String returnLabel) {
         setFieldKind(kind, returnLabel, KeyboardLayout.Layer.LETTERS, true);

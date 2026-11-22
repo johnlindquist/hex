@@ -18,6 +18,42 @@ import org.json.*;
 public final class KeyboardRewriteClient {
   public static final String DEFAULT_REWRITE_ENDPOINT = "https://hex-api-five.vercel.app/api/rewrite";
 
+  public static final class Session {
+    public final String originalDraft;
+    public final String instruction;
+    public final List<Option> options;
+    public final boolean usedScreen;
+    public final boolean usedWeb;
+    public final String appliedText;
+
+    public Session(String originalDraft, String instruction, List<Option> options,
+                   boolean usedScreen, boolean usedWeb, String appliedText) {
+      this.originalDraft = originalDraft == null ? "" : originalDraft;
+      this.instruction = instruction;
+      this.options = options == null ? List.of() : List.copyOf(options);
+      this.usedScreen = usedScreen;
+      this.usedWeb = usedWeb;
+      this.appliedText = appliedText;
+    }
+
+    public Session withApplied(String text) {
+      return new Session(originalDraft, instruction, options, usedScreen, usedWeb, text);
+    }
+
+    /** True when the current editor text still belongs to this rewrite batch (original or an applied option). */
+    public boolean matchesEditorText(String current) {
+      if (options.isEmpty() || current == null) return false;
+      String trimmed = current.trim();
+      if (trimmed.isEmpty()) return false;
+      if (appliedText != null && trimmed.equals(appliedText.trim())) return true;
+      if (!originalDraft.isEmpty() && trimmed.equals(originalDraft.trim())) return true;
+      for (Option opt : options) {
+        if (trimmed.equals(opt.text.trim())) return true;
+      }
+      return false;
+    }
+  }
+
   public static final class Option {
     public final String label;
     public final String text;

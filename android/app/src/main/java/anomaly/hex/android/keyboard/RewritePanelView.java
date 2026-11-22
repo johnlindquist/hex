@@ -328,7 +328,8 @@ final class RewritePanelView extends LinearLayout {
     scroll.scrollTo(0, 0);
   }
 
-  void showOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb) {
+  void showOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb,
+      String originalDraft, String appliedText) {
     prompting = false;
     promptBar.setVisibility(GONE);
     resultsContainer.setVisibility(VISIBLE);
@@ -344,44 +345,61 @@ final class RewritePanelView extends LinearLayout {
 
     for (int i = 0; i < options.size(); i++) {
       KeyboardRewriteClient.Option opt = options.get(i);
-      LinearLayout card = new LinearLayout(c);
-      card.setOrientation(VERTICAL);
-      card.setPadding(dp(c, 12), dp(c, 9), dp(c, 12), dp(c, 10));
-      card.setBackground(cardBackground(c));
-      card.setClickable(true);
-      card.setContentDescription(opt.label + ": " + opt.text);
-      card.setOnClickListener(v -> onPick.accept(opt));
+      boolean selected = appliedText != null && appliedText.equals(opt.text);
+      addOptionCard(c, opt, selected, i > 0);
+    }
 
-      LinearLayout topRow = new LinearLayout(c);
-      topRow.setGravity(Gravity.CENTER_VERTICAL);
-      card.addView(topRow, new LayoutParams(-1, -2));
-
-      TextView tag = label(c, opt.label, 12);
-      tag.setTypeface(android.graphics.Typeface.create("sans-serif-medium", 0));
-      tag.setTextColor(HexTheme.MIC);
-      topRow.addView(tag);
-
-      View gap = new View(c);
-      topRow.addView(gap, new LayoutParams(0, 1, 1));
-
-      TextView hint = label(c, "Tap to apply", 11);
-      hint.setTextColor(TEXT_MUTED);
-      topRow.addView(hint);
-
-      TextView content = new TextView(c);
-      content.setText(opt.text);
-      content.setTextSize(14);
-      content.setTextColor(TEXT);
-      content.setLineSpacing(dp(c, 2), 1.08f);
-      LayoutParams textLp = new LayoutParams(-1, -2);
-      textLp.topMargin = dp(c, 4);
-      card.addView(content, textLp);
-
-      LayoutParams lp = new LayoutParams(-1, -2);
-      if (i > 0) lp.topMargin = dp(c, 6);
-      body.addView(card, lp);
+    if (originalDraft != null && !originalDraft.isBlank()) {
+      boolean alreadyListed = false;
+      for (KeyboardRewriteClient.Option opt : options) {
+        if (originalDraft.equals(opt.text)) { alreadyListed = true; break; }
+      }
+      if (!alreadyListed) {
+        boolean isCurrent = appliedText == null || appliedText.equals(originalDraft);
+        addOptionCard(c, new KeyboardRewriteClient.Option("Original", originalDraft), isCurrent, !options.isEmpty());
+      }
     }
     scroll.scrollTo(0, 0);
+  }
+
+  private void addOptionCard(Context c, KeyboardRewriteClient.Option opt, boolean selected, boolean topGap) {
+    LinearLayout card = new LinearLayout(c);
+    card.setOrientation(VERTICAL);
+    card.setPadding(dp(c, 12), dp(c, 9), dp(c, 12), dp(c, 10));
+    card.setBackground(cardBackground(c));
+    card.setClickable(true);
+    card.setContentDescription(opt.label + ": " + opt.text);
+    card.setOnClickListener(v -> onPick.accept(opt));
+
+    LinearLayout topRow = new LinearLayout(c);
+    topRow.setGravity(Gravity.CENTER_VERTICAL);
+    card.addView(topRow, new LayoutParams(-1, -2));
+
+    boolean isOriginal = "Original".equals(opt.label);
+    TextView tag = label(c, opt.label, 12);
+    tag.setTypeface(android.graphics.Typeface.create("sans-serif-medium", 0));
+    tag.setTextColor(isOriginal ? TEXT_MUTED : HexTheme.MIC);
+    topRow.addView(tag);
+
+    View gap = new View(c);
+    topRow.addView(gap, new LayoutParams(0, 1, 1));
+
+    TextView hint = label(c, selected ? "Selected" : (isOriginal ? "Restore" : "Tap to apply"), 11);
+    hint.setTextColor(selected ? HexTheme.MIC : TEXT_MUTED);
+    topRow.addView(hint);
+
+    TextView content = new TextView(c);
+    content.setText(opt.text);
+    content.setTextSize(14);
+    content.setTextColor(TEXT);
+    content.setLineSpacing(dp(c, 2), 1.08f);
+    LayoutParams textLp = new LayoutParams(-1, -2);
+    textLp.topMargin = dp(c, 4);
+    card.addView(content, textLp);
+
+    LayoutParams lp = new LayoutParams(-1, -2);
+    if (topGap) lp.topMargin = dp(c, 6);
+    body.addView(card, lp);
   }
 
   void showError(String error) {

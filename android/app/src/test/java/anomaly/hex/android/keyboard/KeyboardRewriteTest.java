@@ -43,4 +43,27 @@ public class KeyboardRewriteTest {
     assertFalse(KeyboardRewriteClient.parseSearched("{}"));
     assertTrue(KeyboardRewriteClient.parseSearched("{\"searched\":true,\"options\":[]}"));
   }
+
+  @Test
+  public void rewriteSessionMatchesOriginalAndAppliedAndPreservesOriginalAcrossSwitches() {
+    List<KeyboardRewriteClient.Option> opts = List.of(
+        new KeyboardRewriteClient.Option("Fix typos", "Let's meet at 3."),
+        new KeyboardRewriteClient.Option("Concise", "Meet at 3?"));
+    KeyboardRewriteClient.Session session =
+        new KeyboardRewriteClient.Session("lets meet at 3", null, opts, true, false, null);
+
+    assertTrue(session.matchesEditorText("lets meet at 3"));
+    assertTrue(session.matchesEditorText("Let's meet at 3."));
+    assertFalse(session.matchesEditorText("something totally different"));
+
+    KeyboardRewriteClient.Session picked1 = session.withApplied("Let's meet at 3.");
+    assertEquals("lets meet at 3", picked1.originalDraft);
+    assertEquals("Let's meet at 3.", picked1.appliedText);
+    assertTrue(picked1.matchesEditorText("Let's meet at 3."));
+
+    KeyboardRewriteClient.Session picked2 = picked1.withApplied("Meet at 3?");
+    assertEquals("lets meet at 3", picked2.originalDraft);
+    assertEquals("Meet at 3?", picked2.appliedText);
+    assertTrue(picked2.matchesEditorText("Meet at 3?"));
+  }
 }
