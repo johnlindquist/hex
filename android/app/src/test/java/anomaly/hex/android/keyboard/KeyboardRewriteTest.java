@@ -66,4 +66,34 @@ public class KeyboardRewriteTest {
     assertEquals("Meet at 3?", picked2.appliedText);
     assertTrue(picked2.matchesEditorText("Meet at 3?"));
   }
+
+  @Test
+  public void typoFixExtractorLearnsTyposAndSurfacesImmediatelyInSuggestions() {
+    String original = "We nerd a clean way in case yku oick the wrong one foe typing";
+    String fixed = "We need a clean way in case you pick the wrong one for typing";
+    List<TypoFixExtractor.FixPair> pairs = TypoFixExtractor.extract(
+        original,
+        fixed,
+        List.of(
+            new TypoFixExtractor.FixPair("yku", "you"),
+            new TypoFixExtractor.FixPair("oick", "pick"),
+            new TypoFixExtractor.FixPair("hallucinated", "word")));
+
+    assertEquals(4, pairs.size());
+    assertTrue(pairs.stream().anyMatch(p -> p.from().equals("yku") && p.to().equals("you")));
+    assertTrue(pairs.stream().anyMatch(p -> p.from().equals("oick") && p.to().equals("pick")));
+    assertTrue(pairs.stream().anyMatch(p -> p.from().equals("nerd") && p.to().equals("need")));
+    assertTrue(pairs.stream().anyMatch(p -> p.from().equals("foe") && p.to().equals("for")));
+    assertFalse(pairs.stream().anyMatch(p -> p.from().equals("hallucinated")));
+
+    // Feed into PersonalAutocorrectStore + AutocorrectEngine: 1st observation surfaces in suggestions immediately.
+    PersonalAutocorrectStore store = PersonalAutocorrectStore.inMemory();
+    for (TypoFixExtractor.FixPair p : pairs) store.recordAccepted(p.from(), p.to());
+    AutocorrectEngine engine = new AutocorrectEngine(KeyboardLanguage.EN, null, store, true);
+    assertTrue(engine.suggestions("yku", List.of()).contains("you"));
+    assertTrue(engine.suggestions("oick", List.of()).contains("pick"));
+    // 2nd observation promotes non-dictionary typo to automatic space-bar correction.
+    store.recordAccepted("yku", "you");
+    assertEquals("you", engine.correctOnSpace("yku").caseMatched());
+  }
 }

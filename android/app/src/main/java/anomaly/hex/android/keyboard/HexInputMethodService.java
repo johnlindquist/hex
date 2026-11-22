@@ -40,6 +40,7 @@ public final class HexInputMethodService extends InputMethodService implements F
   private String state = "idle";
   private DictationUndo undo;
   private String rewriteUndoOriginal, rewriteUndoApplied;
+  private List<TypoFixExtractor.FixPair> pendingQuickFixPairs;
   private long rewriteGen;
   private String lastRewriteDraft, lastRewriteInstruction;
   private KeyboardRewriteClient.Session rewriteSession;
@@ -140,7 +141,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     barView.setMeta(hexSettings.style(), id, SpeechLanguage.AUTO.equals(id) ? "Auto" : languageLabel(id));
     barView.setReturnAction(!actionLabel().isEmpty());
   }
-  private void resetEditor() { rewriteGen++; rewriteSession = null; if (fullView != null) fullView.closeRewrite(); trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
+  private void resetEditor() { commitPendingQuickFixLearning(); rewriteGen++; rewriteSession = null; if (fullView != null) { fullView.setQuickFixBusy(false); fullView.closeRewrite(); } trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); if (fullView != null) fullView.resetSession(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
   @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); if (fullView != null) fullView.resetSession(); super.onWindowHidden(); }
@@ -168,19 +169,37 @@ public final class HexInputMethodService extends InputMethodService implements F
   @Override public void onUpdateSelection(int a,int b,int x,int y,int cs,int ce) {
     super.onUpdateSelection(a,b,x,y,cs,ce); if (x != a || y != b) refresh();
   }
+  private void commitPendingQuickFixLearning() {
+    List<TypoFixExtractor.FixPair> pairs = pendingQuickFixPairs;
+    pendingQuickFixPairs = null;
+    if (pairs == null || pairs.isEmpty() || personalStore == null) return;
+    for (TypoFixExtractor.FixPair pair : pairs) {
+      personalStore.recordAccepted(pair.from(), pair.to());
+    }
+  }
   private void setUndo(DictationUndo value) {
+    commitPendingQuickFixLearning();
     main.removeCallbacks(expireUndo); undo = value; rewriteUndoOriginal = null; rewriteUndoApplied = null;
     if (fullView != null) fullView.setUndoVisible(value != null);
     if (barView != null) barView.setUndoVisible(value != null);
     if (value != null) main.postDelayed(expireUndo, 12000);
   }
   private void setRewriteUndo(String original, String applied) {
+    commitPendingQuickFixLearning();
     main.removeCallbacks(expireUndo); undo = null; rewriteUndoOriginal = original; rewriteUndoApplied = applied;
     if (fullView != null) fullView.setRewriteUndoVisible(true);
     if (barView != null) barView.setUndoVisible(true);
     main.postDelayed(expireUndo, 25000);
   }
-  private void editing() { lastSpace = 0; rewriteSession = null; autocorrect.clearUndo(); setUndo(null); }
+  private void setQuickFixUndo(String original, String applied, List<TypoFixExtractor.FixPair> learnedPairs) {
+    commitPendingQuickFixLearning();
+    main.removeCallbacks(expireUndo); undo = null; rewriteUndoOriginal = original; rewriteUndoApplied = applied;
+    pendingQuickFixPairs = learnedPairs;
+    if (fullView != null) fullView.setUndoVisible(true, "Undo fix");
+    if (barView != null) barView.setUndoVisible(true);
+    main.postDelayed(expireUndo, 20000);
+  }
+  private void editing() { commitPendingQuickFixLearning(); lastSpace = 0; rewriteSession = null; autocorrect.clearUndo(); setUndo(null); }
   private void replace(int n, String s) {
     InputConnection c = ic(); if (c == null) return;
     c.beginBatchEdit(); try { if (n == 0 || c.deleteSurroundingText(n, 0)) c.commitText(s, 1); }
@@ -295,6 +314,8 @@ public final class HexInputMethodService extends InputMethodService implements F
   public void onUndoDictation() {
     InputConnection c = ic();
     if (rewriteUndoOriginal != null && c != null) {
+      // User undid a quick fix or rewrite: discard pending learning so rejected fixes are never learned.
+      pendingQuickFixPairs = null;
       String orig = rewriteUndoOriginal;
       String applied = rewriteUndoApplied;
       setUndo(null);
@@ -338,6 +359,47 @@ public final class HexInputMethodService extends InputMethodService implements F
     } finally {
       c.endBatchEdit();
     }
+  }
+  @Override public void onQuickFix() {
+    InputConnection c = ic();
+    if (c == null || fullView == null) return;
+    if (privateField) { notice("Quick fix unavailable in passwords"); return; }
+    String draft = readFullMessage(c).trim();
+    if (draft.isEmpty()) { notice("Type or dictate a message first"); return; }
+    boolean allowLearn = !privateField && editor != null
+        && (editor.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
+    long ticket = ++rewriteGen;
+    fullView.setQuickFixBusy(true);
+    notice("Fixing with screen…");
+    anomaly.hex.android.service.HexBubbleService.captureScreenForKeyboard(screen -> {
+      if (ticket != rewriteGen || fullView == null) {
+        if (screen != null && !screen.isRecycled()) screen.recycle();
+        return;
+      }
+      KeyboardRewriteClient.quickFix(this, draft, screen, new KeyboardRewriteClient.QuickFixCallback() {
+        @Override public void onFixed(String fixedText, List<TypoFixExtractor.FixPair> learnedPairs, boolean usedScreen) {
+          if (fullView != null) fullView.setQuickFixBusy(false);
+          if (ticket != rewriteGen || fullView == null) return;
+          InputConnection liveIc = ic();
+          if (liveIc == null) return;
+          String current = readFullMessage(liveIc).trim();
+          if (!current.equals(draft)) return; // User edited while waiting; don't overwrite.
+          if (fixedText == null || fixedText.isBlank() || fixedText.trim().equals(draft)) {
+            notice("Looks good — no fixes needed");
+            return;
+          }
+          String cleaned = fixedText.trim();
+          replaceEntireMessage(liveIc, cleaned);
+          setQuickFixUndo(draft, cleaned, allowLearn ? learnedPairs : List.of());
+          refresh();
+        }
+        @Override public void onError(String message) {
+          if (fullView != null) fullView.setQuickFixBusy(false);
+          if (ticket != rewriteGen || fullView == null) return;
+          notice(message);
+        }
+      });
+    });
   }
   @Override public void onRewriteMessage() {
     InputConnection c = ic();

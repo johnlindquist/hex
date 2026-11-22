@@ -39,6 +39,15 @@ public final class PersonalAutocorrectStore {
         return learned.get(lowerWord);
     }
 
+    /** Returns a learned fix or a 1st-observation pending fix for suggest-only strip display. */
+    public synchronized String lookupSuggestion(String lowerWord) {
+        if (lowerWord == null || keepWords.contains(lowerWord)) return null;
+        String exact = learned.get(lowerWord);
+        if (exact != null) return exact;
+        PendingFix p = pending.get(lowerWord);
+        return p != null ? p.replacement() : null;
+    }
+
     public synchronized boolean isKept(String lowerWord) {
         return lowerWord != null && keepWords.contains(lowerWord);
     }

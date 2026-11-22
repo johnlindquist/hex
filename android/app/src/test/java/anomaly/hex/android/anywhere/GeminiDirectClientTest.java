@@ -94,4 +94,18 @@ public class GeminiDirectClientTest {
     assertEquals("••••", SecretStore.mask("short"));
     assertEquals("AIza••••3x9Q", SecretStore.mask("AIzaSyD1234567890abcdef3x9Q"));
   }
+
+  @Test
+  public void buildsAndParsesQuickFixPayload() throws Exception {
+    JSONObject body = GeminiDirectClient.buildQuickFixBody("yku oick", "img64");
+    assertEquals("application/json", body.getJSONObject("generationConfig").getString("responseMimeType"));
+    assertFalse(body.has("tools"));
+
+    GeminiDirectClient.QuickFixResult parsed = GeminiDirectClient.parseQuickFixText(
+        "```json\n{\"fixed\":\"you pick\",\"corrections\":[{\"from\":\"yku\",\"to\":\"you\"},{\"from\":\"oick\",\"to\":\"pick\"}]}\n```");
+    assertEquals("you pick", parsed.fixedText);
+    assertEquals(2, parsed.corrections.size());
+    assertEquals("yku", parsed.corrections.get(0).from());
+    assertEquals("you", parsed.corrections.get(0).to());
+  }
 }

@@ -300,9 +300,9 @@ public final class AutocorrectEngine {
         if (fix != null) {
             result.add(fix.caseMatched);
         } else {
-            // Suggest-only learned fix for a real word, or suggest-only English contraction ("well" -> "we'll")
+            // Suggest-only learned or pending fix (e.g. from Quick Fix), or suggest-only English contraction ("well" -> "we'll")
             if (allowLearning && store != null) {
-                String learned = store.lookupLearned(lower);
+                String learned = store.lookupSuggestion(lower);
                 if (learned != null && !currentWord.equals(learned)) {
                     result.add(matchCase(currentWord, title, learned));
                 }

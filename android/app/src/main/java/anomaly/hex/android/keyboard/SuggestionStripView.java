@@ -10,7 +10,7 @@ import static anomaly.hex.android.keyboard.KeyboardPalette.*;
 public final class SuggestionStripView extends FrameLayout {
     private final FullKeyboardView.Host host;
     private final LinearLayout typing, recording, slots, toolbar;
-    private final View emojiTool, promptRewriteBtn, rewriteBtn;
+    private final View emojiTool, quickFixBtn, promptRewriteBtn, rewriteBtn;
     private final FrameLayout center;
     private final LinearLayout undoBar, undo, rewriteOptionsPill, noticeBar;
     private final TextView clock, noticeText, noticeAction, undoLabel;
@@ -66,6 +66,16 @@ public final class SuggestionStripView extends FrameLayout {
         noticeAction.setOnClickListener(v->{ showNotice(null,false); host.onOpenApp(); });
         noticeBar.addView(noticeAction,nap); noticeBar.setVisibility(GONE);
         center.addView(noticeBar,new LayoutParams(-2,dp(c,30),Gravity.CENTER)); setUndo(false);
+        quickFixBtn=new View(c) {
+            protected void onDraw(android.graphics.Canvas canvas) {
+                KeyIcons.drawQuickFix(canvas,getWidth()/2f,getHeight()/2f,dp(c,18),TEXT_MUTED);
+            }
+        };
+        quickFixBtn.setContentDescription("Fix typos using screen");
+        quickFixBtn.setBackground(pressable(CHIP_FILL));
+        quickFixBtn.setOnClickListener(v->host.onQuickFix());
+        LinearLayout.LayoutParams qfp=new LinearLayout.LayoutParams(dp(c,32),dp(c,34)); qfp.leftMargin=dp(c,4);
+        typing.addView(quickFixBtn,qfp);
         promptRewriteBtn=new View(c) {
             protected void onDraw(android.graphics.Canvas canvas) {
                 KeyIcons.drawPromptRewrite(canvas,getWidth()/2f,getHeight()/2f,dp(c,18),TEXT_MUTED);
@@ -74,7 +84,7 @@ public final class SuggestionStripView extends FrameLayout {
         promptRewriteBtn.setContentDescription("Rewrite with prompt");
         promptRewriteBtn.setBackground(pressable(CHIP_FILL));
         promptRewriteBtn.setOnClickListener(v->host.onRewriteWithPrompt());
-        LinearLayout.LayoutParams prp=new LinearLayout.LayoutParams(dp(c,34),dp(c,34)); prp.leftMargin=dp(c,4);
+        LinearLayout.LayoutParams prp=new LinearLayout.LayoutParams(dp(c,32),dp(c,34)); prp.leftMargin=dp(c,4);
         typing.addView(promptRewriteBtn,prp);
         rewriteBtn=new View(c) {
             protected void onDraw(android.graphics.Canvas canvas) {
@@ -84,7 +94,7 @@ public final class SuggestionStripView extends FrameLayout {
         rewriteBtn.setContentDescription("Rewrite message");
         rewriteBtn.setBackground(pressable(CHIP_FILL));
         rewriteBtn.setOnClickListener(v->host.onRewriteMessage());
-        LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(dp(c,34),dp(c,34)); rp.leftMargin=dp(c,4);
+        LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(dp(c,32),dp(c,34)); rp.leftMargin=dp(c,4);
         typing.addView(rewriteBtn,rp);
         mark=new HexMarkView(c); mark.setBackground(pill(CHIP_FILL));
         LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(dp(c,34),dp(c,34)); mp.leftMargin=dp(c,4);
@@ -122,8 +132,13 @@ public final class SuggestionStripView extends FrameLayout {
     void setEmojiEnabled(boolean enabled) { emojiTool.setVisibility(enabled?VISIBLE:GONE); }
     void setPrivateField(boolean priv) {
         int vis = priv ? GONE : VISIBLE;
+        quickFixBtn.setVisibility(vis);
         promptRewriteBtn.setVisibility(vis);
         rewriteBtn.setVisibility(vis);
+    }
+    void setQuickFixBusy(boolean busy) {
+        quickFixBtn.setEnabled(!busy);
+        quickFixBtn.setAlpha(busy ? 0.4f : 1f);
     }
     private void updateContent() {
         boolean available=undoBar.getVisibility()!=VISIBLE && noticeBar.getVisibility()!=VISIBLE;

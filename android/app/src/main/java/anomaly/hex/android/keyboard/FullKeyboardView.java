@@ -20,6 +20,7 @@ public final class FullKeyboardView extends FrameLayout {
         void onSuggestionPick(String word);
         void onEmojiPick(String emoji);
         void onUndoDictation();
+        void onQuickFix();
         void onRewriteMessage();
         void onRewriteWithPrompt();
         void onRewriteSubmitPrompt(String instruction);
@@ -169,6 +170,7 @@ public final class FullKeyboardView extends FrameLayout {
     public void setUndoVisible(boolean visible) { strip.setUndo(visible); }
     public void setUndoVisible(boolean visible, String label) { strip.setUndo(visible, label, false); }
     public void setRewriteUndoVisible(boolean visible) { strip.setUndo(visible, "Original", visible); }
+    public void setQuickFixBusy(boolean busy) { strip.setQuickFixBusy(busy); }
     public void showNotice(String message, boolean openApp) { closeEmoji(); closeRewrite(); strip.showNotice(message, openApp); }
     public void setFieldKind(KeyboardLayout.FieldKind kind,String returnLabel) {
         setFieldKind(kind, returnLabel, KeyboardLayout.Layer.LETTERS, true);

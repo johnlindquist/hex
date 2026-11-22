@@ -78,6 +78,15 @@ final class KeyIcons {
         line(c,-6,-7,-6,-3); line(c,-8,-5,-4,-5);
         c.restore();
     }
+    static void drawQuickFix(Canvas c,float x,float y,float s,int color) {
+        begin(c,x,y,s,color);
+        // Checkmark + small sparkle at top-right (1-tap screen-aware typo fix)
+        p.setStrokeWidth(1.9f);
+        line(c,-7.5f,1,-2.5f,6,5.5f,-3);
+        p.setStrokeWidth(1.4f);
+        line(c,5.5f,-8.5f,5.5f,-4.5f); line(c,3.5f,-6.5f,7.5f,-6.5f);
+        c.restore();
+    }
     static void drawRefresh(Canvas c,float x,float y,float s,int color) {
         begin(c,x,y,s,color);
         c.drawArc(-6.5f,-6.5f,6.5f,6.5f,-60,290,false,p);

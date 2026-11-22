@@ -68,6 +68,11 @@ public final class KeyboardRewriteClient {
     void onError(String message);
   }
 
+  public interface QuickFixCallback {
+    void onFixed(String fixedText, List<TypoFixExtractor.FixPair> learnedPairs, boolean usedScreen);
+    void onError(String message);
+  }
+
   private static final ExecutorService worker =
       new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new SynchronousQueue<>());
 
@@ -111,6 +116,84 @@ public final class KeyboardRewriteClient {
       return new JSONObject(json).optBoolean("searched", false);
     } catch (JSONException e) {
       return false;
+    }
+  }
+
+  public static void quickFix(Context context, String draft, Bitmap screen, QuickFixCallback cb) {
+    Context c = context.getApplicationContext();
+    Handler main = new Handler(Looper.getMainLooper());
+    boolean hasScreen = screen != null;
+    String original = draft == null ? "" : draft.trim();
+    try {
+      worker.execute(() -> {
+        String geminiKey = TypeAnywhereAiClient.geminiKey(c);
+        String proxyToken = TypeAnywhereAiClient.proxyToken(c);
+        if (geminiKey.isEmpty() && proxyToken.isEmpty()) {
+          main.post(() -> cb.onError("Add your Gemini API key in Hex › Labs › Type anywhere."));
+          return;
+        }
+        try {
+          String imgBase64 = null;
+          if (screen != null && !screen.isRecycled()) {
+            ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
+            if (screen.compress(Bitmap.CompressFormat.JPEG, 72, jpeg)) {
+              imgBase64 = Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP);
+            }
+          }
+          if (!geminiKey.isEmpty()) {
+            GeminiDirectClient.QuickFixResult res = GeminiDirectClient.quickFix(
+                geminiKey, TypeAnywhereAiClient.model(c), original, imgBase64);
+            List<TypoFixExtractor.FixPair> pairs = TypoFixExtractor.extract(original, res.fixedText, res.corrections);
+            main.post(() -> cb.onFixed(res.fixedText, pairs, hasScreen));
+            return;
+          }
+          // Proxy fallback: call /api/rewrite and pick the first "Fix typos" option.
+          String url = rewriteEndpoint(TypeAnywhereAiClient.endpoint(c));
+          GeminiDirectClient.validateHttpsUrl(url);
+          JSONObject payload = new JSONObject().put("draft", original);
+          if (imgBase64 != null) {
+            payload.put("imageBase64", imgBase64);
+            payload.put("imageMimeType", "image/jpeg");
+          }
+          byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
+          HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+          try {
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(28000);
+            conn.setInstanceFollowRedirects(false);
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setFixedLengthStreamingMode(body.length);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setRequestProperty("Authorization", "Bearer " + proxyToken);
+            try (OutputStream out = conn.getOutputStream()) {
+              out.write(body);
+            }
+            int code = conn.getResponseCode();
+            InputStream stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
+            String resp = stream == null ? "" : readBounded(stream, 256 * 1024);
+            if (code < 200 || code >= 300) throw new IOException("HTTP " + code);
+            List<Option> options = parseResponse(resp);
+            if (options.isEmpty()) throw new IOException("No fix returned.");
+            String fixed = options.get(0).text;
+            List<TypoFixExtractor.FixPair> pairs = TypoFixExtractor.extract(original, fixed, List.of());
+            main.post(() -> cb.onFixed(fixed, pairs, hasScreen));
+          } finally {
+            conn.disconnect();
+          }
+        } catch (Exception | OutOfMemoryError e) {
+          main.post(() -> cb.onError("Couldn’t fix right now. Check connection and API key."));
+        } finally {
+          if (screen != null && !screen.isRecycled()) {
+            try { screen.recycle(); } catch (RuntimeException ignored) {}
+          }
+        }
+      });
+    } catch (RejectedExecutionException busy) {
+      if (screen != null && !screen.isRecycled()) {
+        try { screen.recycle(); } catch (RuntimeException ignored) {}
+      }
+      cb.onError("Already working — one moment.");
     }
   }
 
