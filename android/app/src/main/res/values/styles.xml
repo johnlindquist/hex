@@ -3,7 +3,31 @@
     <item name="android:windowBackground">#0A0B0D</item>
     <item name="android:statusBarColor">#0A0B0D</item>
     <item name="android:navigationBarColor">#0A0B0D</item>
-    <item name="android:colorAccent">#F0F2F5</item>
+    <item name="android:colorAccent">#FF9500</item>
+    <item name="android:alertDialogTheme">@style/Theme.Hex.Dialog</item>
+    <item name="android:dialogTheme">@style/Theme.Hex.Dialog</item>
+  </style>
+  <style name="Theme.Hex.Dialog" parent="@android:style/Theme.Material.Dialog.Alert">
+    <item name="android:windowBackground">@drawable/hex_dialog_bg</item>
+    <item name="android:colorBackground">#111316</item>
+    <item name="android:colorAccent">#FF9500</item>
+    <item name="android:textColorPrimary">#F0FFFFFF</item>
+    <item name="android:textColorSecondary">#8FFFFFFF</item>
+    <item name="android:buttonBarPositiveButtonStyle">@style/Theme.Hex.DialogButton</item>
+    <item name="android:buttonBarNegativeButtonStyle">@style/Theme.Hex.DialogButton.Muted</item>
+    <item name="android:buttonBarNeutralButtonStyle">@style/Theme.Hex.DialogButton.Muted</item>
+  </style>
+  <style name="Theme.Hex.DialogButton" parent="@android:style/Widget.Material.Button.Borderless.Colored">
+    <item name="android:textAllCaps">false</item>
+    <item name="android:textColor">#F5FFFFFF</item>
+    <item name="android:textSize">14sp</item>
+    <item name="android:fontFamily">sans-serif-medium</item>
+  </style>
+  <style name="Theme.Hex.DialogButton.Muted" parent="@android:style/Widget.Material.Button.Borderless.Colored">
+    <item name="android:textAllCaps">false</item>
+    <item name="android:textColor">#8FFFFFFF</item>
+    <item name="android:textSize">14sp</item>
+    <item name="android:fontFamily">sans-serif-medium</item>
   </style>
   <style name="Theme.Hex.TypeAnywhere" parent="Theme.Hex">
     <item name="android:windowIsTranslucent">true</item>

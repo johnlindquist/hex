@@ -756,7 +756,7 @@ public final class HexHomeActivity extends Activity {
     ordered.addAll(SpeechLanguage.supportedIds());
     List<String> ids = new ArrayList<>(ordered);
     String[] labels = ids.stream().map(this::languageLabel).toArray(String[] ::new);
-    new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+    new AlertDialog.Builder(this)
         .setTitle("Speech language")
         .setSingleChoiceItems(labels, ids.indexOf(language.selectedId()),
             (dialog, which) -> {
@@ -780,7 +780,7 @@ public final class HexHomeActivity extends Activity {
       }
       notices.append('\n');
     }
-    new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+    new AlertDialog.Builder(this)
         .setTitle("Open-source notices")
         .setMessage(notices.toString())
         .setPositiveButton("Close", null)
@@ -1061,78 +1061,87 @@ public final class HexHomeActivity extends Activity {
     ScrollView scroll = new ScrollView(this);
     LinearLayout box = new LinearLayout(this);
     box.setOrientation(LinearLayout.VERTICAL);
-    int p = dp(this, 16);
-    box.setPadding(p, dp(this, 8), p, dp(this, 4));
+    box.setPadding(d(20), d(18), d(20), d(18));
     scroll.addView(box);
 
-    TextView note = new TextView(this);
-    note.setText("Your key is encrypted in Android Keystore. Screenshots and prompts go directly to Google Gemini — Hex never sees your key or screen.\n\nTip: Restrict the key to Generative Language API and set a monthly budget cap in Google Cloud.");
-    note.setTextSize(12.5f);
-    note.setTextColor(0xFFB8BCC6);
-    note.setPadding(0, 0, 0, dp(this, 10));
-    box.addView(note);
+    TextView heading = text(this, "Gemini API key", 19, TEXT);
+    box.addView(heading);
 
-    Button getKeyBtn = new Button(this);
-    getKeyBtn.setText("Get API key in Google AI Studio ↗");
-    getKeyBtn.setAllCaps(false);
-    getKeyBtn.setOnClickListener(v -> {
+    TextView note = new TextView(this);
+    note.setText("Encrypted in Android Keystore. Screenshots and prompts go directly to Google Gemini — Hex never sees your key or screen.\n\nTip: Restrict the key to Generative Language API and set a monthly budget cap in Google Cloud.");
+    note.setTextSize(13f);
+    note.setTextColor(MUTED);
+    note.setLineSpacing(d(2), 1.15f);
+    LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(-1, -2);
+    nlp.topMargin = d(8);
+    nlp.bottomMargin = d(12);
+    box.addView(note, nlp);
+
+    Button getKeyBtn = button(this, "Get API key in Google AI Studio ↗", false, () -> {
       try {
         startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://aistudio.google.com/apikey")));
       } catch (Exception ignored) {}
     });
-    box.addView(getKeyBtn);
+    LinearLayout.LayoutParams gkp = new LinearLayout.LayoutParams(-1, d(40));
+    gkp.bottomMargin = d(12);
+    box.addView(getKeyBtn, gkp);
 
-    EditText keyInput = new EditText(this);
-    keyInput.setSingleLine();
-    keyInput.setHint(currentGemini.isEmpty()
-        ? "Gemini API key (AIza…)"
+    TextView keyLbl = text(this, "API KEY", 11, MUTED);
+    box.addView(keyLbl);
+    EditText keyInput = input(this, currentGemini.isEmpty()
+        ? "Paste Gemini API key (AIza…)"
         : "Saved: " + anomaly.hex.android.core.SecretStore.mask(currentGemini) + " (leave blank to keep)");
+    keyInput.setSingleLine();
     keyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-    box.addView(keyInput);
+    LinearLayout.LayoutParams klp = new LinearLayout.LayoutParams(-1, -2);
+    klp.topMargin = d(6);
+    klp.bottomMargin = d(12);
+    box.addView(keyInput, klp);
 
-    EditText modelInput = new EditText(this);
+    TextView modelLbl = text(this, "MODEL", 11, MUTED);
+    box.addView(modelLbl);
+    EditText modelInput = input(this, anomaly.hex.android.anywhere.GeminiDirectClient.DEFAULT_MODEL);
     modelInput.setSingleLine();
-    modelInput.setHint("Model (default: " + anomaly.hex.android.anywhere.GeminiDirectClient.DEFAULT_MODEL + ")");
     modelInput.setText(currentModel);
-    box.addView(modelInput);
+    LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, -2);
+    mlp.topMargin = d(6);
+    mlp.bottomMargin = d(10);
+    box.addView(modelInput, mlp);
 
     TextView testStatus = new TextView(this);
-    testStatus.setTextSize(12.5f);
-    testStatus.setPadding(0, dp(this, 4), 0, dp(this, 6));
+    testStatus.setTextSize(13f);
+    testStatus.setPadding(0, d(6), 0, d(4));
     testStatus.setVisibility(View.GONE);
 
-    Button testBtn = new Button(this);
-    testBtn.setText("Test Gemini key (free)");
-    testBtn.setAllCaps(false);
-    testBtn.setOnClickListener(v -> {
+    final Button[] testBtnHolder = new Button[1];
+    Button testBtn = button(this, "Test Gemini key (free)", false, () -> {
       String typed = keyInput.getText().toString().trim();
       String candidate = typed.isEmpty() ? currentGemini : typed;
       String candidateModel = modelInput.getText().toString().trim();
-      testBtn.setEnabled(false);
+      testBtnHolder[0].setEnabled(false);
       testStatus.setVisibility(View.VISIBLE);
-      testStatus.setTextColor(0xFFB8BCC6);
+      testStatus.setTextColor(MUTED);
       testStatus.setText("Checking key with Google…");
       new Thread(() -> {
         var res = anomaly.hex.android.anywhere.GeminiDirectClient.testKey(candidate, candidateModel);
         runOnUiThread(() -> {
-          testBtn.setEnabled(true);
-          testStatus.setTextColor(res.ok ? 0xFF34C759 : 0xFFFF6B6B);
+          testBtnHolder[0].setEnabled(true);
+          testStatus.setTextColor(res.ok ? SUCCESS : DANGER);
           testStatus.setText((res.ok ? "✓ " : "✗ ") + res.message);
         });
       }, "hex-key-test").start();
     });
-    box.addView(testBtn);
+    testBtnHolder[0] = testBtn;
+    box.addView(testBtn, new LinearLayout.LayoutParams(-1, d(40)));
     box.addView(testStatus);
 
     LinearLayout advBox = new LinearLayout(this);
     advBox.setOrientation(LinearLayout.VERTICAL);
     advBox.setVisibility(currentProxy.isEmpty() ? View.GONE : View.VISIBLE);
 
-    TextView advToggle = new TextView(this);
-    advToggle.setText((advBox.getVisibility() == View.VISIBLE ? "▾ " : "▸ ") + "Advanced: Custom proxy (optional)");
-    advToggle.setTextSize(13f);
-    advToggle.setTextColor(0xFF9EA4B0);
-    advToggle.setPadding(0, dp(this, 10), 0, dp(this, 4));
+    TextView advToggle = text(this,
+        (advBox.getVisibility() == View.VISIBLE ? "▾ " : "▸ ") + "Advanced: Custom proxy (optional)", 13, MUTED);
+    advToggle.setPadding(0, d(14), 0, d(6));
     advToggle.setOnClickListener(v -> {
       boolean show = advBox.getVisibility() != View.VISIBLE;
       advBox.setVisibility(show ? View.VISIBLE : View.GONE);
@@ -1140,48 +1149,76 @@ public final class HexHomeActivity extends Activity {
     });
     box.addView(advToggle);
 
-    EditText endpoint = new EditText(this);
+    EditText endpoint = input(this, anomaly.hex.android.anywhere.TypeAnywhereAiClient.DEFAULT_ENDPOINT);
     endpoint.setSingleLine();
-    endpoint.setHint(anomaly.hex.android.anywhere.TypeAnywhereAiClient.DEFAULT_ENDPOINT);
     endpoint.setText(anomaly.hex.android.anywhere.TypeAnywhereAiClient.customEndpoint(this));
-    advBox.addView(endpoint);
+    LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(-1, -2);
+    elp.bottomMargin = d(8);
+    advBox.addView(endpoint, elp);
 
-    EditText proxyToken = new EditText(this);
+    EditText proxyToken = input(this, currentProxy.isEmpty()
+        ? "Proxy bearer token (if Gemini key is empty)"
+        : "Saved: " + anomaly.hex.android.core.SecretStore.mask(currentProxy));
     proxyToken.setSingleLine();
-    proxyToken.setHint(currentProxy.isEmpty()
-        ? "Custom proxy bearer token (used only if Gemini key is empty)"
-        : "Saved proxy token: " + anomaly.hex.android.core.SecretStore.mask(currentProxy));
     proxyToken.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-    advBox.addView(proxyToken);
+    advBox.addView(proxyToken, new LinearLayout.LayoutParams(-1, -2));
     box.addView(advBox);
 
-    AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Gemini API key (BYOK)")
-        .setView(scroll)
-        .setNegativeButton("Cancel", null)
-        .setNeutralButton("Remove keys", (d, n) -> {
-          anomaly.hex.android.anywhere.TypeAnywhereAiClient.setGeminiKey(this, "");
-          anomaly.hex.android.anywhere.TypeAnywhereAiClient.setProxyToken(this, "");
-          render();
-        })
-        .setPositiveButton("Save", (d, n) -> {
-          String newKey = keyInput.getText().toString().trim();
-          if (!newKey.isEmpty()) {
-            anomaly.hex.android.anywhere.TypeAnywhereAiClient.setGeminiKey(this, newKey);
-          }
-          String newModel = modelInput.getText().toString().trim();
-          anomaly.hex.android.anywhere.TypeAnywhereAiClient.setModel(this, newModel);
-          String url = endpoint.getText().toString().trim();
-          SharedPreferences.Editor ed = prefs.edit();
-          if (url.isEmpty()) ed.remove("type_anywhere_endpoint");
-          else ed.putString("type_anywhere_endpoint", url);
-          ed.apply();
-          String newProxy = proxyToken.getText().toString().trim();
-          if (!newProxy.isEmpty()) {
-            anomaly.hex.android.anywhere.TypeAnywhereAiClient.setProxyToken(this, newProxy);
-          }
-          render();
-        }).create();
-    dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    AlertDialog dialog = new AlertDialog.Builder(this).setView(scroll).create();
+
+    LinearLayout footer = new LinearLayout(this);
+    footer.setOrientation(LinearLayout.HORIZONTAL);
+    footer.setGravity(Gravity.CENTER_VERTICAL);
+    LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(-1, -2);
+    flp.topMargin = d(18);
+    box.addView(footer, flp);
+
+    if (!currentGemini.isEmpty() || !currentProxy.isEmpty()) {
+      Button removeBtn = smallButton(this, "Remove", () -> {
+        anomaly.hex.android.anywhere.TypeAnywhereAiClient.setGeminiKey(this, "");
+        anomaly.hex.android.anywhere.TypeAnywhereAiClient.setProxyToken(this, "");
+        dialog.dismiss();
+        render();
+      });
+      removeBtn.setTextColor(DANGER);
+      removeBtn.setBackground(ripple(this, DANGER_SURFACE, 999));
+      footer.addView(removeBtn, new LinearLayout.LayoutParams(-2, d(36)));
+    }
+
+    View spacer = new View(this);
+    footer.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1));
+
+    Button cancelBtn = smallButton(this, "Cancel", dialog::dismiss);
+    LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, d(36));
+    clp.rightMargin = d(8);
+    footer.addView(cancelBtn, clp);
+
+    Button saveBtn = button(this, "Save", true, () -> {
+      String newKey = keyInput.getText().toString().trim();
+      if (!newKey.isEmpty()) {
+        anomaly.hex.android.anywhere.TypeAnywhereAiClient.setGeminiKey(this, newKey);
+      }
+      String newModel = modelInput.getText().toString().trim();
+      anomaly.hex.android.anywhere.TypeAnywhereAiClient.setModel(this, newModel);
+      String url = endpoint.getText().toString().trim();
+      SharedPreferences.Editor ed = prefs.edit();
+      if (url.isEmpty()) ed.remove("type_anywhere_endpoint");
+      else ed.putString("type_anywhere_endpoint", url);
+      ed.apply();
+      String newProxy = proxyToken.getText().toString().trim();
+      if (!newProxy.isEmpty()) {
+        anomaly.hex.android.anywhere.TypeAnywhereAiClient.setProxyToken(this, newProxy);
+      }
+      dialog.dismiss();
+      render();
+    });
+    saveBtn.setTextSize(14);
+    saveBtn.setHeight(d(36));
+    footer.addView(saveBtn, new LinearLayout.LayoutParams(-2, d(36)));
+
+    if (dialog.getWindow() != null) {
+      dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    }
     dialog.show();
   }
   private void labs() {
@@ -1271,60 +1308,212 @@ public final class HexHomeActivity extends Activity {
   }
   private void configureQuickPrompts() {
     var slots = anomaly.hex.android.anywhere.QuickPromptsStore.load(this);
-    String[] items = new String[slots.size()];
-    for (int i = 0; i < slots.size(); i++) {
-      var s = slots.get(i);
-      items[i] = (i + 1) + ". " + s.label + " — " + s.prompt;
-    }
-    new AlertDialog.Builder(this)
-        .setTitle("Quick prompt slots")
-        .setItems(items, (d, which) -> editQuickPromptSlot(which, slots.get(which)))
-        .setNeutralButton("Reset defaults", (d, w) -> {
-          anomaly.hex.android.anywhere.QuickPromptsStore.reset(this);
-          Toast.makeText(this, "Quick prompts reset", Toast.LENGTH_SHORT).show();
-        })
-        .setNegativeButton("Done", null)
-        .show();
-  }
-  private void editQuickPromptSlot(int index, anomaly.hex.android.anywhere.QuickPromptsStore.Slot current) {
+    ScrollView scroll = new ScrollView(this);
     LinearLayout box = new LinearLayout(this);
     box.setOrientation(LinearLayout.VERTICAL);
-    box.setPadding(d(20), d(12), d(20), d(4));
+    box.setPadding(d(20), d(18), d(20), d(18));
+    scroll.addView(box);
 
-    EditText label = new EditText(this);
-    label.setHint("Short label (e.g. Fact-check)");
+    box.addView(text(this, "Quick prompt slots", 19, TEXT));
+    TextView sub = text(this, "Tap any slot to edit or pick a preset.", 13, MUTED);
+    LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, -2);
+    slp.topMargin = d(4);
+    slp.bottomMargin = d(14);
+    box.addView(sub, slp);
+
+    AlertDialog dialog = new AlertDialog.Builder(this).setView(scroll).create();
+
+    for (int i = 0; i < slots.size(); i++) {
+      final int idx = i;
+      var s = slots.get(i);
+      LinearLayout item = new LinearLayout(this);
+      item.setOrientation(LinearLayout.VERTICAL);
+      item.setBackground(ripple(this, LAYER_01, 14));
+      item.setPadding(d(14), d(12), d(14), d(12));
+      item.setOnClickListener(v -> {
+        dialog.dismiss();
+        editQuickPromptSlot(idx, s);
+      });
+
+      LinearLayout topRow = new LinearLayout(this);
+      topRow.setOrientation(LinearLayout.HORIZONTAL);
+      topRow.setGravity(Gravity.CENTER_VERTICAL);
+      TextView badge = text(this, "SLOT " + (i + 1), 11, MIC);
+      topRow.addView(badge);
+      View sp = new View(this);
+      topRow.addView(sp, new LinearLayout.LayoutParams(0, 1, 1));
+      topRow.addView(text(this, "Edit ›", 12, MUTED));
+      item.addView(topRow, new LinearLayout.LayoutParams(-1, -2));
+
+      TextView lbl = text(this, s.label, 15, TEXT);
+      LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
+      llp.topMargin = d(4);
+      item.addView(lbl, llp);
+
+      TextView prm = new TextView(this);
+      prm.setText(s.prompt);
+      prm.setTextSize(12.5f);
+      prm.setTextColor(MUTED);
+      prm.setMaxLines(2);
+      prm.setEllipsize(android.text.TextUtils.TruncateAt.END);
+      LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, -2);
+      plp.topMargin = d(2);
+      item.addView(prm, plp);
+
+      LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(-1, -2);
+      if (i > 0) ilp.topMargin = d(8);
+      box.addView(item, ilp);
+    }
+
+    LinearLayout footer = new LinearLayout(this);
+    footer.setOrientation(LinearLayout.HORIZONTAL);
+    footer.setGravity(Gravity.CENTER_VERTICAL);
+    LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(-1, -2);
+    flp.topMargin = d(16);
+    box.addView(footer, flp);
+
+    Button resetBtn = smallButton(this, "Reset defaults", () -> {
+      anomaly.hex.android.anywhere.QuickPromptsStore.reset(this);
+      Toast.makeText(this, "Quick prompts reset", Toast.LENGTH_SHORT).show();
+      dialog.dismiss();
+      configureQuickPrompts();
+    });
+    footer.addView(resetBtn, new LinearLayout.LayoutParams(-2, d(36)));
+
+    View fsp = new View(this);
+    footer.addView(fsp, new LinearLayout.LayoutParams(0, 1, 1));
+
+    Button doneBtn = button(this, "Done", true, dialog::dismiss);
+    doneBtn.setTextSize(14);
+    doneBtn.setHeight(d(36));
+    footer.addView(doneBtn, new LinearLayout.LayoutParams(-2, d(36)));
+
+    dialog.show();
+  }
+  private void editQuickPromptSlot(int index, anomaly.hex.android.anywhere.QuickPromptsStore.Slot current) {
+    ScrollView scroll = new ScrollView(this);
+    LinearLayout box = new LinearLayout(this);
+    box.setOrientation(LinearLayout.VERTICAL);
+    box.setPadding(d(20), d(18), d(20), d(18));
+    scroll.addView(box);
+
+    box.addView(text(this, "Slot " + (index + 1), 19, TEXT));
+
+    TextView lTitle = text(this, "SHORT LABEL", 11, MUTED);
+    LinearLayout.LayoutParams ltp = new LinearLayout.LayoutParams(-1, -2);
+    ltp.topMargin = d(14);
+    box.addView(lTitle, ltp);
+
+    EditText label = input(this, "e.g. Fact-check");
     label.setText(current.label);
     label.setSingleLine();
-    box.addView(label);
+    LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
+    llp.topMargin = d(6);
+    llp.bottomMargin = d(12);
+    box.addView(label, llp);
 
-    EditText prompt = new EditText(this);
-    prompt.setHint("Prompt sent to Gemini");
+    TextView pTitle = text(this, "PROMPT SENT TO GEMINI", 11, MUTED);
+    box.addView(pTitle);
+
+    EditText prompt = input(this, "What should Gemini do with the screen?");
     prompt.setText(current.prompt);
-    box.addView(prompt);
+    prompt.setMinLines(3);
+    prompt.setGravity(Gravity.TOP | Gravity.START);
+    LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, -2);
+    plp.topMargin = d(6);
+    box.addView(prompt, plp);
 
-    new AlertDialog.Builder(this)
-        .setTitle("Slot " + (index + 1))
-        .setView(box)
-        .setPositiveButton("Save", (d, w) -> {
-          anomaly.hex.android.anywhere.QuickPromptsStore.save(
-              this, index, label.getText().toString(), prompt.getText().toString());
-          configureQuickPrompts();
-        })
-        .setNeutralButton("Presets", (d, w) -> {
-          var presets = anomaly.hex.android.anywhere.QuickPromptsStore.PRESETS;
-          String[] names = new String[presets.size()];
-          for (int i = 0; i < presets.size(); i++) names[i] = presets.get(i).label;
-          new AlertDialog.Builder(this)
-              .setTitle("Choose preset for slot " + (index + 1))
-              .setItems(names, (pd, pIdx) -> {
-                var chosen = presets.get(pIdx);
-                anomaly.hex.android.anywhere.QuickPromptsStore.save(this, index, chosen.label, chosen.prompt);
-                configureQuickPrompts();
-              })
-              .setNegativeButton("Cancel", null)
-              .show();
-        })
-        .setNegativeButton("Cancel", null)
-        .show();
+    AlertDialog dialog = new AlertDialog.Builder(this).setView(scroll).create();
+
+    LinearLayout footer = new LinearLayout(this);
+    footer.setOrientation(LinearLayout.HORIZONTAL);
+    footer.setGravity(Gravity.CENTER_VERTICAL);
+    LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(-1, -2);
+    flp.topMargin = d(18);
+    box.addView(footer, flp);
+
+    Button presetsBtn = smallButton(this, "Presets", () -> {
+      dialog.dismiss();
+      pickQuickPromptPreset(index);
+    });
+    footer.addView(presetsBtn, new LinearLayout.LayoutParams(-2, d(36)));
+
+    View sp = new View(this);
+    footer.addView(sp, new LinearLayout.LayoutParams(0, 1, 1));
+
+    Button cancelBtn = smallButton(this, "Cancel", () -> {
+      dialog.dismiss();
+      configureQuickPrompts();
+    });
+    LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, d(36));
+    clp.rightMargin = d(8);
+    footer.addView(cancelBtn, clp);
+
+    Button saveBtn = button(this, "Save", true, () -> {
+      anomaly.hex.android.anywhere.QuickPromptsStore.save(
+          this, index, label.getText().toString(), prompt.getText().toString());
+      dialog.dismiss();
+      configureQuickPrompts();
+    });
+    saveBtn.setTextSize(14);
+    saveBtn.setHeight(d(36));
+    footer.addView(saveBtn, new LinearLayout.LayoutParams(-2, d(36)));
+
+    dialog.show();
+  }
+  private void pickQuickPromptPreset(int index) {
+    var presets = anomaly.hex.android.anywhere.QuickPromptsStore.PRESETS;
+    ScrollView scroll = new ScrollView(this);
+    LinearLayout box = new LinearLayout(this);
+    box.setOrientation(LinearLayout.VERTICAL);
+    box.setPadding(d(20), d(18), d(20), d(18));
+    scroll.addView(box);
+
+    box.addView(text(this, "Preset for slot " + (index + 1), 19, TEXT));
+    TextView sub = text(this, "Tap a preset to assign it.", 13, MUTED);
+    LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, -2);
+    slp.topMargin = d(4);
+    slp.bottomMargin = d(12);
+    box.addView(sub, slp);
+
+    AlertDialog dialog = new AlertDialog.Builder(this).setView(scroll).create();
+
+    for (int i = 0; i < presets.size(); i++) {
+      var p = presets.get(i);
+      LinearLayout item = new LinearLayout(this);
+      item.setOrientation(LinearLayout.VERTICAL);
+      item.setBackground(ripple(this, LAYER_01, 14));
+      item.setPadding(d(14), d(10), d(14), d(10));
+      item.setOnClickListener(v -> {
+        anomaly.hex.android.anywhere.QuickPromptsStore.save(this, index, p.label, p.prompt);
+        dialog.dismiss();
+        configureQuickPrompts();
+      });
+      item.addView(text(this, p.label, 14, TEXT));
+      TextView pr = new TextView(this);
+      pr.setText(p.prompt);
+      pr.setTextSize(12f);
+      pr.setTextColor(MUTED);
+      pr.setMaxLines(2);
+      pr.setEllipsize(android.text.TextUtils.TruncateAt.END);
+      LinearLayout.LayoutParams prp = new LinearLayout.LayoutParams(-1, -2);
+      prp.topMargin = d(2);
+      item.addView(pr, prp);
+
+      LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(-1, -2);
+      if (i > 0) ilp.topMargin = d(8);
+      box.addView(item, ilp);
+    }
+
+    Button cancelBtn = smallButton(this, "Cancel", () -> {
+      dialog.dismiss();
+      configureQuickPrompts();
+    });
+    LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, d(36));
+    clp.topMargin = d(14);
+    clp.gravity = Gravity.END;
+    box.addView(cancelBtn, clp);
+
+    dialog.show();
   }
 }

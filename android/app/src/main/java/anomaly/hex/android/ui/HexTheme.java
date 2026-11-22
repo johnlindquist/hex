@@ -27,13 +27,13 @@ public final class HexTheme {
       d.setStroke(Math.max(1, dp(c, .5f)), border);
     return d;
   }
-  static android.graphics.drawable.Drawable ripple(Context c, int color, int radius) {
+  public static android.graphics.drawable.Drawable ripple(Context c, int color, int radius) {
     return new android.graphics.drawable.RippleDrawable(
         android.content.res.ColorStateList.valueOf(BORDER), shape(c, color, radius, 0), null);
   }
-  static EditText input(Context c, String hint) {
+  public static EditText input(Context c, String hint) {
     EditText v = new EditText(c);
-    v.setBackground(shape(c, LAYER_01, 12, 0));
+    v.setBackground(shape(c, LAYER_01, 12, BORDER));
     v.setPadding(dp(c, 14), dp(c, 12), dp(c, 14), dp(c, 12));
     v.setTextColor(TEXT);
     v.setHintTextColor(FAINT);
@@ -41,7 +41,7 @@ public final class HexTheme {
     v.setHint(hint);
     return v;
   }
-  static TextView text(Context c, String s, int size, int color) {
+  public static TextView text(Context c, String s, int size, int color) {
     TextView v = new TextView(c);
     v.setText(s);
     v.setTextSize(size);
@@ -51,7 +51,7 @@ public final class HexTheme {
       v.setTypeface(Typeface.create("sans-serif-medium", 0));
     return v;
   }
-  static Button button(Context c, String label, boolean primary, Runnable action) {
+  public static Button button(Context c, String label, boolean primary, Runnable action) {
     Button b = new Button(c);
     b.setAllCaps(false);
     b.setText(label);
