@@ -437,6 +437,14 @@ public final class HexInputMethodService extends InputMethodService implements F
   }
   public void onSwitchKeyboard() { if (!switchToNextInputMethod(false)) getSystemService(InputMethodManager.class).showInputMethodPicker(); }
   public void onOpenApp() { startActivity(new Intent(this, HexHomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
+  @Override public void onOpenAccessibilitySettings() {
+    try {
+      startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+    } catch (RuntimeException ignored) {
+      onOpenApp();
+    }
+  }
   static String languageLabel(String id) {
     Locale locale = Locale.forLanguageTag(id);
     String name = locale.getDisplayLanguage(locale);
@@ -576,7 +584,8 @@ public final class HexInputMethodService extends InputMethodService implements F
         rewriteSession.usedScreen,
         rewriteSession.usedWeb,
         rewriteSession.originalDraft,
-        rewriteSession.appliedText);
+        rewriteSession.appliedText,
+        anomaly.hex.android.service.HexBubbleService.isScreenCaptureReady());
   }
   @Override public void onRewriteWithPrompt() {
     InputConnection c = ic();
@@ -645,7 +654,8 @@ public final class HexInputMethodService extends InputMethodService implements F
         @Override public void onOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb) {
           if (ticket != rewriteGen || fullView == null) return;
           rewriteSession = new KeyboardRewriteClient.Session(draft, instruction, options, usedScreen, usedWeb, null);
-          fullView.showRewriteOptions(options, usedScreen, usedWeb, draft, null);
+          fullView.showRewriteOptions(options, usedScreen, usedWeb, draft, null,
+              anomaly.hex.android.service.HexBubbleService.isScreenCaptureReady());
         }
         @Override public void onError(String message) {
           if (ticket != rewriteGen || fullView == null) return;

@@ -658,9 +658,238 @@ public final class HexHomeActivity extends Activity {
     inset(practice);
     if (actions) {
       LinearLayout r = row(group, 10);
-      r.addView(smallButton(this, "Copy", () -> copy(practice.getText().toString())));
+      r.addView(smallButton(this, "Rewrite", this::openScratchpadRewrite));
+      r.addView(smallButton(this, "Copy", () -> copy(practice.getText().toString())), afterControl());
       r.addView(smallButton(this, "Clear", () -> { practice.setText(""); }), afterControl());
     }
+  }
+  private void openScratchpadRewrite() {
+    String draft = practice == null ? "" : practice.getText().toString().trim();
+    if (draft.isEmpty()) {
+      Toast.makeText(this, "Type or dictate a message in Scratchpad first", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    ScrollView modalScroll = new ScrollView(this);
+    LinearLayout box = new LinearLayout(this);
+    box.setOrientation(LinearLayout.VERTICAL);
+    box.setPadding(d(20), d(18), d(20), d(18));
+    modalScroll.addView(box);
+
+    LinearLayout hdr = new LinearLayout(this);
+    hdr.setOrientation(LinearLayout.HORIZONTAL);
+    hdr.setGravity(Gravity.CENTER_VERTICAL);
+    box.addView(hdr, new LinearLayout.LayoutParams(-1, -2));
+
+    TextView title = text(this, "Rewrite", 19, TEXT);
+    title.setTypeface(Typeface.create("sans-serif-medium", 0));
+    hdr.addView(title);
+
+    TextView statusBadge = text(this, "Working…", 11, MUTED);
+    statusBadge.setPadding(d(9), d(3), d(9), d(3));
+    statusBadge.setBackground(shape(this, 0x16ffffff, 999, 0));
+    LinearLayout.LayoutParams badgeLp = new LinearLayout.LayoutParams(-2, -2);
+    badgeLp.leftMargin = d(10);
+    hdr.addView(statusBadge, badgeLp);
+
+    // Optional prompt row
+    LinearLayout promptRow = new LinearLayout(this);
+    promptRow.setOrientation(LinearLayout.HORIZONTAL);
+    promptRow.setGravity(Gravity.CENTER_VERTICAL);
+    LinearLayout.LayoutParams prLp = new LinearLayout.LayoutParams(-1, -2);
+    prLp.topMargin = d(12);
+    box.addView(promptRow, prLp);
+
+    EditText instructionInput = input(this, "Optional instruction (e.g. shorter, friendly)…");
+    instructionInput.setSingleLine();
+    promptRow.addView(instructionInput, new LinearLayout.LayoutParams(0, -2, 1));
+
+    LinearLayout cardsContainer = new LinearLayout(this);
+    cardsContainer.setOrientation(LinearLayout.VERTICAL);
+    LinearLayout.LayoutParams ccLp = new LinearLayout.LayoutParams(-1, -2);
+    ccLp.topMargin = d(12);
+    box.addView(cardsContainer, ccLp);
+
+    AlertDialog dialog = new AlertDialog.Builder(this).setView(modalScroll).create();
+    final long[] gen = {0L};
+    final Runnable[] runFetch = new Runnable[1];
+
+    Button goBtn = smallButton(this, "Run", () -> {
+      if (runFetch[0] != null) runFetch[0].run();
+    });
+    promptRow.addView(goBtn, afterControl());
+
+    // Quick style chips
+    HorizontalScrollView chipScroll = new HorizontalScrollView(this);
+    chipScroll.setHorizontalScrollBarEnabled(false);
+    LinearLayout chipStrip = new LinearLayout(this);
+    chipStrip.setOrientation(LinearLayout.HORIZONTAL);
+    String[][] presets = {
+        {"Fix & polish", ""},
+        {"Shorter", "Make this much shorter and punchier while keeping the key point"},
+        {"Friendly", "Rewrite in a friendly, casual, approachable tone"},
+        {"Executive", "Rewrite in a crisp, confident executive style"},
+        {"Bullets", "Rewrite as clear, scannable bullet points"},
+        {"Research", "Research the facts using web search and weave them into a helpful reply"}
+    };
+    for (String[] preset : presets) {
+      TextView chip = text(this, preset[0], 12, TEXT);
+      chip.setPadding(d(10), d(5), d(10), d(5));
+      chip.setBackground(ripple(this, 0x16ffffff, 999));
+      chip.setOnClickListener(v -> {
+        instructionInput.setText(preset[1]);
+        if (runFetch[0] != null) runFetch[0].run();
+      });
+      LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -2);
+      clp.rightMargin = d(6);
+      chipStrip.addView(chip, clp);
+    }
+    chipScroll.addView(chipStrip);
+    LinearLayout.LayoutParams csLp = new LinearLayout.LayoutParams(-1, -2);
+    csLp.topMargin = d(8);
+    box.addView(chipScroll, 2, csLp);
+
+    runFetch[0] = () -> {
+      long ticket = ++gen[0];
+      String inst = instructionInput.getText() == null ? "" : instructionInput.getText().toString().trim();
+      String effectiveInst = inst.isEmpty() ? null : inst;
+      boolean a11yReady = HexBubbleService.isScreenCaptureReady();
+
+      statusBadge.setText(a11yReady ? "Reading screen…" : "Working…");
+      statusBadge.setTextColor(MUTED);
+      statusBadge.setOnClickListener(null);
+      cardsContainer.removeAllViews();
+
+      TextView loading = text(this,
+          effectiveInst != null ? "Running rewrite prompt…" : "Crafting rewrite options…",
+          14, MUTED);
+      loading.setPadding(d(12), d(14), d(12), d(14));
+      loading.setBackground(shape(this, SURFACE, 12, 0x1AFFFFFF));
+      cardsContainer.addView(loading, new LinearLayout.LayoutParams(-1, -2));
+
+      HexBubbleService.captureScreenForKeyboard(screen -> {
+        if (ticket != gen[0] || isFinishing() || isDestroyed() || !dialog.isShowing()) {
+          if (screen != null && !screen.isRecycled()) screen.recycle();
+          return;
+        }
+        KeyboardRewriteClient.rewrite(this, draft, effectiveInst, screen, new KeyboardRewriteClient.Callback() {
+          @Override
+          public void onOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb) {
+            if (ticket != gen[0] || isFinishing() || isDestroyed() || !dialog.isShowing()) return;
+            boolean needsA11y = !usedScreen && !HexBubbleService.isScreenCaptureReady();
+            String badge = usedScreen
+                ? (usedWeb ? "Screen · Web" : "Screen context")
+                : (needsA11y
+                    ? (usedWeb ? "Web · Enable screen ›" : "Enable screen ›")
+                    : (usedWeb ? "Web" : "Draft only"));
+            statusBadge.setText(badge);
+            statusBadge.setTextColor((usedScreen || usedWeb || needsA11y) ? MIC : MUTED);
+            statusBadge.setOnClickListener(needsA11y ? v -> {
+              dialog.dismiss();
+              accessibility();
+            } : null);
+
+            cardsContainer.removeAllViews();
+            if (needsA11y) {
+              LinearLayout banner = new LinearLayout(HexHomeActivity.this);
+              banner.setOrientation(LinearLayout.VERTICAL);
+              banner.setPadding(d(12), d(10), d(12), d(10));
+              banner.setBackground(ripple(HexHomeActivity.this, SURFACE, 12));
+              banner.setOnClickListener(v -> {
+                dialog.dismiss();
+                accessibility();
+              });
+              LinearLayout top = new LinearLayout(HexHomeActivity.this);
+              top.setGravity(Gravity.CENTER_VERTICAL);
+              TextView bt = text(HexHomeActivity.this, "Screen context is off", 13, MIC);
+              bt.setTypeface(Typeface.create("sans-serif-medium", 0));
+              top.addView(bt, new LinearLayout.LayoutParams(0, -2, 1));
+              TextView go = text(HexHomeActivity.this, "Enable ›", 12, TEXT);
+              go.setPadding(d(9), d(2), d(9), d(2));
+              go.setBackground(shape(HexHomeActivity.this, 0x22ffffff, 999, 0));
+              top.addView(go);
+              banner.addView(top, new LinearLayout.LayoutParams(-1, -2));
+              TextView sub = text(HexHomeActivity.this,
+                  "Turn on Hex Accessibility so Rewrite can read the screen.", 12, MUTED);
+              LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, -2);
+              slp.topMargin = d(4);
+              banner.addView(sub, slp);
+              LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
+              blp.bottomMargin = d(8);
+              cardsContainer.addView(banner, blp);
+            }
+
+            for (int i = 0; i < options.size(); i++) {
+              KeyboardRewriteClient.Option opt = options.get(i);
+              LinearLayout card = new LinearLayout(HexHomeActivity.this);
+              card.setOrientation(LinearLayout.VERTICAL);
+              card.setPadding(d(12), d(10), d(12), d(10));
+              card.setBackground(ripple(HexHomeActivity.this, SURFACE, 12));
+              card.setOnClickListener(v -> {
+                if (practice != null) {
+                  practice.setText(opt.text);
+                  practice.setSelection(opt.text.length());
+                }
+                Toast.makeText(HexHomeActivity.this, "Applied: " + opt.label, Toast.LENGTH_SHORT).show();
+                dialog.dismiss();
+              });
+
+              LinearLayout top = new LinearLayout(HexHomeActivity.this);
+              top.setGravity(Gravity.CENTER_VERTICAL);
+              TextView tag = text(HexHomeActivity.this, opt.label, 12, MIC);
+              tag.setTypeface(Typeface.create("sans-serif-medium", 0));
+              top.addView(tag, new LinearLayout.LayoutParams(0, -2, 1));
+              top.addView(text(HexHomeActivity.this, "Tap to apply", 11, MUTED));
+              card.addView(top, new LinearLayout.LayoutParams(-1, -2));
+
+              TextView bodyTxt = text(HexHomeActivity.this, opt.text, 14, TEXT);
+              LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, -2);
+              tlp.topMargin = d(4);
+              card.addView(bodyTxt, tlp);
+
+              LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+              if (i > 0) clp.topMargin = d(8);
+              cardsContainer.addView(card, clp);
+            }
+          }
+
+          @Override
+          public void onError(String message) {
+            if (ticket != gen[0] || isFinishing() || isDestroyed() || !dialog.isShowing()) return;
+            statusBadge.setText("Error");
+            statusBadge.setTextColor(MUTED);
+            cardsContainer.removeAllViews();
+            TextView err = text(HexHomeActivity.this,
+                message == null || message.isBlank() ? "Couldn’t rewrite right now." : message,
+                13, TEXT);
+            err.setPadding(d(12), d(12), d(12), d(12));
+            err.setBackground(shape(HexHomeActivity.this, SURFACE, 12, 0x1AFFFFFF));
+            cardsContainer.addView(err, new LinearLayout.LayoutParams(-1, -2));
+          }
+        });
+      });
+    };
+
+    LinearLayout footer = new LinearLayout(this);
+    footer.setOrientation(LinearLayout.HORIZONTAL);
+    footer.setGravity(Gravity.CENTER_VERTICAL);
+    LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(-1, -2);
+    flp.topMargin = d(16);
+    box.addView(footer, flp);
+
+    Button retryBtn = smallButton(this, "Regenerate", () -> {
+      if (runFetch[0] != null) runFetch[0].run();
+    });
+    footer.addView(retryBtn, new LinearLayout.LayoutParams(-2, d(36)));
+
+    View sp = new View(this);
+    footer.addView(sp, new LinearLayout.LayoutParams(0, 1, 1));
+
+    Button closeBtn = smallButton(this, "Close", dialog::dismiss);
+    footer.addView(closeBtn, new LinearLayout.LayoutParams(-2, d(36)));
+
+    dialog.setOnDismissListener(d -> gen[0]++);
+    dialog.show();
+    runFetch[0].run();
   }
   private void general() {
     LinearLayout r = row(header);

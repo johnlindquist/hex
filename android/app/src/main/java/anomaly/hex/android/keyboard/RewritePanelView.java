@@ -34,6 +34,7 @@ final class RewritePanelView extends LinearLayout {
   private final Runnable onEditPrompt;
   private final Runnable onRetry;
   private final Runnable onClose;
+  private final Runnable onEnableAccessibility;
   private final StringBuilder query = new StringBuilder();
   private boolean prompting;
 
@@ -43,13 +44,15 @@ final class RewritePanelView extends LinearLayout {
       Consumer<String> onSubmitPrompt,
       Runnable onEditPrompt,
       Runnable onRetry,
-      Runnable onClose) {
+      Runnable onClose,
+      Runnable onEnableAccessibility) {
     super(c);
     this.onPick = onPick;
     this.onSubmitPrompt = onSubmitPrompt;
     this.onEditPrompt = onEditPrompt;
     this.onRetry = onRetry;
     this.onClose = onClose;
+    this.onEnableAccessibility = onEnableAccessibility;
     setOrientation(VERTICAL);
     setBackgroundColor(BACKDROP);
     setPadding(dp(c, 8), dp(c, 4), dp(c, 8), dp(c, 4));
@@ -329,24 +332,36 @@ final class RewritePanelView extends LinearLayout {
   }
 
   void showOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb,
-      String originalDraft, String appliedText) {
+      String originalDraft, String appliedText, boolean accessibilityReady) {
     prompting = false;
     promptBar.setVisibility(GONE);
     resultsContainer.setVisibility(VISIBLE);
 
     Context c = getContext();
+    boolean needsAccessibility = !usedScreen && !accessibilityReady;
     String badgeText = usedScreen
         ? (usedWeb ? "Screen · Web" : "Screen context")
-        : (usedWeb ? "Web" : "Draft only");
+        : (needsAccessibility
+            ? (usedWeb ? "Web · Enable screen ›" : "Enable screen ›")
+            : (usedWeb ? "Web" : "Draft only"));
     contextBadge.setText(badgeText);
-    contextBadge.setTextColor((usedScreen || usedWeb) ? HexTheme.MIC : TEXT_MUTED);
+    contextBadge.setTextColor((usedScreen || usedWeb || needsAccessibility) ? HexTheme.MIC : TEXT_MUTED);
+    contextBadge.setBackground(needsAccessibility ? pressablePill(CHIP_FILL) : pill(CHIP_FILL));
+    contextBadge.setClickable(needsAccessibility);
+    contextBadge.setOnClickListener(needsAccessibility ? v -> onEnableAccessibility.run() : null);
     contextBadge.setVisibility(VISIBLE);
     body.removeAllViews();
+
+    boolean hasTopItem = false;
+    if (needsAccessibility) {
+      addAccessibilityBanner(c);
+      hasTopItem = true;
+    }
 
     for (int i = 0; i < options.size(); i++) {
       KeyboardRewriteClient.Option opt = options.get(i);
       boolean selected = appliedText != null && appliedText.equals(opt.text);
-      addOptionCard(c, opt, selected, i > 0);
+      addOptionCard(c, opt, selected, hasTopItem || i > 0);
     }
 
     if (originalDraft != null && !originalDraft.isBlank()) {
@@ -356,10 +371,49 @@ final class RewritePanelView extends LinearLayout {
       }
       if (!alreadyListed) {
         boolean isCurrent = appliedText == null || appliedText.equals(originalDraft);
-        addOptionCard(c, new KeyboardRewriteClient.Option("Original", originalDraft), isCurrent, !options.isEmpty());
+        addOptionCard(c, new KeyboardRewriteClient.Option("Original", originalDraft), isCurrent, hasTopItem || !options.isEmpty());
       }
     }
     scroll.scrollTo(0, 0);
+  }
+
+  private void addAccessibilityBanner(Context c) {
+    LinearLayout card = new LinearLayout(c);
+    card.setOrientation(VERTICAL);
+    card.setPadding(dp(c, 12), dp(c, 9), dp(c, 12), dp(c, 10));
+    card.setBackground(cardBackground(c));
+    card.setClickable(true);
+    card.setContentDescription("Screen context is off. Tap to enable Hex Accessibility.");
+    card.setOnClickListener(v -> onEnableAccessibility.run());
+
+    LinearLayout topRow = new LinearLayout(c);
+    topRow.setGravity(Gravity.CENTER_VERTICAL);
+    card.addView(topRow, new LayoutParams(-1, -2));
+
+    TextView tag = label(c, "Screen context is off", 12);
+    tag.setTypeface(android.graphics.Typeface.create("sans-serif-medium", 0));
+    tag.setTextColor(HexTheme.MIC);
+    topRow.addView(tag);
+
+    View gap = new View(c);
+    topRow.addView(gap, new LayoutParams(0, 1, 1));
+
+    TextView action = label(c, "Enable ›", 12);
+    action.setTypeface(android.graphics.Typeface.create("sans-serif-medium", 0));
+    action.setTextColor(ON_PILL_TEXT);
+    action.setBackground(pill(RETURN_PILL_FILL));
+    action.setPadding(dp(c, 9), dp(c, 2), dp(c, 9), dp(c, 2));
+    topRow.addView(action);
+
+    TextView detail = new TextView(c);
+    detail.setText("Turn on Hex Accessibility so Rewrite can read the conversation on screen.");
+    detail.setTextSize(12.5f);
+    detail.setTextColor(TEXT_MUTED);
+    LayoutParams dLp = new LayoutParams(-1, -2);
+    dLp.topMargin = dp(c, 4);
+    card.addView(detail, dLp);
+
+    body.addView(card, new LayoutParams(-1, -2));
   }
 
   private void addOptionCard(Context c, KeyboardRewriteClient.Option opt, boolean selected, boolean topGap) {

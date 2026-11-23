@@ -33,6 +33,7 @@ public final class FullKeyboardView extends FrameLayout {
         void onRewriteReopen();
         void onRewriteRetry();
         void onRewriteClose();
+        void onOpenAccessibilitySettings();
         void onStartDictation();
         void onLivePunctuation(String mark);
         void onStopDictation();
@@ -90,7 +91,8 @@ public final class FullKeyboardView extends FrameLayout {
                 },
                 host::onRewriteWithPrompt,
                 host::onRewriteRetry,
-                () -> { closeRewrite(); host.onRewriteClose(); });
+                () -> { closeRewrite(); host.onRewriteClose(); },
+                host::onOpenAccessibilitySettings);
             addView(rewritePanel,indexOfChild(plane),new LayoutParams(-1,-1));
         }
     }
@@ -119,14 +121,14 @@ public final class FullKeyboardView extends FrameLayout {
         requestLayout();
     }
     public void showRewriteOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb) {
-        showRewriteOptions(options, usedScreen, usedWeb, null, null);
+        showRewriteOptions(options, usedScreen, usedWeb, null, null, true);
     }
     public void showRewriteOptions(List<KeyboardRewriteClient.Option> options, boolean usedScreen, boolean usedWeb,
-                                   String originalDraft, String appliedText) {
+                                   String originalDraft, String appliedText, boolean accessibilityReady) {
         closeEmoji();
         ensureRewritePanel();
         rewriteOpen=true;
-        rewritePanel.showOptions(options, usedScreen, usedWeb, originalDraft, appliedText);
+        rewritePanel.showOptions(options, usedScreen, usedWeb, originalDraft, appliedText, accessibilityReady);
         rewritePanel.setVisibility(VISIBLE);
         strip.setVisibility(INVISIBLE);
         plane.setSearching(false);

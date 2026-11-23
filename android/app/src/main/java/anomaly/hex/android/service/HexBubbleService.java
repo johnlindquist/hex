@@ -210,6 +210,12 @@ public final class HexBubbleService extends AccessibilityService {
   private long holdCaptureAt;
   private boolean holdPendingOpen;
 
+  /** True when Hex Accessibility is connected and available for screen-aware rewrites. */
+  public static boolean isScreenCaptureReady() {
+    HexBubbleService s = active;
+    return s != null && s.connected;
+  }
+
   /** Captures the current screen for Hex Keyboard's screen-aware message rewrite, or null if unavailable. */
   public static void captureScreenForKeyboard(java.util.function.Consumer<Bitmap> callback) {
     HexBubbleService s = active;
