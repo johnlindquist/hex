@@ -82,10 +82,78 @@ public final class EmojiCatalog {
 
     public static int size() { return active.emojis.size(); }
 
+    public static boolean isEmoji(String text) {
+        return text != null && active.allValid.contains(text);
+    }
+
     public static Map<String, List<String>> categories() { return active.categories; }
 
     public static List<String> tonesFor(String emoji) {
         return active.tones.getOrDefault(emoji, List.of());
+    }
+
+    /** Strong weight threshold matching iOS EmojiSuggester.strongWeight (one-word names & chat aliases). */
+    public static final float STRONG_WEIGHT = 0.85f;
+
+    /**
+     * Returns strong emoji matches for a single word being typed ("smile" -> 😊, "heart" -> ❤️),
+     * matching iOS EmojiSuggester.forWord. Empty for stopwords or weak keyword matches.
+     */
+    public static List<String> forWord(String word, int limit) {
+        if (word == null || limit <= 0) return List.of();
+        Index idx = active;
+        String w = word.trim().toLowerCase(Locale.ROOT);
+        if (w.length() < 2 || idx.stopwords.contains(w)) return List.of();
+        List<String> forms = new ArrayList<>();
+        forms.add(w);
+        forms.addAll(stems(w));
+        for (int f = 0; f < forms.size(); f++) {
+            float factor = f == 0 ? 1.0f : 0.85f;
+            List<Posting> hits = idx.wordPostings.get(forms.get(f));
+            if (hits == null || hits.isEmpty()) continue;
+            List<Posting> strong = new ArrayList<>();
+            for (Posting p : hits) {
+                if (p.weight * factor >= STRONG_WEIGHT) strong.add(p);
+            }
+            if (strong.isEmpty()) continue;
+            strong.sort((a, b) -> {
+                int cmp = Float.compare(b.weight, a.weight);
+                return cmp != 0 ? cmp : Integer.compare(a.entryIdx, b.entryIdx);
+            });
+            List<String> out = new ArrayList<>(Math.min(limit, strong.size()));
+            for (Posting p : strong) {
+                String e = idx.emojis.get(p.entryIdx);
+                if (!out.contains(e)) out.add(e);
+                if (out.size() >= limit) break;
+            }
+            return out;
+        }
+        return List.of();
+    }
+
+    /** Exact strong emoji matches for a shortcode name ("fire", "heart", "sweat smile"). */
+    public static List<String> exactMatches(String lookupName, int limit) {
+        if (lookupName == null || lookupName.isBlank() || limit <= 0) return List.of();
+        Index idx = active;
+        String key = lookupName.trim().toLowerCase(Locale.ROOT);
+        List<Posting> hits = key.contains(" ") ? idx.phrasePostings.get(key) : idx.wordPostings.get(key);
+        if (hits == null || hits.isEmpty()) return List.of();
+        List<Posting> strong = new ArrayList<>();
+        for (Posting p : hits) {
+            if (p.weight >= STRONG_WEIGHT) strong.add(p);
+        }
+        if (strong.isEmpty()) return List.of();
+        strong.sort((a, b) -> {
+            int cmp = Float.compare(b.weight, a.weight);
+            return cmp != 0 ? cmp : Integer.compare(a.entryIdx, b.entryIdx);
+        });
+        List<String> out = new ArrayList<>(Math.min(limit, strong.size()));
+        for (Posting p : strong) {
+            String e = idx.emojis.get(p.entryIdx);
+            if (!out.contains(e)) out.add(e);
+            if (out.size() >= limit) break;
+        }
+        return out;
     }
 
     /** Multi-word & prefix ranked emoji search (Gboard / iOS EmojiLibrary parity). */

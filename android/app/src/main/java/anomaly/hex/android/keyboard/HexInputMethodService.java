@@ -43,6 +43,7 @@ public final class HexInputMethodService extends InputMethodService implements F
   private String state = "idle";
   private DictationUndo undo;
   private String rewriteUndoOriginal, rewriteUndoApplied;
+  private boolean emojiShortcodesEnabled;
   private List<TypoFixExtractor.FixPair> pendingQuickFixPairs;
   private long rewriteGen;
   private String lastRewriteDraft, lastRewriteInstruction;
@@ -112,6 +113,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     };
     words = text && !privateField && kind == KeyboardLayout.FieldKind.TEXT && (type & InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS) == 0;
     emojiEnabled = labs.isEnabled(LabId.EMOJI_KEYBOARD);
+    emojiShortcodesEnabled = labs.isEnabled(LabId.EMOJI_SHORTCODES) && emojiEnabled && !privateField && words;
     spatialAutocorrect = labs.isEnabled(LabId.SPATIAL_AUTOCORRECT);
     boolean allowLearn = !privateField && (info.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
     telemetryEnabled = labs.isEnabled(LabId.TYPING_TELEMETRY) && allowLearn && words;
@@ -134,6 +136,7 @@ public final class HexInputMethodService extends InputMethodService implements F
       fullView.setSettings(language, kbSettings.keyPopups(), kbSettings.haptics(), emojiEnabled && !privateField && !EditorDeletePolicy.raw(type));
       fullView.setTwoThumbSpace(labs.isEnabled(LabId.TWO_THUMB_SPACE));
       fullView.setSpacebarFix(tailFixEnabled, tailMode);
+      fullView.setQuickAccents(labs.isEnabled(LabId.QUICK_ACCENTS));
       fullView.setPrivateField(privateField);
       fullView.setFieldKind(kind, actionLabel(), KeyboardLayout.initialLayerForInputClass(cls), !restarting);
     }
@@ -193,11 +196,30 @@ public final class HexInputMethodService extends InputMethodService implements F
     String context = words ? before(256) : "";
     String current = word(context);
     String prevWord = AutocorrectEngine.previousWord(context);
+    if (emojiShortcodesEnabled) {
+      List<String> shortcodeMatches = EmojiShortcode.matches(context, true, 3);
+      if (!shortcodeMatches.isEmpty()) {
+        fullView.setSuggestions(shortcodeMatches, false);
+        fullView.setEmojiContext(context);
+        return;
+      }
+    }
     List<String> extraHints = lookupHints(context, current);
     List<String> suggestions = new ArrayList<>(autocorrect.suggestions(current, vocabulary, extraHints));
     boolean autoReplace = words && kbSettings.autocorrect() && autocorrect.willAutoReplace(current, prevWord, extraHints);
-    String emoji = emojiEnabled ? EmojiCatalog.suggestForContext(context) : null;
-    if (emoji != null) { if (suggestions.size() == 3) suggestions.remove(2); suggestions.add(emoji); }
+    String emoji = null;
+    if (emojiEnabled && words && !privateField) {
+      if (!current.isEmpty() && !autoReplace) {
+        List<String> wordEmoji = EmojiCatalog.forWord(current, 1);
+        if (!wordEmoji.isEmpty()) emoji = wordEmoji.get(0);
+      } else if (current.isEmpty()) {
+        emoji = EmojiCatalog.suggestForContext(context);
+      }
+    }
+    if (emoji != null && !suggestions.contains(emoji)) {
+      if (suggestions.size() >= 3) suggestions.set(2, emoji);
+      else suggestions.add(emoji);
+    }
     fullView.setSuggestions(suggestions, autoReplace); fullView.setEmojiContext(context);
   }
   @Override public void onUpdateSelection(int a,int b,int x,int y,int cs,int ce) {
@@ -208,7 +230,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     pendingQuickFixPairs = null;
     if (pairs == null || pairs.isEmpty() || personalStore == null) return;
     for (TypoFixExtractor.FixPair pair : pairs) {
-      personalStore.recordAccepted(pair.from(), pair.to());
+      personalStore.recordRetyped(pair.from(), pair.to());
     }
   }
   private void setUndo(DictationUndo value) {
@@ -241,6 +263,14 @@ public final class HexInputMethodService extends InputMethodService implements F
   }
   public void onCharacter(String s) {
     if (ic() == null) return;
+    if (emojiShortcodesEnabled && ":".equals(s)) {
+      EmojiShortcode.Completion comp = EmojiShortcode.completion(before(64));
+      if (comp != null) {
+        editing();
+        replace(comp.token().text().length(), comp.emoji());
+        return;
+      }
+    }
     if (words && s != null && s.length() == 1 && ".!?,;:".indexOf(s.charAt(0)) >= 0) {
       autocorrect.recordCommittedWord(before(256));
     }
@@ -251,6 +281,22 @@ public final class HexInputMethodService extends InputMethodService implements F
   public void onSuggestionPick(String s) {
     if (ic() != null && words) {
       String ctx = before(256);
+      if (EmojiCatalog.isEmoji(s)) {
+        EmojiShortcode.Token scTok = emojiShortcodesEnabled ? EmojiShortcode.token(ctx) : null;
+        if (scTok != null) {
+          editing();
+          replace(scTok.text().length(), s);
+          return;
+        }
+        String typed = word(ctx);
+        editing();
+        if (!typed.isEmpty()) {
+          replace(typed.length(), s + " ");
+        } else {
+          replace(0, s);
+        }
+        return;
+      }
       String typed = word(ctx);
       String prev = AutocorrectEngine.previousWord(ctx);
       if (telemetryEnabled) telemetry.logSuggestionPick(typed, s);
@@ -703,7 +749,11 @@ public final class HexInputMethodService extends InputMethodService implements F
     editing(); long id = ++generation; explicitCancel = false;
     TranscriptStyle style = hexSettings.style(); String lang = SpeechLanguage.resolveLocale(speechLang.selectedId(),Locale.getDefault()).toLanguageTag();
     var fixStore = new DictationFixStore(this); Map<String,String> fixes = fixStore.isEnabled() ? fixStore.activeFixes() : Map.of();
-    boolean spoken = labs.isEnabled(LabId.SPOKEN_CLEANUP); List<String> vocab = vocabulary;
+    boolean spoken = labs.isEnabled(LabId.SPOKEN_CLEANUP);
+    boolean numbersAsDigits = hexSettings.numbersAsDigits();
+    boolean signatureEnabled = labs.isEnabled(LabId.SIGNATURE);
+    String signatureText = hexSettings.signatureText();
+    List<String> vocab = vocabulary;
     boolean allowHistory = (editor.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
     anomaly.hex.android.speech.RecordingStore.Writer recWriter = null;
     if (allowHistory && hexSettings.historyRetention() != HistoryRetention.OFF) {
@@ -734,6 +784,20 @@ public final class HexInputMethodService extends InputMethodService implements F
           String wavPath = recorder != null ? recorder.finish(HexInputMethodService.this, keep) : null;
           long recMs = recorder != null ? Math.max(totalMs, recorder.durationMs()) : totalMs;
           main.post(() -> {
+            if (s.equals("finished") && !interrupted && allFinal.length() > 0 && signatureEnabled
+                && generation == id && ic() == target && live != null && verifiedCursor(target)) {
+              String signed = DictationSignature.append(allFinal.toString(), signatureText, true);
+              if (signed != null && signed.length() > allFinal.length()) {
+                String suffix = signed.substring(allFinal.length());
+                if (target.commitText(suffix, 1)) {
+                  allFinal.append(suffix);
+                  int newEnd = live.end() + suffix.length();
+                  DictationUndo value = replacement == null ? new DictationUndo(suffix, newEnd, replacedSelection) : replacement.append(suffix);
+                  if (replacedSelection != null) replacement = value;
+                  setUndo(at(target, value) ? value : null);
+                }
+              }
+            }
             if (keep && (allFinal.length() > 0 || (wavPath != null && recMs >= 1000))) {
               String rawStr = allRaw.toString().trim();
               String finalStr;
@@ -763,7 +827,7 @@ public final class HexInputMethodService extends InputMethodService implements F
             : !at(target, replacement))) {
           interruptDictation("text_changed"); notice("Dictation interrupted — audio saved to History"); return;
         }
-        var edit = live.phrase(TranscriptFormatter.applyPipeline(raw,style,vocab,spoken,before(128),fixes,lang));
+        var edit = live.phrase(TranscriptFormatter.applyPipeline(raw,style,vocab,spoken,before(128),fixes,lang,numbersAsDigits));
         String text = edit.text();
         if (text.isBlank() || !target.commitText(text,1)) return;
         live.committed(edit,false); int end=live.end();

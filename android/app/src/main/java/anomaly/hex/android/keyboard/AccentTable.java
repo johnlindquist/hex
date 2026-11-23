@@ -53,6 +53,34 @@ public final class AccentTable {
         return options.isEmpty() ? new String[0] : options.split("");
     }
 
+    /**
+     * Labs › Keyboard › Quick accents (iOS AccentCatalog.primaryVariant parity):
+     * returns the language's most common accent for a held letter, else the first variant after
+     * the base letter, or null if the key has no accented variants.
+     */
+    public static String primaryVariant(String baseLower, KeyboardLanguage lang) {
+        if (baseLower == null || baseLower.isEmpty() || !Character.isLetter(baseLower.charAt(0))) return null;
+        KeyboardLanguage resolved = lang == null ? KeyboardLanguage.EN : lang;
+        String[] opts = accentsFor(baseLower.toLowerCase(java.util.Locale.ROOT), resolved);
+        if (opts.length < 2) return null;
+        String preferred = switch (resolved) {
+            case EN, ES, PT -> switch (baseLower.toLowerCase(java.util.Locale.ROOT)) {
+                case "a" -> "á"; case "e" -> "é"; case "i" -> "í"; case "o" -> "ó"; case "u" -> "ú";
+                default -> null;
+            };
+            case FR -> "e".equalsIgnoreCase(baseLower) ? "é" : null;
+            case IT -> switch (baseLower.toLowerCase(java.util.Locale.ROOT)) {
+                case "a" -> "à"; case "e" -> "è"; case "i" -> "ì"; case "o" -> "ò"; case "u" -> "ù";
+                default -> null;
+            };
+            default -> null;
+        };
+        if (preferred != null) {
+            for (String o : opts) if (o.equals(preferred)) return preferred;
+        }
+        return opts[1];
+    }
+
     private static String shared(String base) {
         return switch (base) {
             case "e" -> "eèéêëēėę";

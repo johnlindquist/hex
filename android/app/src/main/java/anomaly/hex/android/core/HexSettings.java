@@ -48,6 +48,21 @@ public final class HexSettings {
             if (preferBuiltInMic() != value) p.edit().putBoolean("preferBuiltInMic", value).putLong("revision", revision()+1).apply();
         }
     }
+    public synchronized boolean numbersAsDigits() { return p.getBoolean("numbersAsDigits", true); }
+    public synchronized void setNumbersAsDigits(boolean value) {
+        synchronized (LOCK) {
+            if (numbersAsDigits() != value) p.edit().putBoolean("numbersAsDigits", value).putLong("revision", revision()+1).apply();
+        }
+    }
+    public synchronized String signatureText() {
+        return p.getString("signatureText", DictationSignature.DEFAULT_TEXT);
+    }
+    public synchronized void setSignatureText(String value) {
+        String next = value == null ? "" : value.trim();
+        synchronized (LOCK) {
+            if (!signatureText().equals(next)) p.edit().putString("signatureText", next).putLong("revision", revision()+1).apply();
+        }
+    }
     public synchronized int anywhereButtonSizeDp() {
         return clampAnywhereSize(p.getInt("anywhereButtonSizeDp", ANYWHERE_SIZE_DEFAULT_DP));
     }

@@ -686,6 +686,8 @@ public final class HexHomeActivity extends Activity {
         () -> pickLanguage(language));
     toggleRow("Always use phone microphone", "Keeps Bluetooth music playing and starts faster",
         settings.preferBuiltInMic(), settings::setPreferBuiltInMic);
+    toggleRow("Numbers as digits", "Write spoken English numbers like twenty five as 25.",
+        settings.numbersAsDigits(), settings::setNumbersAsDigits);
     keyboardCard();
     card("Feedback");
     toggleRow("Haptic feedback", "Vibrate when dictation starts and stops.",
@@ -1056,7 +1058,7 @@ public final class HexHomeActivity extends Activity {
               var fixes = fixStore.isEnabled() ? fixStore.activeFixes() : java.util.Map.<String, String>of();
               String formatted = TranscriptFormatter.applyPipeline(
                   raw, TranscriptStyle.fromId(e.style), new CustomVocabulary(this).terms(),
-                  labs.isEnabled(LabId.SPOKEN_CLEANUP), "", fixes, lang).trim();
+                  labs.isEnabled(LabId.SPOKEN_CLEANUP), "", fixes, lang, settings.numbersAsDigits()).trim();
               history.updateTranscript(e.id, raw, formatted);
               runOnUiThread(() -> historyResults(results));
             } catch (Exception ex) {
@@ -1286,6 +1288,10 @@ public final class HexHomeActivity extends Activity {
         act("Gemini API key · " + anomaly.hex.android.anywhere.TypeAnywhereAiClient.connectionSummary(this),
             false, this::configureAnywhereKey);
       }
+      if (lab == LabId.SIGNATURE && labs.isEnabled(lab)) {
+        String sig = settings.signatureText();
+        act("Signature text · " + (sig.isEmpty() ? "(empty)" : sig), false, this::configureSignatureText);
+      }
       if (lab == LabId.SPACEBAR_FIX_TAIL && labs.isEnabled(lab)) {
         KeyboardSettings kb = new KeyboardSettings(this);
         act("Gesture mode · " + kb.spacebarFixMode().label, false, this::configureSpacebarFixMode);
@@ -1314,6 +1320,38 @@ public final class HexHomeActivity extends Activity {
       settings.setOnboardingCompleted(false);
       page(0);
     });
+  }
+  private void configureSignatureText() {
+    android.widget.EditText input = new android.widget.EditText(this);
+    input.setSingleLine(true);
+    input.setText(settings.signatureText());
+    input.setHint(anomaly.hex.android.core.DictationSignature.DEFAULT_TEXT);
+    int pad = d(16);
+    input.setPadding(pad, pad, pad, pad);
+    new AlertDialog.Builder(this)
+        .setTitle("Dictation signature")
+        .setMessage("Added on its own line after each keyboard dictation. Leave blank to add nothing.")
+        .setView(input)
+        .setPositiveButton("Save", (d, w) -> {
+          String val = input.getText() == null ? "" : input.getText().toString().trim();
+          var problem = anomaly.hex.android.core.DictationSignature.textProblem(val);
+          if (problem == anomaly.hex.android.core.DictationSignature.Problem.LINE) {
+            Toast.makeText(this, "Signature must be a single line", Toast.LENGTH_SHORT).show();
+            return;
+          }
+          if (problem == anomaly.hex.android.core.DictationSignature.Problem.LENGTH) {
+            Toast.makeText(this, "Signature must be 200 characters or fewer", Toast.LENGTH_SHORT).show();
+            return;
+          }
+          settings.setSignatureText(val);
+          render();
+        })
+        .setNeutralButton("Reset", (d, w) -> {
+          settings.setSignatureText(anomaly.hex.android.core.DictationSignature.DEFAULT_TEXT);
+          render();
+        })
+        .setNegativeButton("Cancel", null)
+        .show();
   }
   private void configureSpacebarFixMode() {
     KeyboardSettings kb = new KeyboardSettings(this);

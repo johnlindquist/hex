@@ -187,7 +187,72 @@ public final class PersonalAutocorrectStore {
     }
 
     /**
-     * Records a user-accepted replacement (suggestion pick or retype).
+     * Decides whether {@code typed} was plausibly a slip of {@code intended} (iOS TypingLearning.isSlip parity),
+     * preventing unrelated word changes ("Sunda" -> "Saturday", "cat" -> "dog") from teaching false fixes.
+     * Allows: same word with apostrophe/case ("Im" -> "I'm"), or both >= 2 letters starting alike
+     * with weighted QWERTY edit cost <= max(1.0, intended.length / 4.0) where adjacent keys,
+     * accent differences, transpositions, and doubled letters cost 0.5.
+     */
+    public static boolean isSlip(String typed, String intended) {
+        if (typed == null || intended == null) return false;
+        String aRaw = typed.trim().toLowerCase(Locale.ROOT).replace('’', '\'');
+        String bRaw = intended.trim().toLowerCase(Locale.ROOT).replace('’', '\'');
+        if (aRaw.isEmpty() || bRaw.isEmpty()) return false;
+        if (aRaw.equals(bRaw)) return !typed.trim().equals(intended.trim());
+        String aNoApos = aRaw.replace("'", "");
+        String bNoApos = bRaw.replace("'", "");
+        if (aNoApos.equals(bNoApos)) return true; // e.g. "Im" -> "I'm", "dont" -> "don't"
+        if (aNoApos.length() < 2 || bNoApos.length() < 2) return false;
+        char a0 = aNoApos.charAt(0), b0 = bNoApos.charAt(0);
+        char a1 = aNoApos.charAt(1), b1 = bNoApos.charAt(1);
+        if (!(nearKey(a0, b0) || a0 == b1 || a1 == b0)) return false;
+        double limit = Math.max(1.0, bNoApos.length() / 4.0);
+        return slipCost(aNoApos, bNoApos) <= limit;
+    }
+
+    private static boolean nearKey(char x, char y) {
+        if (x == y) return true;
+        if (baseChar(x) == baseChar(y)) return true;
+        return WordDictionary.keyDistanceSq(x, y) <= 2.56f;
+    }
+
+    private static char baseChar(char c) {
+        String s = java.text.Normalizer.normalize(String.valueOf(c), java.text.Normalizer.Form.NFD);
+        return s.isEmpty() ? c : s.charAt(0);
+    }
+
+    private static double slipCost(String a, String b) {
+        int la = a.length(), lb = b.length();
+        double[][] d = new double[la + 1][lb + 1];
+        for (int i = 1; i <= la; i++) d[i][0] = d[i - 1][0] + (i > 1 && a.charAt(i - 1) == a.charAt(i - 2) ? 0.5 : 1.0);
+        for (int j = 1; j <= lb; j++) d[0][j] = d[0][j - 1] + (j > 1 && b.charAt(j - 1) == b.charAt(j - 2) ? 0.5 : 1.0);
+        for (int i = 1; i <= la; i++) {
+            for (int j = 1; j <= lb; j++) {
+                char ca = a.charAt(i - 1), cb = b.charAt(j - 1);
+                double sub = ca == cb ? 0.0 : (nearKey(ca, cb) ? 0.5 : 1.0);
+                double delStep = i > 1 && ca == a.charAt(i - 2) ? 0.5 : 1.0;
+                double insStep = j > 1 && cb == b.charAt(j - 2) ? 0.5 : 1.0;
+                double cost = Math.min(d[i - 1][j - 1] + sub, Math.min(d[i - 1][j] + delStep, d[i][j - 1] + insStep));
+                if (i > 1 && j > 1 && ca == b.charAt(j - 2) && a.charAt(i - 2) == cb) {
+                    cost = Math.min(cost, d[i - 2][j - 2] + 0.5);
+                }
+                d[i][j] = cost;
+            }
+        }
+        return d[la][lb];
+    }
+
+    /**
+     * Records a word erased and retyped in its place (iOS TypingJournal.didFinish parity):
+     * teaches only when the erased word was plausibly a slip of the replacement, never a change of mind.
+     */
+    public synchronized void recordRetyped(String erased, String replacement) {
+        if (!isSlip(erased, replacement)) return;
+        recordAccepted(erased, replacement);
+    }
+
+    /**
+     * Records a user-accepted replacement (deliberate suggestion pick).
      * Requires MIN_LEARN_COUNT (2) consistent observations; ignores prefix completions and
      * drops contradictory or reversed pairs.
      */

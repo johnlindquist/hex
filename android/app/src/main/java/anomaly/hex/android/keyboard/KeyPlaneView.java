@@ -53,6 +53,7 @@ public final class KeyPlaneView extends View {
     private boolean dragging, selecting, searching, popups = true, haptics = true, emoji, twoThumbSpace, chordConsumed;
     private boolean spaceFixEnabled, spaceGestureHandled, spaceSlideActive;
     private KeyboardSettings.SpacebarFixMode spaceFixMode = KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER;
+    private boolean quickAccentsEnabled;
 
     KeyPlaneView(Context c, Input host, Runnable openEmoji) {
         super(c); this.host = host; this.openEmoji = openEmoji;
@@ -74,6 +75,9 @@ public final class KeyPlaneView extends View {
     void setSpacebarFix(boolean enabled, KeyboardSettings.SpacebarFixMode mode) {
         spaceFixEnabled = enabled;
         spaceFixMode = mode == null ? KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER : mode;
+    }
+    void setQuickAccents(boolean enabled) {
+        quickAccentsEnabled = enabled;
     }
     void field(FieldKind kind, String label) {
         field(kind, label, Layer.LETTERS, true);
@@ -245,6 +249,14 @@ public final class KeyPlaneView extends View {
         boolean left=(down.left()+down.right())/2>width*.52f;
         if(left) java.util.Collections.reverse(java.util.Arrays.asList(options));
         selection=left?options.length-1:0;
+        if (quickAccentsEnabled && layer == Layer.LETTERS) {
+            String primary = AccentTable.primaryVariant(down.label(), language);
+            if (primary != null) {
+                for (int i = 0; i < options.length; i++) {
+                    if (primary.equals(options[i])) { selection = i; break; }
+                }
+            }
+        }
         pickerLeft=Math.max(2,Math.min(width-cell*options.length-10,(down.left()+down.right())/2-4-(selection+.5f)*cell));
         if (Math.abs(lastX - origin) > cell * 0.5f) select(lastX);
         invalidate();

@@ -208,6 +208,9 @@ public final class FullKeyboardView extends FrameLayout {
     public void setSpacebarFix(boolean enabled, KeyboardSettings.SpacebarFixMode mode) {
         plane.setSpacebarFix(enabled, mode);
     }
+    public void setQuickAccents(boolean enabled) {
+        plane.setQuickAccents(enabled);
+    }
     public void showTailScrubber(TailCorrectionEngine.TailAnalysis analysis) {
         closeTailPanel();
         hideTailSlide();

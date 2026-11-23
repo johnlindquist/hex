@@ -106,11 +106,18 @@ public final class TranscriptFormatter {
     }
     public static String applyPipeline(String raw, TranscriptStyle style, List<String> vocab, boolean spokenCleanup,
                                        String beforeCursor, Map<String,String> learnedFixes, String language) {
+        return applyPipeline(raw, style, vocab, spokenCleanup, beforeCursor, learnedFixes, language, true);
+    }
+    public static String applyPipeline(String raw, TranscriptStyle style, List<String> vocab, boolean spokenCleanup,
+                                       String beforeCursor, Map<String,String> learnedFixes, String language,
+                                       boolean numbersAsDigits) {
         String text = raw == null ? "" : raw;
         if (style == TranscriptStyle.VERBATIM) return format(text, style, beforeCursor, language);
         if (spokenCleanup) text = SpokenCleanupRules.apply(text, language);
+        if (numbersAsDigits) text = SpokenNumbers.digits(text, language, vocab);
         text = DictationFixStore.applyRules(text, vocab, learnedFixes);
         String formatted = format(text, style, beforeCursor, language);
-        return CustomVocabulary.apply(formatted, vocab);
+        String exactVocab = CustomVocabulary.apply(formatted, vocab);
+        return SoundAlikeSpelling.apply(vocab, exactVocab, language);
     }
 }
