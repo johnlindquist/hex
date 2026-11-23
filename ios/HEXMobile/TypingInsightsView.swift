@@ -33,8 +33,8 @@ struct TypingInsightsView: View {
 
             if !snapshot.dictationOutcomes.isEmpty {
                 section("Dictation") {
-                    row("Kept as is", detail: share(of: .kept))
-                    row("Edited", detail: share(of: .edited))
+                    row(String(localized: "Kept as is"), detail: share(of: .kept))
+                    row(String(localized: "Edited"), detail: share(of: .edited))
                 }
             }
 
@@ -47,7 +47,7 @@ struct TypingInsightsView: View {
             }
 
             if !missedKeys.isEmpty {
-                section("Where you tap off-centre") {
+                section("Where you tap off-center") {
                     ForEach(missedKeys, id: \.key) { item in
                         row(item.key.uppercased(), detail: item.direction)
                     }
@@ -61,9 +61,10 @@ struct TypingInsightsView: View {
                     .font(.system(size: 13, weight: .medium))
             }
             .disabled(snapshot.isEmpty && disabledFixes.isEmpty)
-            .confirmationDialog("Delete what Hex learned about your typing and dictation?", isPresented: $confirmingDelete) {
+            .confirmationDialog("Delete what Hex learned?", isPresented: $confirmingDelete) {
                 Button("Delete", role: .destructive) {
                     TypingJournal.delete()
+                    AdaptiveTouchSettings().requestReset()
                     reload()
                 }
             }
@@ -73,16 +74,23 @@ struct TypingInsightsView: View {
 
     private var summary: String {
         if snapshot.isEmpty {
-            return "Fills in as you type and dictate with Hex"
+            return String(localized: "Nothing learned yet")
         }
+        let taps = snapshot.tapCount
+        let fixes = snapshot.corrections.filter(\.teaches).count
         let dictations = snapshot.dictationOutcomes.count
-        return "\(snapshot.tapCount) taps, \(snapshot.corrections.count) typing fixes and \(dictations) "
-            + (dictations == 1 ? "dictation" : "dictations") + " learned"
+        return dictations == 1
+            ? String(localized: "\(taps) taps, \(fixes) typing fixes and 1 dictation learned")
+            : String(localized: "\(taps) taps, \(fixes) typing fixes and \(dictations) dictations learned")
     }
 
-    /// Learned fixes, most used first; each can be switched off.
+    /// Learned fixes, most used first; each can be switched off. With Learn each language
+    /// separately on, every language's are listed, so a fix only one language learned shows too.
     private var dictationFixes: [DictationLearnedFix] {
-        Array(snapshot.learnedDictationFixes
+        let learned = TypingJournalSettings().learnsPerLanguage
+            ? snapshot.learnedDictationFixesByLanguage()
+            : snapshot.learnedDictationFixes
+        return Array(learned
             .sorted { $0.count == $1.count ? $0.id < $1.id : $0.count > $1.count }
             .prefix(12))
     }
@@ -110,7 +118,7 @@ struct TypingInsightsView: View {
 
     private var topFixes: [(label: String, count: Int)] {
         var counts: [String: Int] = [:]
-        for correction in snapshot.corrections where correction.kind != .undone && correction.kind != .keptTyped {
+        for correction in snapshot.corrections where correction.kind != .undone && correction.kind != .keptTyped && correction.teaches {
             counts["\(correction.typed) → \(correction.final)", default: 0] += 1
         }
         return counts.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
@@ -126,10 +134,25 @@ struct TypingInsightsView: View {
             .sorted { hypot($0.offset.dx, $0.offset.dy) > hypot($1.offset.dx, $1.offset.dy) }
             .prefix(4)
             .map { item in
-                let horizontal = abs(item.offset.dx) < 0.08 ? "" : (item.offset.dx > 0 ? "right" : "left")
-                let vertical = abs(item.offset.dy) < 0.08 ? "" : (item.offset.dy > 0 ? "low" : "high")
-                return (key: item.key, direction: [vertical, horizontal].filter { !$0.isEmpty }.joined(separator: " and "))
+                let right = abs(item.offset.dx) < 0.08 ? nil : item.offset.dx > 0
+                let low = abs(item.offset.dy) < 0.08 ? nil : item.offset.dy > 0
+                return (key: item.key, direction: Self.direction(low: low, right: right))
             }
+    }
+
+    /// "low and right": where taps land from the key's centre, empty when they're centred.
+    private static func direction(low: Bool?, right: Bool?) -> String {
+        switch (low, right) {
+        case (true?, true?): String(localized: "low and right")
+        case (true?, false?): String(localized: "low and left")
+        case (false?, true?): String(localized: "high and right")
+        case (false?, false?): String(localized: "high and left")
+        case (true?, nil): String(localized: "low")
+        case (false?, nil): String(localized: "high")
+        case (nil, true?): String(localized: "right")
+        case (nil, false?): String(localized: "left")
+        case (nil, nil): ""
+        }
     }
 
     private func reload() {
@@ -139,7 +162,7 @@ struct TypingInsightsView: View {
         disabledFixes = TypingJournalSettings().disabledDictationFixes
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func section<Content: View>(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.system(size: 12, weight: .medium))

@@ -58,12 +58,39 @@ fn texts(rt: &Runtime<Ui>) -> Vec<String> {
         .collect()
 }
 
+/// The text under element `root` in the accessibility tree, in order,
+/// without the recorder's invisible sizing faces.
+fn texts_under(rt: &Runtime<Ui>, root: &str) -> Vec<String> {
+    rt.elements()
+        .into_iter()
+        .filter(|e| e.path.contains(root) && !e.path.contains("/faces/size"))
+        .filter_map(|e| e.text)
+        .collect()
+}
+
 /// Presses an element by key and lets every animation settle.
 fn tap(rt: &mut Runtime<Ui>, key: &str) {
     let (x, y) = rt.find(key).unwrap_or_else(|| panic!("no element {key}"));
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     settle(rt);
+}
+
+/// Wheels a scrolling body until `key` sits inside it, for a page taller
+/// than the window.
+fn scroll_into_view(rt: &mut Runtime<Ui>, key: &str, viewport: &str) {
+    for _ in 0..400 {
+        let view = element(rt, viewport).rect;
+        let target = element(rt, key).rect;
+        if target[1] >= view[1] && target[1] + target[3] <= view[1] + view[3] {
+            return;
+        }
+        // A positive delta moves the content down.
+        let dy = if target[1] < view[1] { 20.0 } else { -20.0 };
+        rt.wheel(view[0] + view[2] / 2.0, view[1] + view[3] / 2.0, dy);
+        rt.frame(1.0 / 60.0);
+    }
+    panic!("{key} never scrolled into {viewport}");
 }
 
 /// Opens Labs with every group unfolded, so each card is on screen.
@@ -876,6 +903,42 @@ fn the_modes_editor_lab_brings_modes_back_to_the_sidebar() {
     assert!(rt.find("nav-modes").is_none());
 }
 
+/// Labs › Neutral voice's Modes row follows the saved switch, not the
+/// process-wide gate, and toggles the selected mode.
+#[cfg(target_os = "macos")]
+#[test]
+fn neutral_voice_shows_in_modes_only_with_its_lab_and_toggles_the_mode() {
+    let mut rt = runtime("mac-labs", true, (980.0, 2000.0));
+    crate::labs::Feature::ModesEditor.set(&mut rt.state.settings, true);
+    rt.invalidate();
+    settle(&mut rt);
+    tap(&mut rt, "nav-modes");
+    settle(&mut rt);
+    assert_eq!(rt.state.pane, Pane::Modes);
+    assert!(rt.find("neutral-voice").is_none(), "off, no row");
+
+    crate::labs::Feature::NeutralVoice.set(&mut rt.state.settings, true);
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(rt.find("neutral-voice").is_some(), "on, the row shows");
+    tap(&mut rt, "neutral-voice");
+    assert!(
+        rt.state
+            .settings
+            .dictation_processing
+            .default_mode
+            .neutral_voice
+    );
+    tap(&mut rt, "neutral-voice");
+    assert!(
+        !rt.state
+            .settings
+            .dictation_processing
+            .default_mode
+            .neutral_voice
+    );
+}
+
 #[test]
 fn the_sidebar_switches_panes_and_keeps_settings() {
     let mut rt = runtime("portal", true, PANE_SIZE);
@@ -1604,6 +1667,138 @@ fn history_stats_dialog_hides_sections_with_nothing_to_show() {
     assert!(rt.find("history-stats-changed").is_some());
 }
 
+/// Labs › Stats on History needs both labs and something to summarize.
+#[test]
+fn history_stats_strip_needs_both_labs_and_stats() {
+    let mut rt = runtime("history", true, PANE_SIZE);
+    rt.state.history.stats = Some(history::HistoryPane::fixture_stats());
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(rt.find("history-stats-strip").is_none(), "off by default");
+
+    rt.state.settings.labs.history_stats = true;
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(
+        rt.find("history-stats-strip").is_none(),
+        "Dictation stats alone shows no strip"
+    );
+
+    rt.state.settings.labs.history_stats = false;
+    rt.state.settings.labs.history_stats_strip = true;
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(
+        rt.find("history-stats-strip").is_none(),
+        "the strip's own switch alone shows nothing"
+    );
+
+    rt.state.settings.labs.history_stats = true;
+    rt.state.history.stats = None;
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(
+        rt.find("history-stats-strip").is_none(),
+        "with no stats there is nothing to show"
+    );
+
+    rt.state.history.stats = Some(history::HistoryPane::fixture_stats());
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(
+        rt.find("history-stats-strip").is_some(),
+        "both labs on and stats present, the strip shows"
+    );
+}
+
+/// The strip and the dialog's tiles draw the same six numbers from one
+/// function, so they can't drift.
+#[test]
+fn history_stats_strip_shows_the_dialogs_six_headline_numbers() {
+    let mut rt = runtime("history", true, PANE_SIZE);
+    rt.state.history.stats = Some(history::HistoryPane::fixture_stats());
+    rt.state.settings.labs.history_stats = true;
+    rt.state.settings.labs.history_stats_strip = true;
+    rt.invalidate();
+    settle(&mut rt);
+    let strip = texts_under(&rt, "history-stats-strip/");
+    assert_eq!(strip.len(), 12, "six values and six labels: {strip:?}");
+    for value in ["1,284", "128,402", "123"] {
+        assert!(
+            strip.iter().any(|text| text == value),
+            "{value} shows: {strip:?}"
+        );
+    }
+
+    tap(&mut rt, "history-stats-open");
+    let tiles = texts_under(&rt, "tiles/");
+    assert_eq!(
+        strip, tiles,
+        "the strip and the dialog show the same six values and labels"
+    );
+}
+
+/// The strip fits the smallest window in a long-language column: its cells
+/// share the row and truncate instead of running past the pane.
+#[test]
+fn history_stats_strip_fits_the_smallest_window_in_russian() {
+    let mut rt = runtime("history-stats-strip", true, (860.0, 560.0));
+    crate::desktop::i18n::apply(Some("ru"));
+    rt.invalidate();
+    settle(&mut rt);
+    let (strip, _) = rt.presented("history-stats-strip").expect("the strip");
+    for key in [
+        "dictations",
+        "words",
+        "time-saved",
+        "wpm",
+        "streak",
+        "busiest-hour",
+    ] {
+        let (cell, _) = rt
+            .presented(&format!("strip-{key}"))
+            .unwrap_or_else(|| panic!("strip-{key} draws"));
+        assert!(
+            cell[0] >= strip[0] && cell[0] + cell[2] <= strip[0] + strip[2],
+            "strip-{key} stays inside the strip: {cell:?} in {strip:?}"
+        );
+    }
+}
+
+/// The full Stats button and dialog stay exactly as they were with the strip
+/// on, and the strip stays behind them.
+#[test]
+fn history_stats_button_and_dialog_still_work_with_the_strip_on() {
+    let mut rt = runtime("history", true, PANE_SIZE);
+    rt.state.history.stats = Some(history::HistoryPane::fixture_stats());
+    rt.state.settings.labs.history_stats = true;
+    rt.state.settings.labs.history_stats_strip = true;
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(rt.find("history-stats-strip").is_some());
+    assert!(rt.find("history-stats-open").is_some(), "Stats still shows");
+
+    tap(&mut rt, "history-stats-open");
+    assert!(rt.state.history.stats_open);
+    assert!(rt.find("history-stats-dialog").is_some());
+    for key in [
+        "tile-dictations",
+        "tile-words",
+        "tile-time-saved",
+        "tile-wpm",
+        "tile-streak",
+        "tile-busiest-hour",
+    ] {
+        assert!(rt.find(key).is_some(), "{key} shows");
+    }
+    tap(&mut rt, "history-stats-close");
+    assert!(!rt.state.history.stats_open);
+    assert!(
+        rt.find("history-stats-strip").is_some(),
+        "the strip stays above the list"
+    );
+}
+
 /// The dialog's worst case in the window's least size: it stays inside the
 /// window, keeps its title and Close, and scrolls the sections between them.
 #[test]
@@ -2105,6 +2300,55 @@ fn a_rows_copy_leaves_the_selection() {
     settle(&mut rt);
     assert_eq!(rt.state.history.copied, Some(1));
     assert_eq!(rt.state.history.selected, Some(2));
+}
+
+/// A hovered row's Copy, pressed a point inside its right edge, copies
+/// rather than scrolling when the list overflows under the scroll bar. The
+/// row fill still reaches the search field's edge, so selection stays flush.
+#[test]
+fn a_rows_copy_clears_the_scroll_bar() {
+    let mut rt = runtime("history", true, PANE_SIZE);
+    let seeds = rt.state.history.entries.clone();
+    for (index, seed) in seeds.iter().cycle().take(40).enumerate() {
+        let mut entry = seed.clone();
+        entry.id = 1_000 + index as u64;
+        rt.state.history.entries.push(entry);
+    }
+    rt.invalidate();
+    settle(&mut rt);
+    rt.elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("scroll-bar") && e.path.contains("history-scroll"))
+        .expect("an overflowing list shows its scroll bar");
+
+    let row = element(&rt, "history-entry1").rect;
+    rt.pointer_move(row[0] + row[2] / 2.0, row[1] + row[3] / 2.0);
+    settle(&mut rt);
+    let copy = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.path.contains("history-entry1/") && e.key.as_deref() == Some("row-copy"))
+        .expect("the row's Copy")
+        .rect;
+    let (x, y) = (copy[0] + copy[2] - 1.0, copy[1] + copy[3] / 2.0);
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(&mut rt);
+    assert_eq!(
+        rt.state.history.copied,
+        Some(1),
+        "a press on the Copy's right edge copies"
+    );
+
+    let search = element(&rt, "history-search").rect;
+    let row = element(&rt, "history-entry2").rect;
+    assert!(
+        (row[0] + row[2] - (search[0] + search[2])).abs() < 0.5,
+        "the selected row ends at {} but the search field at {}",
+        row[0] + row[2],
+        search[0] + search[2]
+    );
 }
 
 #[test]
@@ -2697,7 +2941,46 @@ fn the_transcription_picker_asks_the_service_for_a_model() {
         "Whisper keeps the saved English"
     );
     tap(&mut rt, "close-picker");
-    assert!(!rt.state.picker.open);
+    assert!(!rt.state.is_modal(Modal::Picker));
+}
+
+#[test]
+fn choosing_the_selected_installed_but_unchecked_model_checks_it() {
+    use crate::transcription::models::{self, ModelRuntime};
+
+    let directory =
+        std::env::temp_dir().join(format!("hex-picker-unchecked-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    models::set_test_models_dir(Some(directory.clone()));
+    let model = models::definition(TranscriptionModelId::ParakeetUnifiedEnglish);
+    let ModelRuntime::Gguf(artifact) = &model.runtime else {
+        unreachable!("Parakeet Unified English is a GGUF model")
+    };
+    std::fs::File::create(directory.join(artifact.local_name()))
+        .unwrap()
+        .set_len(artifact.bytes)
+        .unwrap();
+
+    let mut rt = runtime("picker", true, PANE_SIZE);
+    rt.state.settings.transcription = TranscriptionSelection {
+        model: model.id,
+        language: "en".into(),
+    };
+    // Readiness here comes from the filesystem: the file is installed but
+    // has no verification receipt yet.
+    rt.state.picker.installed = None;
+    picker::choose(&mut rt.state, &model);
+    assert_eq!(
+        sent(&rt),
+        [Request::ChooseModel {
+            model: model.id,
+            language: "en".into(),
+        }]
+    );
+
+    models::set_test_models_dir(None);
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 /// Scrolls the full model list until `key` is inside it, then presses it.
@@ -2857,29 +3140,22 @@ fn the_language_menu_opens_on_its_chosen_language() {
     );
 }
 
-/// A mode's language menu is the same long list in the kit's `Menu`, so its
-/// press reveals the chosen row too.
+/// Labs › Vocabulary files adds Import and Export to the sheet, and only
+/// then: off, the sheet is exactly as before.
 #[test]
-fn a_modes_language_menu_opens_on_its_chosen_language() {
-    let mut rt = runtime("modes-speech", true, PANE_SIZE);
-    tap(&mut rt, "mode-speech-language-0-trigger");
-    assert_eq!(
-        rt.state.open,
-        Some(Menu::ModeSpeechLanguage(modes::Selection::Custom(0)))
-    );
-    let spanish = crate::transcription::models::menu_order(
-        &crate::transcription::models::definition(TranscriptionModelId::ParakeetV3)
-            .language_choices(),
-    )
-    .iter()
-    .position(|code| *code == "es")
-    .unwrap();
-    let row = element(&rt, &format!("mode-speech-language-0-item{spanish}")).rect;
-    let menu = element(&rt, "mode-speech-language-0-menu").rect;
-    assert!(
-        row[1] >= menu[1] - 0.5 && row[1] + row[3] <= menu[1] + menu[3] + 0.5,
-        "row {row:?} outside menu {menu:?}"
-    );
+fn the_vocabulary_sheet_offers_files_only_with_its_lab_on() {
+    let mut rt = runtime("mac-settings-vocabulary", true, GOLDEN_SIZE);
+    settle(&mut rt);
+    assert!(rt.find("add-term").is_some());
+    assert!(rt.find("import-vocabulary").is_none());
+    assert!(rt.find("export-vocabulary").is_none());
+    rt.state.settings.labs.vocabulary_files = true;
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(rt.find("import-vocabulary").is_some());
+    assert!(rt.find("export-vocabulary").is_some());
+    assert!(rt.find("add-term").is_some());
+    assert!(rt.find("close-vocabulary").is_some());
 }
 
 /// General's Vocabulary row opens the sheet, and Escape closes it.
@@ -2888,12 +3164,12 @@ fn the_vocabulary_row_opens_its_sheet() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
     tap(&mut rt, "vocabulary-control");
     settle(&mut rt);
-    assert!(rt.state.vocabulary.open);
+    assert!(rt.state.is_modal(Modal::Vocabulary));
     assert!(rt.find("add-term").is_some());
     assert!(rt.find("vocabulary-boost").is_none());
     key(&mut rt, Key::Escape, Mods::default());
     settle(&mut rt);
-    assert!(!rt.state.vocabulary.open);
+    assert!(!rt.state.is_modal(Modal::Vocabulary));
 }
 
 /// A settle frame plus an outside press closes the sheet with its exit: the runtime lands the
@@ -2936,7 +3212,7 @@ fn add_term_scrolls_the_new_row_into_view() {
         })
         .collect();
     rt.state.vocabulary = super::vocabulary::VocabularyEditor::new(&rt.state.settings.vocabulary);
-    rt.state.vocabulary.open = true;
+    rt.state.modal = Some(Modal::Vocabulary);
     rt.invalidate();
     settle(&mut rt);
     tap(&mut rt, "add-term");
@@ -3047,7 +3323,7 @@ fn the_vocabulary_row_says_when_the_model_ignores_the_list() {
     settle(&mut rt);
     assert!(shows_note(&rt), "{:?}", texts(&rt));
     tap(&mut rt, "vocabulary-control");
-    assert!(rt.state.vocabulary.open);
+    assert!(rt.state.is_modal(Modal::Vocabulary));
     assert!(sheet_note(&rt));
     key(&mut rt, Key::Escape, Mods::default());
     settle(&mut rt);
@@ -3067,56 +3343,42 @@ fn the_vocabulary_row_says_when_the_model_ignores_the_list() {
     }
 
     let rt = runtime("vocabulary-unused", true, PANE_SIZE);
-    assert!(rt.state.vocabulary.open);
+    assert!(rt.state.is_modal(Modal::Vocabulary));
     assert!(sheet_note(&rt));
 }
 
 /// The Sounds row opens the sheet. A set's play button plays its dictation
-/// without choosing it, and pressing it again stops it; a chip plays one
-/// sound; picking a set saves it and plays it; Escape closes the sheet.
+/// without choosing it, and pressing it again stops it; picking a set saves
+/// it and plays it; Escape closes the sheet.
 #[test]
 fn the_sound_sets_sheet_plays_and_chooses_sets() {
-    use crate::feedback::{Audition, Cue, SoundSet};
+    use crate::feedback::SoundSet;
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
     rt.state.settings.sound_effects = false;
     rt.state.settings.sound_effect_volume = 0.23;
     assert_eq!(rt.state.settings.sound_theme, SoundSet::Classic);
     open_advanced(&mut rt, Pane::General);
+    assert!(texts(&rt).iter().any(|text| text == "Off"));
     tap(&mut rt, "sound-set-control");
-    assert!(rt.state.sound_sets.open);
+    assert!(rt.state.is_modal(Modal::SoundSets));
     let playing = |rt: &Runtime<Ui>| rt.state.sound_sets.playing();
 
-    tap(&mut rt, "set-click/top/play");
-    assert_eq!(playing(&rt), Some((SoundSet::Click, Audition::Dictation)));
+    tap(&mut rt, "set-click/lines/top/play");
+    assert_eq!(playing(&rt), Some(SoundSet::Click));
     assert_eq!(rt.state.settings.sound_theme, SoundSet::Classic);
-    tap(&mut rt, "set-click/top/play");
+    tap(&mut rt, "set-click/lines/top/play");
     assert_eq!(playing(&rt), None);
-
-    // A single sound plays for under a second, so look before settling.
-    let (x, y) = rt.find("stage/cues/Stop").unwrap();
-    rt.pointer_down(x, y);
-    rt.pointer_up(x, y);
-    rt.frame(1.0 / 60.0);
-    assert_eq!(
-        playing(&rt),
-        Some((SoundSet::Classic, Audition::Cue(Cue::Stop)))
-    );
 
     tap(&mut rt, "set-wood");
     assert_eq!(rt.state.settings.sound_theme, SoundSet::Wood);
-    assert_eq!(playing(&rt), Some((SoundSet::Wood, Audition::Dictation)));
-    // The stage holds the HUD's window as the start sound plays.
-    for _ in 0..6 {
-        rt.frame(1.0 / 60.0);
-    }
-    let (window, _) = rt.presented("sound-sets-hud").expect("the HUD's window");
-    assert!(window[2] > 0.0 && window[3] > 0.0);
+    assert_eq!(playing(&rt), Some(SoundSet::Wood));
+    assert!(rt.find("set-wood/check/mark").is_some());
+    assert!(rt.find("set-classic/check/mark").is_none());
 
     key(&mut rt, Key::Escape, Mods::default());
     settle(&mut rt);
-    assert!(!rt.state.sound_sets.open);
+    assert!(!rt.state.is_modal(Modal::SoundSets));
     assert_eq!(playing(&rt), None);
-    assert!(texts(&rt).iter().any(|text| text == "Wood"));
     assert!(!rt.state.settings.sound_effects);
     assert_eq!(rt.state.settings.sound_effect_volume, 0.23);
 }
@@ -3218,7 +3480,7 @@ fn the_picker_keeps_focus_inside_and_escape_returns_it() {
     tab_to(&mut rt, "transcription-control");
     key(&mut rt, Key::Text(" ".into()), Mods::default());
     settle(&mut rt);
-    assert!(rt.state.picker.open);
+    assert!(rt.state.is_modal(Modal::Picker));
     for _ in 0..12 {
         key(&mut rt, Key::Tab, Mods::default());
         assert!(
@@ -3229,7 +3491,7 @@ fn the_picker_keeps_focus_inside_and_escape_returns_it() {
     }
     key(&mut rt, Key::Escape, Mods::default());
     settle(&mut rt);
-    assert!(!rt.state.picker.open);
+    assert!(!rt.state.is_modal(Modal::Picker));
     assert!(focused(&rt).ends_with("transcription-control"));
 }
 
@@ -3256,7 +3518,7 @@ fn settings_opens_the_picker_and_names_the_model_and_language_apart() {
         "{shown:?}"
     );
     tap(&mut rt, "transcription-control");
-    assert!(rt.state.picker.open);
+    assert!(rt.state.is_modal(Modal::Picker));
 }
 
 #[test]
@@ -3673,23 +3935,50 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// The lab What's new lists first: the newest offered lab, tie-broken by
+/// its place in the registry, as the feed sorts it.
+fn newest_offered_lab(ui: &Ui) -> &'static str {
+    labs::offered_labs(ui)
+        .into_iter()
+        .max_by_key(|(feature, _)| {
+            (
+                feature.added(),
+                crate::labs::Feature::ALL
+                    .iter()
+                    .position(|known| known == feature)
+                    .unwrap_or(0),
+            )
+        })
+        .expect("the fixture offers a lab")
+        .0
+        .name()
+}
+
 #[test]
 fn whats_new_opens_controls_without_changing_them() {
     let _goldens = Goldens::collect();
     for dark in [true, false] {
-        for (key, scene) in [
-            (None, "whats-new"),
-            (Some("open-lab"), "whats-new-yolo"),
-            (Some("open-sounds"), "whats-new-sounds"),
-        ] {
+        for scene in ["whats-new", "whats-new-newest", "whats-new-sounds"] {
             let mut rt = runtime("mac-settings", dark, PANE_SIZE);
+            let newest = newest_offered_lab(&rt.state);
             let before = serde_json::to_value(&rt.state.settings).unwrap();
             tap(&mut rt, "nav-whats-new");
             assert_eq!(rt.state.pane, Pane::WhatsNew);
-            if let Some(key) = key {
-                tap(&mut rt, key);
-                if key == "open-lab" {
-                    assert!(rt.state.labs_open && rt.find("lab-card-yolo-mode").is_some());
+            if scene != "whats-new" {
+                let key = if scene == "whats-new-newest" {
+                    format!("open-lab-{newest}")
+                } else {
+                    "open-sounds".to_owned()
+                };
+                // The feed is taller than the window; reach the oldest entry
+                // before pressing it.
+                scroll_into_view(&mut rt, &key, "whats-new-scroll");
+                tap(&mut rt, &key);
+                if scene == "whats-new-newest" {
+                    assert!(
+                        rt.state.labs_open && rt.find(&format!("lab-card-{newest}")).is_some(),
+                        "the newest lab's card opens"
+                    );
                 } else {
                     assert!(rt.find("sound-sets").is_some());
                 }
@@ -3698,6 +3987,44 @@ fn whats_new_opens_controls_without_changing_them() {
             check_render(scene, dark, render_runtime(rt, PANE_SIZE));
         }
     }
+}
+
+/// What's new lists the newest lab the registry offers, no more than eight
+/// labs, and each lab's button and row keys are its own.
+#[test]
+fn whats_new_lists_the_newest_offered_labs() {
+    let mut rt = runtime("mac-settings", true, (980.0, 2600.0));
+    let newest = newest_offered_lab(&rt.state);
+    tap(&mut rt, "nav-whats-new");
+    let buttons: Vec<String> = rt
+        .elements()
+        .into_iter()
+        .filter_map(|element| element.key)
+        .filter_map(|key| key.strip_prefix("open-lab-").map(str::to_string))
+        .collect();
+    assert_eq!(buttons.first().map(String::as_str), Some(newest));
+    assert_eq!(
+        buttons.len(),
+        labs::offered_labs(&rt.state).len().min(8),
+        "every offered lab up to eight: {buttons:?}"
+    );
+    let mut unique = buttons.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        buttons.len(),
+        unique.len(),
+        "no two labs share a button: {buttons:?}"
+    );
+    assert!(rt.find("open-sounds").is_some(), "sounds stays");
+    for lab in unique {
+        assert!(
+            rt.find(&format!("highlight-{lab}")).is_some(),
+            "{lab}'s row has its own key"
+        );
+    }
+    tap(&mut rt, &format!("open-lab-{newest}"));
+    assert!(rt.state.labs_open && rt.find(&format!("lab-card-{newest}")).is_some());
 }
 
 /// Collects every golden mismatch in a test and fails once at the end, so
@@ -3730,6 +4057,7 @@ fn goldens() {
         check_golden("portal", dark, GOLDEN_SIZE);
         for scene in [
             "history",
+            "history-stats-strip",
             "captures",
             "mac-labs",
             "mac-labs-link",
@@ -3737,7 +4065,6 @@ fn goldens() {
             "output",
             "modes",
             "modes-picker",
-            "modes-speech",
             "picker-downloading",
             // Labs › Transcribe dropped audio: the hint a file drag shows and
             // the toast of the file running with its progress.
@@ -3864,7 +4191,7 @@ fn output_fixes_show_only_with_their_lab_and_fix_this_copies_for_the_sentence() 
         Some("Um, open code shipped the hex app today.")
     );
     tap(&mut on, "output-vocabulary");
-    assert!(on.state.vocabulary.open);
+    assert!(on.state.is_modal(Modal::Vocabulary));
 }
 
 #[test]

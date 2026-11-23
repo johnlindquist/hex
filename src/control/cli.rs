@@ -7,6 +7,7 @@
 //! heard no speech. Nothing here launches Hex except `start` and `restart`.
 
 use std::io::Write;
+pub(crate) mod annotate_read;
 mod completions;
 mod embedded;
 mod human;
@@ -74,10 +75,9 @@ pub enum ControlCli {
     Dictation {
         #[arg(value_enum)]
         action: CaptureAction,
-        /// With `start` (Labs › Dictation for a command, macOS) or `stop`:
-        /// answer with the transcript instead of pasting it. A printing start
-        /// waits for its recording to end. Exits 4, printing nothing, when no
-        /// speech was heard.
+        /// With `start` (macOS) or `stop`: answer with the transcript
+        /// instead of pasting it. A printing start waits for its recording to
+        /// end. Exits 4, printing nothing, when no speech was heard.
         #[arg(long)]
         print: bool,
         /// With `start` or `toggle`: paste the transcript as heard,
@@ -207,9 +207,8 @@ pub enum ControlCli {
         #[command(subcommand)]
         command: CaptureCommand,
     },
-    /// Print a shell completion script for `hex` (Labs › Shell
-    /// completions).
-    #[command(hide = true)]
+    /// Print a shell completion script for `hex` (bash, zsh, fish, elvish,
+    /// or PowerShell).
     Completions {
         /// The shell to print a completion script for.
         #[arg(value_enum)]
@@ -654,7 +653,9 @@ fn select_installed(
     if crate::app_settings::AppSettings::read()
         .is_ok_and(|settings| settings.transcription == *selection)
     {
-        let name = crate::transcription::models::definition(selection.model).name;
+        let name = crate::transcription::models::definition(selection.model)
+            .name
+            .to_string();
         println!("{name} ({}) is already selected", selection.language);
         return 0;
     }
@@ -705,7 +706,9 @@ fn select_in_running_hex(
 fn save_selection(
     selection: &crate::transcription::models::TranscriptionSelection,
 ) -> color_eyre::Result<String> {
-    let name = crate::transcription::models::definition(selection.model).name;
+    let name = crate::transcription::models::definition(selection.model)
+        .name
+        .to_string();
     let mut settings = crate::app_settings::AppSettings::load()?;
     if settings.transcription == *selection {
         return Ok(format!(
@@ -752,22 +755,29 @@ fn selection(
 /// `hex model status|devices|check|transcribe`, run in this process.
 #[cfg(not(target_os = "macos"))]
 fn offline_model(command: ModelCommand) -> u8 {
-    use crate::transcription::models::{definition, is_installed, is_verified, model_path};
+    use crate::transcription::models::{definition, model_path};
+    use crate::transcription::readiness::readiness;
     report((|| match command {
         ModelCommand::Status { model, language } => {
+            // Found catalog files count as installed, as `hex model list` says.
+            let _ = crate::transcription::found_models::scan();
             let selection = selection(model, language)?;
             let model = definition(selection.model);
-            let installed = is_installed(model, &selection.language);
+            let status = readiness(&model, &selection.language);
             println!(
                 "{}\t{}\t{}\t{}",
-                if installed { "installed" } else { "missing" },
-                if installed && is_verified(model) {
+                if status.installed {
+                    "installed"
+                } else {
+                    "missing"
+                },
+                if status.ready {
                     "verified"
                 } else {
                     "unverified"
                 },
                 model.name,
-                model_path(model)?.display()
+                model_path(&model)?.display()
             );
             Ok(())
         }
@@ -832,6 +842,9 @@ fn meetings(command: crate::control::transcript_cli::MeetingsCommand) -> u8 {
         }
         MeetingsCommand::Stop { output } => send(ControlCommand::MeetingStop, output),
         MeetingsCommand::CopyLast { output } => send(ControlCommand::MeetingCopyLast, output),
+        MeetingsCommand::Delete { id, output } => {
+            send(ControlCommand::MeetingDelete { id }, output)
+        }
         command => report(crate::control::transcript_cli::meetings(&command)),
     }
 }
@@ -952,16 +965,35 @@ pub enum CaptureCommand {
         #[command(flatten)]
         output: Output,
     },
+    /// Print a capture's summary, its marks, or its manifest, for a coding agent
+    /// (Labs › Agent tools for captures).
+    Inspect(annotate_read::Inspect),
+    /// A dense sheet of frames around a moment or a mark, for a coding agent
+    /// (Labs › Agent tools for captures).
+    Zoom(annotate_read::Zoom),
+    /// Extract frames across a time range, one PNG each, for a coding agent
+    /// (Labs › Agent tools for captures).
+    Frames(annotate_read::Frames),
+    /// Print the skill that teaches a coding agent to read captures
+    /// (Labs › Agent tools for captures).
+    Skill,
 }
 
 /// Runs `hex capture`: on macOS through the running Hex; on Linux the
 /// folder reads (`list`, `show`, `route`, `send`) run here, and the
 /// recording commands go to the running Hex's listener; on Windows every
-/// command goes to the running Hex. A build without the capture engine
-/// answers `unsupported`.
+/// command goes to the running Hex. The agent reads (`inspect`, `zoom`,
+/// `frames`, and `skill`) run here, in the CLI process, on every OS. A build
+/// without the capture engine answers `unsupported`.
 pub fn capture(command: CaptureCommand) -> u8 {
     use crate::control::{ControlCommand as C, ScrawlCaptureAction as A};
+    // The reads run here, on every OS: they only touch bundle files and the
+    // video decoder, so Hex needn't be running.
     let (command, output) = match command {
+        CaptureCommand::Inspect(args) => return annotate_read::inspect(args),
+        CaptureCommand::Zoom(args) => return annotate_read::zoom(args),
+        CaptureCommand::Frames(args) => return annotate_read::frames(args),
+        CaptureCommand::Skill => return annotate_read::skill(),
         #[cfg(target_os = "linux")]
         CaptureCommand::Start {
             area: Some(area),
@@ -1437,6 +1469,26 @@ mod tests {
         assert!(text.ends_with("Labs         none\n"));
         report.labs = vec!["live-text".into(), "meetings".into()];
         assert!(human_status(&report).ends_with("Labs         live-text, meetings\n"));
+    }
+
+    #[test]
+    fn status_reads_the_speech_backend() {
+        let mut report = StatusReport::default();
+        report.model.backend = Some(crate::transcription::SpeechBackend {
+            kind: "vulkan".into(),
+            device: "AMD Radeon RX 9060 XT".into(),
+            crash_fallback: false,
+        });
+        assert!(human_status(&report).contains("Speech       Vulkan — AMD Radeon RX 9060 XT\n"));
+        report.model.backend = Some(crate::transcription::SpeechBackend {
+            kind: "cpu".into(),
+            device: "CPU".into(),
+            crash_fallback: true,
+        });
+        assert!(human_status(&report).contains("Speech       CPU (GPU start crashed twice)\n"));
+        // A stopped or unloaded model reports no device, so the line goes.
+        report.model.backend = None;
+        assert!(!human_status(&report).contains("Speech       "));
     }
 
     #[test]

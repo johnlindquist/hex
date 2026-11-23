@@ -2,7 +2,7 @@ import UIKit
 
 /// The emoji you use, kept in the App Group on this iPhone: a count that fades by half every
 /// ten days (so both how often and how lately count) and the skin tone you last picked for
-/// each emoji. No words, nothing about what you write. Experiments › Clear emoji history
+/// each emoji. No words, nothing about what you write. Settings › Keyboard › Clear emoji history
 /// empties it.
 @MainActor
 final class EmojiUsageStore {
@@ -93,6 +93,7 @@ final class EmojiRoutedTarget: KeyboardTextTarget {
     var isSearching: Bool { query != nil }
 
     var documentContextBeforeInput: String? { query ?? document.documentContextBeforeInput }
+    var documentContextAfterInput: String? { isSearching ? nil : document.documentContextAfterInput }
     var hasText: Bool { query.map { !$0.isEmpty } ?? document.hasText }
     var autocapitalizationType: UITextAutocapitalizationType? { isSearching ? UITextAutocapitalizationType.none : document.autocapitalizationType }
     var autocorrectionType: UITextAutocorrectionType? { isSearching ? .no : document.autocorrectionType }
@@ -101,6 +102,11 @@ final class EmojiRoutedTarget: KeyboardTextTarget {
     var enablesReturnKeyAutomatically: Bool? { isSearching ? false : document.enablesReturnKeyAutomatically }
     var keyboardAppearance: UIKeyboardAppearance? { document.keyboardAppearance }
     var textContentType: UITextContentType? { isSearching ? nil : document.textContentType }
+    var smartQuotesType: UITextSmartQuotesType? { isSearching ? .no : document.smartQuotesType }
+    var smartDashesType: UITextSmartDashesType? { isSearching ? .no : document.smartDashesType }
+    var selectedText: String? { isSearching ? nil : document.selectedText }
+    var isSecureTextEntry: Bool? { isSearching ? nil : document.isSecureTextEntry }
+    var documentIdentifier: UUID? { document.documentIdentifier }
 
     func insertText(_ text: String) {
         guard let current = query else {

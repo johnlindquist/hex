@@ -8,6 +8,8 @@ pub(super) trait StreamFeed {
     fn feed(&mut self, samples: &[f32]) -> Result<(), String>;
     fn finalize(&mut self) -> Result<String, String>;
     fn partial(&self) -> Partial;
+    /// Raises the clip samples the opening check ignores. Only ever increases.
+    fn raise_ignored_head(&mut self, _head: usize) {}
     /// Where the stream's text starts in the audio it heard, in milliseconds,
     /// once it has finalized; `None` when the model gives no timing.
     fn text_start_ms(&self) -> Option<u64> {
@@ -158,6 +160,18 @@ pub(super) fn stream_requires_closing_mark(model: &Model) -> bool {
     model.stream_requires_closing_mark()
 }
 
+/// Speech a dictation stream of `model` may leave before its text starts and
+/// still count as transcribed. A buffered Parakeet stream times its first word
+/// later than its audio, in the whole-clip run too, so it gets the wider slack
+/// measured to fit it; every other streaming model keeps the tighter slack.
+pub(super) fn stream_opening_slack(model: &mut Model) -> usize {
+    if model.streams_buffered_parakeet() {
+        PARAKEET_OPENING_SLACK_SAMPLES
+    } else {
+        UNTRANSCRIBED_SLACK_SAMPLES
+    }
+}
+
 /// Refuses a stream's `text` when it must close a sentence and, past trailing
 /// spaces and closing quotes or brackets, ends in something other than `.`,
 /// `?`, `!`, or `…`, so the whole clip decides instead. Text with nothing left
@@ -192,8 +206,19 @@ pub(super) const PAUSE_TAIL_SAMPLES: usize = 4_800;
 
 /// Speech the stream heard may end this long after its text does and still
 /// count as transcribed: a word's last token can be emitted before the word
-/// fully ends.
+/// fully ends. It is also the opening slack for every stream whose model does
+/// not time its first word late.
 pub(super) const UNTRANSCRIBED_SLACK_SAMPLES: usize = 6_400;
+/// Speech a buffered Parakeet stream may leave before its text starts and
+/// still count as transcribed (1.2 s at 16 kHz). Its first-word timestamp
+/// lags its audio: offline on the real Unified English Q8_0 model, over clean
+/// 16 kHz clips whose speech began at 0, 450 ms, and 1 s, the stream's first
+/// token time matched the whole-clip run's first word within one 80 ms frame
+/// while trailing the detected speech onset by about 100-1000 ms (most
+/// 440-1000 ms), and the stream's opening words matched the whole-clip text
+/// in every run. The trailing check's 400 ms refused 6 of those 20 runs;
+/// 1.2 s refused none. Chunk and lookahead geometry was not varied.
+pub(super) const PARAKEET_OPENING_SLACK_SAMPLES: usize = 19_200;
 /// Speech heard after the text's end (and its slack) that makes the stream
 /// unusable: a phrase the stream dropped (#1101). Longer than the stop
 /// tone or key click the clip's 200 ms tail can carry.
@@ -207,10 +232,12 @@ pub(super) const UNTRANSCRIBED_SPEECH_SAMPLES: usize = 4_800;
 /// It also checks the finalized text covers the speech the stream heard at
 /// both ends: speech before its start that Hex did not itself play means the
 /// stream lost its opening, speech well past its end means it dropped a
-/// phrase (#1101), and the whole clip decides. The capture's own sounds (the
-/// pre-roll, the start tone) are ignored at the head. A raw decode carrying
-/// two different language tags means it changed language mid-clip, so the
-/// whole clip decides too.
+/// phrase (#1101), and the whole clip decides. A buffered Parakeet stream
+/// times its first word later than its audio, in the whole-clip run too, so
+/// the opening check gives it a wider slack than the trailing one. The
+/// capture's own sounds (the pre-roll, the start tone) are ignored at the
+/// head. A raw decode carrying two different language tags means it changed
+/// language mid-clip, so the whole clip decides too.
 pub(super) struct PauseCap<'a, S> {
     stream: &'a mut S,
     speech: crate::transcription::pause_segmenter::SpeechFrames,
@@ -232,6 +259,9 @@ pub(super) struct PauseCap<'a, S> {
     /// Clip samples of Hex's own sounds at the capture's head: the pre-roll
     /// and the start tone. Speech there is never a lost opening.
     head_ignored: usize,
+    /// Speech samples the stream may leave before its text starts, wider for
+    /// a model whose first-word timestamp lags its audio.
+    opening_slack: usize,
 }
 
 impl<'a, S: StreamFeed> PauseCap<'a, S> {
@@ -248,7 +278,15 @@ impl<'a, S: StreamFeed> PauseCap<'a, S> {
             heard: false,
             trailing_silence,
             head_ignored: 0,
+            opening_slack: UNTRANSCRIBED_SLACK_SAMPLES,
         }
+    }
+
+    /// Widens the opening check to `slack` samples, as a model whose
+    /// first-word timestamp lags its audio needs.
+    pub(super) fn opening_slack(mut self, slack: usize) -> Self {
+        self.opening_slack = slack;
+        self
     }
 
     /// Ignores `head` clip samples when it judges a lost opening, as Hex's own
@@ -286,6 +324,10 @@ impl<'a, S: StreamFeed> PauseCap<'a, S> {
 }
 
 impl<S: StreamFeed> StreamFeed for PauseCap<'_, S> {
+    fn raise_ignored_head(&mut self, head: usize) {
+        self.head_ignored = self.head_ignored.max(head);
+    }
+
     fn feed(&mut self, mut samples: &[f32]) -> Result<(), String> {
         let mut out = Vec::with_capacity(samples.len() + self.tail.len());
         while !samples.is_empty() {
@@ -332,12 +374,19 @@ impl<S: StreamFeed> StreamFeed for PauseCap<'_, S> {
         if !text.is_empty()
             && let Some(start_ms) = self.stream.text_start_ms()
         {
-            // The trailing check's slack and threshold, on the speech that
-            // ends before the text begins, without Hex's own sounds at the
-            // capture's head. Unlike the trailing check, a late-emitted first
-            // token moves t0 later, the unsafe direction here, so the cost is
-            // at most a whole-clip run.
-            let covered = (start_ms as usize * 16).saturating_sub(UNTRANSCRIBED_SLACK_SAMPLES);
+            // The threshold is the trailing check's, on the speech that ends
+            // before the text begins, without Hex's own sounds at the capture's
+            // head. The wider Parakeet slack excuses only the 1.2 s before the
+            // text, so a buffered stream also gets a span rule: at least
+            // 100 ms of speech detected before the old 400 ms edge, and
+            // speech starting 1.5 s or more before the text (300 ms before
+            // the 1.2 s edge), means the stream lost its opening however
+            // sparse those old frames are.
+            // Dense speech inside the 1.2 s window counts toward the minimum,
+            // so a few old frames cannot hide it. Models with real token times
+            // keep the count alone, where a click inside the 400 ms slack was
+            // never a lost opening.
+            let covered = (start_ms as usize * 16).saturating_sub(self.opening_slack);
             let frame = crate::transcription::pause_segmenter::FRAME_SAMPLES;
             let (mut first, mut last, mut untranscribed) = (None, 0, 0);
             for end in self
@@ -350,6 +399,29 @@ impl<S: StreamFeed> StreamFeed for PauseCap<'_, S> {
                 last = end;
                 untranscribed += frame;
             }
+            let buffered = self.opening_slack > UNTRANSCRIBED_SLACK_SAMPLES;
+            let (mut early_first, mut early_count) = (None, 0);
+            if buffered {
+                let old_edge = (start_ms as usize * 16).saturating_sub(UNTRANSCRIBED_SLACK_SAMPLES);
+                for end in self
+                    .speech_ends
+                    .iter()
+                    .copied()
+                    .filter(|&end| end > self.head_ignored && end < old_edge)
+                {
+                    early_first.get_or_insert(end);
+                    early_count += frame;
+                }
+            }
+            let spanned = buffered
+                && early_count >= 5 * frame
+                && early_first.is_some_and(|first| {
+                    covered.saturating_sub(first - frame) >= UNTRANSCRIBED_SPEECH_SAMPLES
+                });
+            // For a buffered stream the count rule implies the span rule: the
+            // frames it counted also end before the old edge, and their first
+            // one already opens the required span. So the count check only
+            // chooses the message; every other stream has no span rule.
             if untranscribed >= UNTRANSCRIBED_SPEECH_SAMPLES
                 && let Some(first) = first
             {
@@ -359,6 +431,15 @@ impl<S: StreamFeed> StreamFeed for PauseCap<'_, S> {
                     untranscribed / 16,
                     (first - frame) / 16,
                     last / 16
+                ));
+            }
+            if spanned && let Some(first) = early_first {
+                let start = first - frame;
+                return Err(format!(
+                    "the stream's text starts at {start_ms} ms but speech from {} ms precedes \
+                     it and spans {} ms before the stream's 1.2 s slack",
+                    start / 16,
+                    (covered - start) / 16
                 ));
             }
         }
@@ -501,6 +582,12 @@ pub(super) fn drive_stream(
                 }
             }
             Command::Feed { .. } => {}
+            // The capture learned that Hex's own output suppression took
+            // effect after the stream began; ignore the audio it covered.
+            Command::IgnoreHead { stream: s, head } if s == id => {
+                stream.raise_ignored_head(head);
+            }
+            Command::IgnoreHead { .. } => {}
             // Background work never interrupts a capture.
             Command::Background { work, .. } => work(None),
             // Nor does foreground work; it runs once the stream ends.
@@ -546,25 +633,27 @@ pub(super) fn drive_yielding(
     id: u64,
     stream: &mut impl StreamFeed,
     commands: &Receiver<Command>,
-    yielding: &Yielding,
+    yielding: Yielding,
     deferred: &mut VecDeque<Command>,
 ) -> Option<Command> {
+    // `yielding` is owned here so every exit path — feed error, cancel,
+    // finish, preemption, disconnect, or panic — drops it and marks the stream
+    // closed.
     loop {
         let Ok(command) = commands.recv() else {
             return None;
         };
         match command {
             Command::Feed { stream: s, samples } if s == id => match stream.feed(&samples) {
-                Ok(()) => {
-                    yielding.consumed.fetch_add(samples.len(), Ordering::AcqRel);
-                    yielding.partials.publish(stream.partial());
-                }
+                Ok(()) => yielding.record_consumed(samples.len(), stream.partial()),
                 Err(error) => {
                     tracing::warn!(%error, "yielding stream feed failed");
                     return None;
                 }
             },
             Command::Feed { .. } => {}
+            // Only a dictation stream reads an ignored head.
+            Command::IgnoreHead { .. } => {}
             Command::Background { work, .. } => work(None),
             foreground @ Command::Foreground { .. } => deferred.push_back(foreground),
             Command::Cancel { stream: s } if s == id => return None,

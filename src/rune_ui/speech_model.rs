@@ -1,7 +1,6 @@
-//! The speech model and language a person can switch to: an input source's
-//! mapping in General, and a dictation mode's choice in Modes. Both show the
-//! picker's installed GGUF models plus Don't switch, then a language the
-//! model supports.
+//! The speech model and language an input source's mapping in General
+//! switches to: the picker's installed GGUF models plus Don't switch, then a
+//! language the model supports.
 
 use rune::{El, row};
 
@@ -10,13 +9,7 @@ use super::settings::toggle_menu;
 use super::{Menu, Ui};
 use crate::app_settings::KeyboardModelChoice;
 use crate::desktop::i18n::tr;
-use crate::transcription::models::{self as transcription_models, ModelDefinition, ModelRuntime};
-
-/// Whether the Modes pane offers a speech choice per mode: Labs › Switch
-/// model with app is on where the runtime can follow the frontmost app.
-pub(super) fn enabled(ui: &Ui) -> bool {
-    ui.platform.caps.app_model_switching && ui.settings.labs.app_model_switching
-}
+use crate::transcription::models::{self as transcription_models, ModelDefinition};
 
 /// One row's keys and copy.
 pub(super) struct SpeechRow<'a> {
@@ -70,20 +63,18 @@ pub(super) fn setting(
     }];
     for model in transcription_models::all_models() {
         let fallback = ui.settings.transcription_for_model(model.id).language;
-        if !model.available()
-            || !matches!(model.runtime, ModelRuntime::Gguf(_))
-            || !ui.picker.installed(model, &fallback)
+        if !model.available() || !model.runtime.is_gguf() || !ui.picker.installed(&model, &fallback)
         {
             continue;
         }
         let language = match &choice {
             Some(choice) if model.supports_language(&choice.language) => choice.language.clone(),
-            _ => language_for(model, &fallback),
+            _ => language_for(&model, &fallback),
         };
         let id = model.id;
         let save = save.clone();
         choices.push(Choice {
-            label: model.name.into(),
+            label: model.name.to_string(),
             detail: None,
             selected: choice.as_ref().is_some_and(|choice| choice.model == id),
             choose: Box::new(move |ui| {
@@ -102,8 +93,8 @@ pub(super) fn setting(
         || tr("Don't switch").to_string(),
         |choice| {
             let model = transcription_models::definition(choice.model);
-            if ui.picker.installed(model, &choice.language) {
-                model.name.into()
+            if ui.picker.installed(&model, &choice.language) {
+                model.name.to_string()
             } else {
                 format!("{} · {}", model.name, tr("Not installed"))
             }

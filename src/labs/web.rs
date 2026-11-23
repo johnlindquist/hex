@@ -7,13 +7,19 @@ use super::{Audience, Feature, Os};
 
 impl Feature {
     /// Whether Hex's website lists it: every public build has it. Dev
-    /// features are left out, and so are the ones only builds with the
-    /// capture build option show.
+    /// features are left out, and so are the labs that only matter once
+    /// Annotate is on.
     const fn on_the_web(self) -> bool {
         matches!(self.audience(), Audience::Everyone)
             && !matches!(
                 self,
-                Self::Screenshots | Self::AnnotateReplay | Self::CopyCaptureZip
+                Self::Screenshots
+                    | Self::AnnotateReplay
+                    | Self::AnnotatePointerScreen
+                    | Self::CopyCaptureZip
+                    | Self::AnnotateAgentTools
+                    | Self::AnnotateAgentInstall
+                    | Self::DictateWhileAnnotating
             )
     }
 
@@ -28,6 +34,9 @@ impl Feature {
             }
             Self::HoldThroughKeys => {
                 "If a shortcut is made only of Option, Command, Shift, Control, or Globe, with no letter or number key, pressing another key or clicking after the first second no longer ends the dictation; let go to finish"
+            }
+            Self::StopAnyCallRecording => {
+                "Also stop an offered or by-hand call recording 30 s after its call app leaves the microphone, even with Stop when the call ends off; on macOS a calendar reminder's recording stops the same way"
             }
             _ => self.summary(),
         }
@@ -117,7 +126,10 @@ mod tests {
             Feature::VoiceFilter,
             Feature::Screenshots,
             Feature::AnnotateReplay,
+            Feature::AnnotatePointerScreen,
             Feature::CopyCaptureZip,
+            Feature::AnnotateAgentTools,
+            Feature::AnnotateAgentInstall,
         ] {
             assert!(!feature.on_the_web(), "{}", feature.name());
         }

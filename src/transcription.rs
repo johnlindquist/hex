@@ -9,6 +9,7 @@ pub(crate) mod benchmark;
 ))]
 pub(crate) mod cpu_floor;
 pub(crate) mod custom_models;
+pub(crate) mod definitions;
 pub(crate) mod engine;
 pub(crate) mod file_transcript;
 pub(crate) mod found_models;
@@ -28,14 +29,17 @@ pub(crate) mod pause_segmenter;
 pub(crate) mod pieces;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub(crate) mod preparation;
+pub(crate) mod readiness;
 pub(crate) mod service;
 pub(crate) mod speech_detector;
 pub(crate) mod stream;
+pub(crate) mod stream_tuning;
 pub(crate) mod subtitle_credits;
 pub(crate) mod transcript;
 
 #[cfg(target_os = "macos")]
 use color_eyre::eyre::Result;
+use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
 use crate::apple_speech::AppleSpeech;
@@ -54,6 +58,22 @@ pub use crate::transcription::transcript::{Transcript, TranscriptSegment};
 /// has the context to emit the final word and its closing punctuation
 /// (issue 657: sentences lost their full stop or question mark).
 pub(crate) const UNIFIED_ENGLISH_TRAILING_SILENCE_SAMPLES: usize = 6_400;
+
+/// Where a loaded speech model runs, for `hex status` and Settings.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SpeechBackend {
+    /// The backend that runs it: `cpu`, `vulkan`, `cuda`, `rocm`, `metal`, or
+    /// another backend's name.
+    pub kind: String,
+    /// The device as the backend describes it: "AMD Radeon RX 9060 XT" on a
+    /// GPU, or ggml's CPU description (usually the processor name) on the CPU.
+    #[serde(default)]
+    pub device: String,
+    /// This launch runs on the CPU because the GPU crashed twice starting
+    /// (Windows' `gpu-start.pending`, #662).
+    #[serde(default)]
+    pub crash_fallback: bool,
+}
 
 #[cfg(target_os = "macos")]
 pub enum Transcriber {
@@ -235,11 +255,28 @@ impl WarmTranscriber {
         }
     }
 
+    /// Whether the warm model streams with Parakeet's buffered chunk menus,
+    /// whose first-word timestamp lags its audio.
+    pub(crate) fn streams_buffered_parakeet(&mut self) -> bool {
+        match &mut self.active {
+            Some(Transcriber::Gguf(model)) => model.streams_buffered_parakeet(),
+            _ => false,
+        }
+    }
+
     /// Stream options of the warm model, when it can stream on its device.
     pub(crate) fn stream_options(&self) -> Option<&transcribe_cpp::StreamOptions> {
         match &self.active {
             Some(Transcriber::Gguf(model)) => model.stream_options(),
             _ => None,
+        }
+    }
+
+    /// Re-probes the live stream when Labs › Faster live text or an env
+    /// override changed, so the next capture streams with it.
+    pub(crate) fn refresh_stream(&mut self) {
+        if let Some(Transcriber::Gguf(model)) = &mut self.active {
+            model.refresh_stream();
         }
     }
 

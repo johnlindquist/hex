@@ -94,7 +94,7 @@ impl HotkeyModifiers {
         }
     }
 
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub const fn control() -> Self {
         Self {
             control: Some(ModifierSide::Either),
@@ -688,9 +688,14 @@ impl<'de> Deserialize<'de> for HotkeyBinding {
 }
 
 impl Default for HotkeyBinding {
-    /// Option on macOS, Ctrl+Space on Windows, Alt+Space on Linux, and
+    /// Option on macOS, Left Alt on Windows, Alt+Space on Linux, and
     /// Ctrl+Alt+Space on GNOME, whose window menu takes Alt+Space (#723), and
     /// on KDE Plasma, whose KRunner does (#898).
+    ///
+    /// Windows takes one modifier alone, and the left Alt sits under the
+    /// thumb where the Mac's Option does (#2278). It is the left one only:
+    /// Windows sends AltGr as a synthesized Left Ctrl plus Right Alt, and a
+    /// shortcut that took either Alt would press on every AltGr character.
     fn default() -> Self {
         #[cfg(target_os = "macos")]
         let binding = Self {
@@ -698,7 +703,13 @@ impl Default for HotkeyBinding {
             key: None,
         };
         #[cfg(target_os = "windows")]
-        let binding = Self::chord(HotkeyModifiers::control(), "space");
+        let binding = Self {
+            modifiers: HotkeyModifiers {
+                option: Some(ModifierSide::Left),
+                ..HotkeyModifiers::default()
+            },
+            key: None,
+        };
         #[cfg(target_os = "linux")]
         let binding =
             Self::linux_dictation_default(crate::linux::portal::desktop_takes_alt_space());
@@ -796,6 +807,34 @@ impl HotkeyBinding {
         binding
     }
 
+    /// Command-Shift-5, macOS's own screenshot toolbar (Labs › Screenshots
+    /// records with it): the "5" key's ANSI position. Elsewhere
+    /// Control-Shift-5, though nothing records there.
+    pub fn screenshot_record_default() -> Self {
+        #[cfg(target_os = "macos")]
+        let binding = Self {
+            modifiers: HotkeyModifiers {
+                command: Some(ModifierSide::Either),
+                shift: Some(ModifierSide::Either),
+                ..Default::default()
+            },
+            key: Some(HotkeyKey {
+                code: 23,
+                label: "5".into(),
+            }),
+        };
+        #[cfg(not(target_os = "macos"))]
+        let binding = Self::chord(
+            HotkeyModifiers {
+                control: Some(ModifierSide::Either),
+                shift: Some(ModifierSide::Either),
+                ..Default::default()
+            },
+            "5",
+        );
+        binding
+    }
+
     /// Escape, with no modifier.
     pub fn cancel_default() -> Self {
         #[cfg(target_os = "macos")]
@@ -810,20 +849,6 @@ impl HotkeyBinding {
         #[cfg(not(target_os = "macos"))]
         let binding = Self::chord(HotkeyModifiers::default(), "escape");
         binding
-    }
-
-    pub fn paste_meeting_default() -> Self {
-        Self {
-            modifiers: HotkeyModifiers {
-                option: Some(ModifierSide::Either),
-                control: Some(ModifierSide::Either),
-                ..Default::default()
-            },
-            key: Some(HotkeyKey {
-                code: paste_key_code(),
-                label: "V".into(),
-            }),
-        }
     }
 }
 
@@ -1262,96 +1287,10 @@ pub fn hotkey_conflicts(
         .any(|binding| candidate.overlaps(&binding))
 }
 
-impl AppSettings {
-    /// Whether `binding` overlaps a shortcut `slot` must not share: the other
-    /// active shortcuts (each active Labs › More dictation shortcuts row
-    /// included) and, where meetings exist (macOS), meeting paste. The two
-    /// capture shortcuts never share a key, on or off, since turning captures
-    /// on can't pull them apart. A saved Screenshots record shortcut and
-    /// Annotate's capture shortcuts never share a key, whether Annotate or the
-    /// Lab is on, since turning either on can't pull them apart.
-    pub fn hotkey_in_use(&self, slot: HotkeySlot, binding: &HotkeyBinding) -> bool {
-        let mut others = Vec::new();
-        if slot != HotkeySlot::Dictation {
-            others.push(self.dictation_hotkey.clone());
-        }
-        if slot != HotkeySlot::PasteLast
-            && let Some(paste) = &self.paste_last_hotkey
-        {
-            others.push(paste.clone());
-        }
-        if slot != HotkeySlot::RawDictation
-            && let Some(raw) = &self.raw_dictation_hotkey
-        {
-            others.push(raw.clone());
-        }
-        if slot != HotkeySlot::TypedText
-            && cfg!(target_os = "linux")
-            && self.labs.typed_text
-            && let Some(typed) = &self.typed_text_hotkey
-        {
-            others.push(typed.clone());
-        }
-        if slot != HotkeySlot::Cancel {
-            others.push(self.cancel_hotkey.clone());
-        }
-        if slot != HotkeySlot::SecondDictation
-            && self.labs.second_dictation_shortcut
-            && let Some(second) = &self.second_dictation_hotkey
-            // Linux and Windows register a key, so a keyless binding never
-            // runs there and takes no key from another shortcut.
-            && (cfg!(target_os = "macos") || second.key.is_some())
-        {
-            others.push(second.clone());
-        }
-        if cfg!(target_os = "macos") && self.labs.more_dictation_shortcuts {
-            for (index, row) in self.extra_dictation_hotkeys.iter().enumerate() {
-                if slot != HotkeySlot::ExtraDictation(index)
-                    && let Some(extra) = &row.binding
-                {
-                    others.push(extra.clone());
-                }
-            }
-        }
-        if slot != HotkeySlot::TerminalPaste
-            && cfg!(any(target_os = "windows", target_os = "linux"))
-            && self.labs.terminal_paste_shortcut
-            && let Some(terminal) = &self.terminal_paste_hotkey
-        {
-            others.push(terminal.clone());
-        }
-        if cfg!(target_os = "macos") && self.meetings.available() {
-            others.push(HotkeyBinding::paste_meeting_default());
-        }
-        #[cfg(hex_capture)]
-        if slot != HotkeySlot::Capture && self.capture_on() {
-            others.push(self.capture.hotkey.clone());
-        }
-        #[cfg(hex_capture)]
-        if slot != HotkeySlot::CaptureReplay
-            && cfg!(target_os = "macos")
-            && self.capture_on()
-            && self.labs.annotate_replay
-            && let Some(replay) = &self.capture.replay_hotkey
-        {
-            others.push(replay.clone());
-        }
-        if slot != HotkeySlot::Screenshot && cfg!(target_os = "macos") && self.labs.screenshots {
-            others.push(self.screenshots.hotkey.clone());
-        }
-        // A saved record shortcut and Annotate's own capture shortcuts never
-        // share a key, even with one of them off, so turning either on can
-        // never leave one of the two dead.
-        others.extend(self.screenshots_record_counterparts(slot));
-        hotkey_conflicts(binding, others)
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeHotkeys {
     pub dictation: RuntimeHotkey,
     pub paste_last: Option<RuntimeHotkey>,
-    pub paste_meeting: Option<RuntimeHotkey>,
     /// The capture shortcut, while captures are on (`cfg(hex_capture)`).
     pub capture: Option<RuntimeHotkey>,
     /// Labs › Annotate last 15 seconds shortcut (macOS 27+), while on and bound.
@@ -1375,14 +1314,13 @@ pub struct RuntimeHotkeys {
 
 impl RuntimeHotkeys {
     /// The shortcuts [`Self::all`] lists by name, before the extra rows.
-    const NAMED: usize = 8;
+    const NAMED: usize = 7;
 
     /// Every shortcut Hex matches, for suppression and chord evidence.
     pub fn all(self) -> [Option<RuntimeHotkey>; Self::NAMED + MAX_EXTRA_DICTATION_SHORTCUTS] {
         let named: [_; Self::NAMED] = [
             Some(self.dictation),
             self.paste_last,
-            self.paste_meeting,
             self.capture,
             self.capture_replay,
             self.raw_dictation,
@@ -1401,8 +1339,6 @@ impl Default for RuntimeHotkeys {
         Self {
             dictation: HotkeyBinding::default().runtime(),
             paste_last: Some(HotkeyBinding::paste_last_default().runtime()),
-            paste_meeting: crate::DEVELOPER_FEATURES_ENABLED
-                .then(|| HotkeyBinding::paste_meeting_default().runtime()),
             capture: None,
             capture_replay: None,
             raw_dictation: None,

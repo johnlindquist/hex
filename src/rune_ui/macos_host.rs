@@ -379,7 +379,7 @@ impl ChordCapture {
         // refuses it while Labs › Microphone key alone is off. Plain ⌫ turns an
         // optional shortcut off, and `settings::validate` refuses it as a
         // binding.
-        let stands_alone = is_function_key(&key.label)
+        let stands_alone = HotkeyKey::is_function_name(&key.label)
             || is_navigation_key(code)
             || key.is_section()
             || key.is_microphone()
@@ -420,13 +420,6 @@ impl ChordCapture {
             key: None,
         })))
     }
-}
-
-fn is_function_key(label: &str) -> bool {
-    label
-        .strip_prefix('F')
-        .and_then(|number| number.parse::<u8>().ok())
-        .is_some_and(|number| (1..=20).contains(&number))
 }
 
 /// Home, End, Page Up, Page Down, and Help (Insert on PC keyboards): keys
@@ -629,6 +622,9 @@ impl MacHost {
             MeetingRequest::Import(path) => self
                 .runtime()?
                 .meeting(crate::meeting::MeetingRequest::Import(path)),
+            MeetingRequest::DeleteTranscript { id, entries } => self
+                .runtime()?
+                .meeting(crate::meeting::MeetingRequest::DeleteTranscript { id, entries }),
             MeetingRequest::Summarize(id) => self
                 .runtime()?
                 .meeting(crate::meeting::MeetingRequest::Summarize(id)),
@@ -849,13 +845,33 @@ impl NativeHost for MacHost {
         let system_audio = crate::meeting::system_audio_ready();
         changed |= update(&mut state.permissions, permissions);
         changed |= update(&mut state.system_audio, system_audio);
+        // A Screen Recording guide has nothing left to point at once Hex can
+        // record, or knows it must restart to: the guide's own preflight
+        // keeps the answer it read at launch, so the read that saw the grant
+        // closes it. It is watched while it shows, like the pane's row.
+        let screen_recording_guide =
+            crate::desktop::permission_guide::active(PermissionKind::ScreenRecording);
+        let screen_access = if screen_recording_guide
+            || state
+                .permissions_shown
+                .contains(&PermissionKind::ScreenRecording)
+        {
+            crate::capture_host::screen_access_watched()
+        } else {
+            crate::capture_host::screen_access()
+        };
+        if screen_recording_guide
+            && crate::desktop::permission_guide::screen_recording_answered(screen_access)
+        {
+            crate::desktop::permission_guide::close(PermissionKind::ScreenRecording);
+        }
         let asked_len = state.permissions_asked.len();
         state.permissions_asked.retain(|kind| match kind {
             PermissionKind::Microphone => permissions.microphone != PermissionState::Ready,
             PermissionKind::Accessibility => permissions.accessibility != PermissionState::Ready,
             PermissionKind::SystemAudio => !system_audio,
             PermissionKind::ScreenRecording => {
-                crate::capture_host::screen_access() == crate::capture_host::ScreenAccess::Off
+                screen_access == crate::capture_host::ScreenAccess::Off
             }
         });
         changed |= state.permissions_asked.len() != asked_len;
@@ -875,14 +891,7 @@ impl NativeHost for MacHost {
             ),
             (PermissionKind::SystemAudio, !system_audio),
             (PermissionKind::ScreenRecording, {
-                #[cfg(hex_capture)]
-                {
-                    crate::capture_host::screen_access() == crate::capture_host::ScreenAccess::Off
-                }
-                #[cfg(not(hex_capture))]
-                {
-                    false
-                }
+                screen_access == crate::capture_host::ScreenAccess::Off
             }),
         ] {
             let Some(slot) = stale_slot(kind) else {
@@ -1315,7 +1324,9 @@ impl ScrawlHost {
 /// Saves one change to the settings; the runtime publishes it to the
 /// window.
 #[cfg(hex_capture)]
-fn save_settings(change: impl FnOnce(&mut crate::app_settings::AppSettings)) -> Result<(), String> {
+pub(in crate::rune_ui) fn save_settings(
+    change: impl FnOnce(&mut crate::app_settings::AppSettings),
+) -> Result<(), String> {
     let mut settings =
         crate::app_settings::AppSettings::load().map_err(|error| format!("{error:#}"))?;
     let base = settings.clone();

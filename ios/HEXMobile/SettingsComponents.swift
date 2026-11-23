@@ -9,10 +9,10 @@ enum SettingsPage: String, Hashable, CaseIterable {
 
     var title: String {
         switch self {
-        case .dictation: "Dictation"
-        case .keyboard: "Keyboard"
-        case .privacy: "Privacy"
-        case .experiments: "Experiments"
+        case .dictation: String(localized: "Dictation")
+        case .keyboard: String(localized: "Keyboard")
+        case .privacy: String(localized: "Privacy")
+        case .experiments: String(localized: "Experiments")
         }
     }
 
@@ -28,19 +28,27 @@ enum SettingsPage: String, Hashable, CaseIterable {
 
 /// A settings page: a short scrolling column of cards under an inline title.
 struct SettingsPageScaffold<Content: View>: View {
-    let title: String
+    let title: LocalizedStringKey
+    /// The `id` of a row to start at instead of the top.
+    var startsAt: String?
     @ViewBuilder var content: Content
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                content
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    content
+                }
+                .frame(maxWidth: 500)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 28)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: 500)
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 28)
-            .frame(maxWidth: .infinity)
+            .onAppear {
+                guard let startsAt else { return }
+                DispatchQueue.main.async { proxy.scrollTo(startsAt, anchor: .top) }
+            }
         }
         .scrollBounceBehavior(.basedOnSize)
         .scrollDismissesKeyboard(.interactively)
@@ -69,7 +77,7 @@ struct SettingsCard<Content: View>: View {
 
 /// A small label above a card, such as Privacy's "Advanced".
 struct SettingsSectionHeader: View {
-    let title: String
+    let title: LocalizedStringKey
 
     var body: some View {
         Text(title)
@@ -218,8 +226,11 @@ struct SettingsSegments<Item: Hashable>: View {
 /// - `settings-home`: home, everything ready. `setup`: home, keyboard added but Full Access
 ///   not confirmed yet. `setup-sheet`: the same, with the setup sheet open;
 ///   `setup-sheet-microphone`: the sheet before iOS has asked for the microphone.
+///   A scene with `-noaccess` (`setup-sheet-noaccess`, `settings-keyboard-noaccess`) has the
+///   keyboard report Full Access off.
 /// - `settings-<page>` opens a page (`dictation`, `keyboard`, `privacy`, `experiments`) with
 ///   every switch at its default; `-on` turns the switches on, `-end` starts scrolled to the end.
+///   `settings-keyboard-languages[-on]` opens Keyboard › Languages.
 ///   `settings-privacy-confirm` opens Record typing logs' consent dialog.
 ///
 /// `KeyboardSetupMonitor.refresh` and `DictationController` supply the matching state.
@@ -250,30 +261,76 @@ enum SettingsSnapshotFixture {
         scene?.hasSuffix("-end") == true
     }
 
+    /// `settings-experiments-on`: Adaptive touch partway through learning, as a keyboard with
+    /// Full Access reports it.
+    static var adaptiveTouchStatus: AdaptiveTouchStatus? {
+        guard let scene, scene.hasPrefix("settings-experiments") else { return nil }
+        return scene.contains("-on") ? .learning(taps: 240) : nil
+    }
+
+    /// `settings-keyboard-languages[-on]`: Keyboard › Languages, open (Automatic, or with
+    /// `-on` English on QWERTZ, Français and Русский with Switch dictation too).
+    static var opensKeyboardLanguages: Bool {
+        scene?.hasPrefix("settings-keyboard-languages") == true
+    }
+
     /// Writes the page's switches to the App Group so every run renders the same.
     @MainActor
     static func applyDefaults() {
         guard let scene, scene.hasPrefix("settings-") else { return }
         let on = scene.contains("-on")
         let keyboard = FullKeyboardSettings()
-        keyboard.isEnabled = on
+        keyboard.isEnabled = on || opensKeyboardLanguages
+        keyboard.autoCapitalization = true
+        // `--hex-key left` renders the page with the Hex key on the left.
+        let args = ProcessInfo.processInfo.arguments
+        keyboard.hexKeyOnLeft = args.firstIndex(of: FullKeyboardSettings.hexKeyLaunchArgument)
+            .flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } == "left"
+        keyboard.numberRow = on
         keyboard.autocorrect = true
+        keyboard.spatialAutocorrect = true
+        keyboard.germanSpatialAutocorrect = on
+        keyboard.koreanKeyboard = on
+        keyboard.dvorakPunctuation = on
+        keyboard.commaPeriodKeys = on
+        keyboard.quickAccents = on
+        keyboard.emojiShortcodes = on
+        keyboard.emojiLettersUnderEmojiKey = on
+        keyboard.keyboardThemesEnabled = false
+        keyboard.keyboardTheme = .automatic
+        keyboard.suggestSwearWords = on
         keyboard.keyPopups = true
         keyboard.haptics = true
-        keyboard.emoji = on
+        keyboard.emoji = true
+        keyboard.swipeTyping = true
+        keyboard.swipeMoreLanguages = on
         let emojiUsage = EmojiUsageStore()
         emojiUsage.clear()
         if on {
             emojiUsage.record("🎉")
         }
-        LanguageSettings().keyboardLayout = nil
+        LanguageSettings().keyboardLanguages = on ? [.english, .french, .russian] : []
+        LanguageSettings().setLetterLayout(on ? .qwertz : .qwerty, for: .english)
+        LanguageSettings().setLetterLayout(.azerty, for: .french)
+        LanguageSettings().currentKeyboardLanguage = nil
+        LanguageSettings().dictationFollowsKeyboard = on
         CleanupTaggerSettings().isEnabled = on
         AppleIntelligenceCleanupSettings().isEnabled = false
         CustomVocabularySettings().isEnabled = on
         CustomVocabularySettings().terms = on ? ["OpenCode", "SwiftUI", "TestFlight"] : []
         DictationTranslationSettings().isEnabled = on
+        LiveDictationSettings().showsPreview = true
+        LiveDictationSettings().typesIntoField = on
         DictationTranslationSettings().targetLanguage = "ja"
         TypingJournalSettings().isEnabled = on
+        TypingJournalSettings().learnsPerLanguage = on
         TypingLogSettings().isEnabled = on
+        HinglishSettings().isEnabled = on
+        GreeklishSettings().isEnabled = on
+        TwoLanguageDictationSettings().isEnabled = on
+        VoiceIsolationSettings().isEnabled = on
+        AdaptiveTouchSettings().isEnabled = on
+        // Settings scenes skip preparing a model, so this only draws the switch.
+        MultilingualParakeetSettings().isEnabled = on
     }
 }

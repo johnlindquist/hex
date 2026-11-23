@@ -10,6 +10,8 @@ use crate::app_settings::{
     AppSettings, HotkeyBinding, HotkeyKey, HotkeySlot, MAX_EXTRA_DICTATION_SHORTCUTS,
 };
 
+#[cfg(test)]
+mod choice_tests;
 mod hotkeys;
 mod registry;
 
@@ -333,43 +335,11 @@ pub fn apply(
             }
         }
         "labs.double_tap_modifiers" => candidate.normalize_double_tap_settings(),
-        "labs.api_browser_origins" => {
-            candidate.labs.api_browser_origins =
-                crate::app_settings::normalize_browser_origins(&candidate.labs.api_browser_origins);
-        }
-        "dictation_hotkey"
-        | "paste_last_hotkey"
-        | "raw_dictation_hotkey"
-        | "typed_text_hotkey"
-        | "second_dictation_hotkey"
-        | "terminal_paste_hotkey"
-        | "cancel_hotkey"
-        | "screenshots.hotkey"
-        | "screenshots.record_hotkey"
-        | "capture.hotkey"
-        | "capture.replay_hotkey" => {
+        _ if matches!(key.kind, Kind::Shortcut(_)) => {
             let Kind::Shortcut(slot) = key.kind else {
                 unreachable!("shortcut keys have the shortcut kind");
             };
-            let binding = match slot {
-                HotkeySlot::Dictation => Some(&candidate.dictation_hotkey),
-                HotkeySlot::PasteLast => candidate.paste_last_hotkey.as_ref(),
-                HotkeySlot::RawDictation => candidate.raw_dictation_hotkey.as_ref(),
-                HotkeySlot::TypedText => candidate.typed_text_hotkey.as_ref(),
-                HotkeySlot::SecondDictation => candidate.second_dictation_hotkey.as_ref(),
-                // Each row of `extra_dictation_hotkeys` is validated from
-                // its own JSON list, not a shortcut key.
-                HotkeySlot::ExtraDictation(_) => None,
-                HotkeySlot::TerminalPaste => candidate.terminal_paste_hotkey.as_ref(),
-                HotkeySlot::Cancel => Some(&candidate.cancel_hotkey),
-                HotkeySlot::Screenshot => Some(&candidate.screenshots.hotkey),
-                HotkeySlot::ScreenshotRecord => candidate.screenshots.record_hotkey.as_ref(),
-                #[cfg(hex_capture)]
-                HotkeySlot::Capture => Some(&candidate.capture.hotkey),
-                #[cfg(hex_capture)]
-                HotkeySlot::CaptureReplay => candidate.capture.replay_hotkey.as_ref(),
-            };
-            if let Some(binding) = binding {
+            if let Some(binding) = slot.get(&candidate) {
                 check_shortcut(settings, &candidate, name, slot, binding, shortcuts)?;
             }
             if candidate.dictation_hotkey.key.is_none() && !candidate.double_tap_modifiers_allowed()
@@ -447,6 +417,10 @@ pub fn apply(
                 "The screenshot shortcut is already in use; set screenshots.hotkey to another \
                  shortcut first",
             ));
+        }
+        #[cfg(hex_capture)]
+        "labs.screenshots" if candidate.labs.screenshots => {
+            candidate.clear_record_shortcut_sharing_capture();
         }
         "labs.standalone_special_keys" => candidate.repair_special_keys(),
         "labs.section_key_alone" => candidate.repair_section_key(),
@@ -680,6 +654,15 @@ mod tests {
         } else {
             assert_eq!(refused, Some("unsupported"));
         }
+        // Stop every call recording ships on all three OSes.
+        assert!(
+            unavailable_under(
+                "labs.stop_any_call_recording",
+                crate::policy::Policy::default()
+            )
+            .is_none(),
+            "the lab is refused on this OS"
+        );
     }
 
     /// A saved record shortcut and Annotate's shortcut can't share a chord
@@ -844,19 +827,85 @@ mod tests {
         assert_eq!(names.len(), keys().count(), "a key is listed twice");
     }
 
+    /// Fails when a Labs feature's `settings_key()` is missing from `keys()`,
+    /// is not a boolean key, or points to a different `AppSettings` field than
+    /// `Feature::on` / `Feature::set`.
     #[test]
-    fn browser_origin_entries_keep_only_real_origins() {
-        let change = apply(
-            &AppSettings::default(),
-            "labs.api_browser_origins",
-            r#"["HTTPS://Example.com:443/", "*", "not an origin", "http://localhost:5173"]"#,
-            &rules(),
-        )
-        .unwrap();
-        assert_eq!(
-            change.settings.labs.api_browser_origins,
-            vec!["https://example.com", "http://localhost:5173"]
-        );
+    fn every_labs_feature_has_a_matching_bool_cli_key() {
+        for feature in crate::labs::Feature::ALL {
+            let name = feature.settings_key();
+            let key = keys().find(|key| key.key == name).unwrap_or_else(|| {
+                panic!(
+                    "Labs feature `{}` names no `hex settings` key `{name}`",
+                    feature.name()
+                )
+            });
+            assert!(
+                matches!(key.kind, Kind::Bool),
+                "Labs feature `{}` key `{name}` is {:?}, expected Bool",
+                feature.name(),
+                key.kind
+            );
+
+            let default = AppSettings::default();
+            assert!(!feature.on(&default), "{} defaults on", feature.name());
+            assert_eq!(
+                get(&default, name).unwrap()[0].value,
+                Value::Bool(false),
+                "`{name}` did not read false for default {}",
+                feature.name()
+            );
+
+            let mut via_feature = default.clone();
+            feature.set(&mut via_feature, true);
+            assert!(feature.on(&via_feature), "{}", feature.name());
+            assert_eq!(
+                get(&via_feature, name).unwrap()[0].value,
+                Value::Bool(true),
+                "`{name}` does not read the bool `Feature::set` wrote for {}",
+                feature.name()
+            );
+
+            let via_cli = apply(&default, name, "true", &rules()).unwrap().settings;
+            assert!(
+                feature.on(&via_cli),
+                "applying `{name} true` did not turn on `Feature::on` for {}",
+                feature.name()
+            );
+            assert_eq!(
+                via_cli,
+                via_feature,
+                "applying `{name} true` diverged from `Feature::set(true)` for {}",
+                feature.name()
+            );
+
+            let mut off_via_feature = via_feature.clone();
+            feature.set(&mut off_via_feature, false);
+            let off_via_cli = apply(&via_feature, name, "false", &rules())
+                .unwrap()
+                .settings;
+            assert!(!feature.on(&off_via_cli), "{}", feature.name());
+            assert_eq!(
+                off_via_cli,
+                off_via_feature,
+                "applying `{name} false` diverged from `Feature::set(false)` for {}",
+                feature.name()
+            );
+
+            for extra in feature.extra_settings_keys() {
+                assert!(
+                    keys().any(|key| key.key == *extra),
+                    "Labs feature `{}` companion key `{extra}` is missing from `keys()`",
+                    feature.name()
+                );
+                assert_eq!(
+                    crate::labs::Feature::for_settings_key(extra),
+                    Some(feature),
+                    "companion key `{extra}` did not map back to `{}`",
+                    feature.name()
+                );
+            }
+        }
     }
 
     #[test]
@@ -869,6 +918,40 @@ mod tests {
         let change = apply(&AppSettings::default(), "ui_language", "zh", &rules()).unwrap();
         let shown = get(&change.settings, "ui_language").unwrap();
         assert_eq!(shown[0].value, Value::String("zh".into()));
+    }
+
+    #[test]
+    fn the_hud_height_gap_is_whole_points_in_range() {
+        let change = apply(
+            &AppSettings::default(),
+            "labs.hud_bottom_gap",
+            "120",
+            &rules(),
+        )
+        .unwrap();
+        assert_eq!(change.settings.labs.hud_bottom_gap, 120);
+        assert_eq!(
+            apply(
+                &AppSettings::default(),
+                "labs.hud_bottom_gap",
+                "401",
+                &rules()
+            )
+            .unwrap_err()
+            .code,
+            "invalid-value"
+        );
+        assert_eq!(
+            apply(
+                &AppSettings::default(),
+                "labs.hud_bottom_gap",
+                "-1",
+                &rules()
+            )
+            .unwrap_err()
+            .code,
+            "invalid-value"
+        );
     }
 
     #[test]
@@ -984,6 +1067,49 @@ mod tests {
         assert_eq!(
             get(&change.settings, "labs.stop_phrase_text").unwrap()[0].value,
             Value::String("that's all".into())
+        );
+    }
+
+    #[test]
+    fn a_signature_is_trimmed_and_must_be_one_line() {
+        let change = apply(&AppSettings::default(), "labs.signature", "on", &rules()).unwrap();
+        assert!(change.settings.labs.signature);
+        assert_eq!(
+            change.settings.labs.signature_text,
+            crate::dictation::signature::DEFAULT_TEXT
+        );
+        let change = apply(
+            &change.settings,
+            "labs.signature_text",
+            "  Dax, from Hex ",
+            &rules(),
+        )
+        .unwrap();
+        assert_eq!(
+            change.settings.labs.signature_text, "Dax, from Hex",
+            "a saved signature is trimmed"
+        );
+        let error = apply(
+            &change.settings,
+            "labs.signature_text",
+            "two\nlines",
+            &rules(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid-value");
+        assert!(error.message.contains("one line"), "{}", error.message);
+        assert_eq!(
+            change.settings.labs.signature_text, "Dax, from Hex",
+            "a refused draft leaves the saved signature"
+        );
+        let change = apply(&change.settings, "labs.signature_text", "", &rules()).unwrap();
+        assert!(
+            change.settings.labs.signature_text.is_empty(),
+            "empty is allowed and appends nothing"
+        );
+        assert_eq!(
+            get(&change.settings, "labs.signature_text").unwrap()[0].value,
+            Value::String(String::new())
         );
     }
 
@@ -1201,6 +1327,39 @@ mod tests {
         assert_eq!(
             get(&change.settings, "labs.appearance_theme").unwrap()[0].value,
             Value::String("dark".into())
+        );
+        let change = apply(&settings, "labs.dictation_style", "on", &rules()).unwrap();
+        assert!(change.settings.labs.dictation_style);
+        assert_eq!(
+            change.settings.labs.dictation_style_choice,
+            crate::app_settings::DictationStyle::Polished,
+            "polished is the default"
+        );
+        let change = apply(
+            &change.settings,
+            "labs.dictation_style_choice",
+            "notes",
+            &rules(),
+        )
+        .unwrap();
+        assert_eq!(
+            change.settings.labs.dictation_style_choice,
+            crate::app_settings::DictationStyle::Notes
+        );
+        assert_eq!(
+            get(&change.settings, "labs.dictation_style_choice").unwrap()[0].value,
+            Value::String("notes".into())
+        );
+        assert_eq!(
+            apply(
+                &change.settings,
+                "labs.dictation_style_choice",
+                "song",
+                &rules()
+            )
+            .unwrap_err()
+            .code,
+            "invalid-value"
         );
         let change = apply(&settings, "ui_language", "none", &rules()).unwrap();
         assert_eq!(change.settings.ui_language, None);

@@ -44,6 +44,8 @@ final class TypingLogger {
         var showsGlobe: Bool
         var horizontalInset: CGFloat
         var placement: HexKeyPlacement
+        var language: KeyboardLanguage
+        var letters: KeyboardLetterLayout
 
         init(_ layout: KeyboardLayout) {
             width = layout.width
@@ -53,6 +55,8 @@ final class TypingLogger {
             showsGlobe = layout.showsGlobe
             horizontalInset = layout.horizontalInset
             placement = HexKeyPlacement.current
+            language = layout.language
+            letters = layout.letters
         }
     }
 
@@ -216,6 +220,7 @@ final class TypingLogger {
             TypingLogField("globe", .bool(layout.showsGlobe)),
             TypingLogField("hexPlacement", .string(HexKeyPlacement.current.rawValue)),
             TypingLogField("language", .string(layout.language.rawValue)),
+            TypingLogField("letters", .string(layout.letters.rawValue)),
         ]
         if current.shiftHeld {
             fields.insert(TypingLogField("shiftHeld", .bool(true)), at: 4)
@@ -226,10 +231,7 @@ final class TypingLogger {
     nonisolated private static func layoutDetail(_ layout: KeyboardLayout) -> [TypingLogField] {
         let m = layout.metrics
         let strip = layout.stripFrame
-        let slotWidth = strip.width / 3
-        let slots = (0..<3).map { index in
-            TypingLogValue.rect(CGRect(x: strip.minX + CGFloat(index) * slotWidth, y: strip.minY, width: slotWidth, height: strip.height))
-        }
+        let slots = layout.stripSlotFrames.map { TypingLogValue.rect($0) }
         let keys = layout.keys.map { key in
             TypingLogValue.object([
                 TypingLogField("id", .string(keyID(key.kind))),
@@ -297,7 +299,7 @@ final class TypingLogger {
         }
         if let under, under.kind != key?.kind {
             fields.append(TypingLogField("under", .string(Self.keyID(under.kind))))
-        } else if under == nil, phase == .ended || phase == .cancelled, key != nil {
+        } else if under == nil, phase != .moved, key != nil {
             fields.append(TypingLogField("under", .null))
         }
         emit("touch", fields)
@@ -347,8 +349,14 @@ final class TypingLogger {
                 fields.append(TypingLogField("auto", .bool(auto)))
             case .secondary:
                 fields.append(TypingLogField("kind", .string("secondary")))
+            case .nextWord:
+                fields.append(TypingLogField("kind", .string("next_word")))
             case .emoji:
                 fields.append(TypingLogField("kind", .string("emoji")))
+            case .swiped:
+                fields.append(TypingLogField("kind", .string("swiped")))
+            case .revert:
+                fields.append(TypingLogField("kind", .string("revert")))
             }
             return .object(fields)
         })
@@ -463,6 +471,7 @@ final class TypingLogger {
         case .hex: "hex"
         case .globe: "globe"
         case .emoji: "emoji"
+        case .dismiss: "dismiss"
         }
     }
 
@@ -479,6 +488,7 @@ final class TypingLogger {
         case .text: "text"
         case .url: "url"
         case .email: "email"
+        case .webSearch: "webSearch"
         }
     }
 

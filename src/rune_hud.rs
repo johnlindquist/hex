@@ -22,6 +22,8 @@ pub(crate) use macos::{activation_policy_changed, pointer_screen};
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) mod rehome;
 pub(crate) mod spring;
+/// Windows' first-frame watch and its failure backoff; see its module docs.
+mod watch;
 /// Windows' own HUD frame pacing; see its module docs.
 #[cfg(any(target_os = "windows", test))]
 mod windows_pacing;
@@ -41,6 +43,8 @@ use crate::rune_hud::dot_scope::MAX_DOTS;
 use crate::rune_hud::dot_scope::PLATE_HEIGHT;
 use crate::rune_hud::hud_placement::{ISLAND_INSET, ISLAND_PAD, Island, Layout};
 use crate::rune_ui::live_text::Spot;
+#[cfg(target_os = "windows")]
+use watch::{FirstFrameCheck, Watch};
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::DictationIndicatorUi;
@@ -48,7 +52,9 @@ pub(crate) use macos::DictationIndicatorUi;
 pub(crate) type HudEvent = DictationIndicatorEvent;
 
 /// The window's margin from the top or bottom edge on Linux and Windows.
+#[cfg(not(target_os = "macos"))]
 pub(crate) const TOP_OFFSET: f32 = 12.0;
+#[cfg(not(target_os = "macos"))]
 pub(crate) const BOTTOM_OFFSET: f32 = 24.0;
 /// The HUD window: room for Dot scope's widest plate and drop shadow, and
 /// on macOS for an island grown out of the widest notch.
@@ -56,6 +62,17 @@ pub(crate) const BOTTOM_OFFSET: f32 = 24.0;
 pub(crate) const WINDOW: (f32, f32) = (320.0, 128.0);
 #[cfg(not(target_os = "macos"))]
 pub(crate) const WINDOW: (f32, f32) = (304.0, 80.0);
+/// The position a HUD shows at: a dictation during an Annotate capture
+/// takes the bottom edge, clear of the capture capsule at the screen's top
+/// (Labs › Dictate while annotating). Hidden stays hidden.
+fn place_during_capture(position: IndicatorPosition, capture: bool) -> IndicatorPosition {
+    if capture && position != IndicatorPosition::Hidden {
+        IndicatorPosition::Bottom
+    } else {
+        position
+    }
+}
+
 /// The notch's own bottom corner radius, which the island starts from.
 const NOTCH_RADIUS: f32 = 8.0;
 /// The open island's bottom corner radius.
@@ -96,141 +113,6 @@ pub(crate) struct HudSender {
     shown: Arc<AtomicBool>,
     #[cfg(target_os = "windows")]
     watch: Arc<Mutex<Watch>>,
-}
-
-/// What Windows checks of the HUD: Rune can show the overlay without
-/// Windows ever drawing it (#510), so a show must also present a frame.
-#[cfg(target_os = "windows")]
-#[derive(Default)]
-struct Watch {
-    position: IndicatorPosition,
-    /// The overlay failure last logged, so each is logged once.
-    logged: Option<String>,
-    described: bool,
-    first_frame: FirstFrame,
-}
-
-/// The first-frame watch behind a Windows HUD show: each start opens one
-/// attempt, which resolves once and asks for at most one recovery hide. It
-/// is pure so its decisions are unit-tested on every OS; [`HudSender`] wires
-/// it to Rune only on Windows.
-#[cfg(any(target_os = "windows", test))]
-#[derive(Default)]
-struct FirstFrame {
-    /// The attempt a start began: when, and the presents before it.
-    attempt: Option<Attempt>,
-    /// How many attempts have begun. The newest one's number tags its
-    /// recovery hide, so a hide decided for an older attempt never runs against
-    /// a HUD a later start showed (#1793).
-    attempts: u64,
-    /// The last attempt that presented nothing: why, for Settings and the log.
-    unpresented: Option<String>,
-    /// This attempt asked for its recovery hide.
-    released: bool,
-}
-
-#[cfg(any(target_os = "windows", test))]
-struct Attempt {
-    started: Instant,
-    presents: u64,
-}
-
-/// A recovery hide a [`FirstFrame`] poll decided for, and the presents it read.
-/// Both are rechecked where the hide lands, because that is a queued update: a
-/// frame may have presented since, and a later start may have taken the HUD
-/// over (#1793).
-#[cfg(any(target_os = "windows", test))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct HideAttempt {
-    /// The attempt this hide was decided for, as `FirstFrame::attempts` numbered
-    /// it.
-    attempt: u64,
-    /// `surface_stats().totals.presents` when the poll resolved.
-    presents: u64,
-}
-
-/// What one poll of a [`FirstFrame`] found.
-#[cfg(any(target_os = "windows", test))]
-struct FirstFrameCheck {
-    /// Why the HUD can't show, for Settings and the log, when it can't.
-    reason: Option<String>,
-    /// This attempt's one recovery hide is due:
-    /// [`FirstFrame::should_apply_hide`] says whether it still applies where it
-    /// lands.
-    hide: Option<HideAttempt>,
-}
-
-/// How long a started HUD has to present its first frame.
-#[cfg(any(target_os = "windows", test))]
-const FIRST_FRAME: std::time::Duration = std::time::Duration::from_millis(1500);
-
-#[cfg(any(target_os = "windows", test))]
-impl FirstFrame {
-    /// A non-Hidden start begins a fresh attempt: its own present baseline and
-    /// clock, its own hide, and no inherited no-frame decision. A second start
-    /// while the last attempt still runs restarts it.
-    fn start(&mut self, at: Instant, presents: u64) {
-        self.attempts += 1;
-        self.attempt = Some(Attempt {
-            started: at,
-            presents,
-        });
-        self.released = false;
-    }
-
-    /// Whether a recovery hide still applies where it lands: no start has opened
-    /// a later attempt since the poll (that start's `show` owns the HUD now), and
-    /// no frame has presented since it (the HUD is drawing, only late). Either
-    /// one means the hide would take away a HUD that is up or on its way
-    /// (#1793).
-    fn should_apply_hide(&self, hide: HideAttempt, presents: u64) -> bool {
-        hide.attempt == self.attempts && hide.presents == presents
-    }
-
-    /// One poll: resolves the attempt once `FIRST_FRAME` has passed, then
-    /// decides its one hide. Only this attempt's own frame-less resolve hides:
-    /// Rune's overlay failure is a reason for Settings and the log, never a
-    /// hide of its own, since a failed overlay presents nothing and the
-    /// frame-less resolve covers it. A previous attempt's `unpresented` reason
-    /// is still returned for Settings and the log, but never hides anything.
-    /// `surface` names what draws the HUD, for the reason.
-    fn poll(
-        &mut self,
-        now: Instant,
-        presents: u64,
-        failure: Option<&str>,
-        surface: Option<&str>,
-    ) -> FirstFrameCheck {
-        let resolved = self
-            .attempt
-            .as_ref()
-            .is_some_and(|attempt| now.saturating_duration_since(attempt.started) >= FIRST_FRAME);
-        let attempt = if resolved { self.attempt.take() } else { None };
-        let mut presented_nothing = false;
-        if let Some(attempt) = attempt {
-            presented_nothing = presents == attempt.presents;
-            self.unpresented = presented_nothing.then(|| {
-                format!(
-                    "shown but presented no frame in {} ms; surface: {}",
-                    FIRST_FRAME.as_millis(),
-                    surface.unwrap_or("none")
-                )
-            });
-        }
-        let hide = (!self.released && presented_nothing).then_some(HideAttempt {
-            attempt: self.attempts,
-            presents,
-        });
-        if hide.is_some() {
-            self.released = true;
-        }
-        FirstFrameCheck {
-            reason: failure
-                .map(str::to_owned)
-                .or_else(|| self.unpresented.clone()),
-            hide,
-        }
-    }
 }
 
 impl HudSender {
@@ -313,12 +195,25 @@ impl HudSender {
             watch.described = true;
         }
         let failure = self.overlay.failure();
-        let FirstFrameCheck { reason, hide } = watch.first_frame.poll(
+        let FirstFrameCheck {
+            reason,
+            hide,
+            backoff,
+        } = watch.first_frame.poll(
             Instant::now(),
             self.overlay.surface_stats().totals.presents,
             failure.as_deref(),
             surface.as_deref(),
         );
+        if let Some(cooldown) = backoff {
+            // One line per failed attempt: the HUD stops showing, and is not
+            // rebuilt, until the cooldown ends (#2175).
+            tracing::warn!(
+                cooldown_secs = cooldown.as_secs(),
+                failures = watch.first_frame.failed_attempts(),
+                "the dictation HUD is backing off after a show presented no frame"
+            );
+        }
         if let Some(reason) = &reason
             && watch.logged.as_deref() != Some(reason.as_str())
         {
@@ -348,11 +243,10 @@ impl HudSender {
                     drop(watch);
                     hud.hide();
                     // This hide is the one recovery a frame-less show gets, and
-                    // it frees the recording's one re-ask: exactly one rebuild
-                    // follows the hide (one hide per attempt), and the clock it
-                    // restarts keeps the meter right after it from asking
-                    // (#1793).
-                    hud.reshown = false;
+                    // the recording that asked for it gets no further show: a
+                    // HUD that backs off must not be rebuilt by its own meters
+                    // (#1793, #2175).
+                    hud.reshown = true;
                     hud.last_drawn = Some(Instant::now());
                 }
             });
@@ -384,6 +278,35 @@ fn wants_frame(animating: bool, shown: bool) -> bool {
     animating && shown
 }
 
+/// What Hex last asked Rune for, together with the placement that only exists
+/// while the overlay is up. Rune can still hide the overlay underneath Hex
+/// (display unplug, GPU device loss), so each capture's start calls
+/// `overlay.show()` again (`Hud::reveal`) instead of trusting `Shown`.
+#[derive(Default)]
+pub(super) enum HudPresence {
+    #[default]
+    Hidden,
+    Shown {
+        #[cfg(target_os = "macos")]
+        placed: Option<crate::rune_hud::hud_placement::Placed>,
+        /// The position the overlay was last placed for, while it stays on that
+        /// display; a capture's start or a hide picks the display again.
+        #[cfg(not(target_os = "macos"))]
+        edge_placed: Option<IndicatorPosition>,
+    },
+}
+
+impl HudPresence {
+    fn shown() -> Self {
+        Self::Shown {
+            #[cfg(target_os = "macos")]
+            placed: None,
+            #[cfg(not(target_os = "macos"))]
+            edge_placed: None,
+        }
+    }
+}
+
 /// The overlay's state: the model and what it last drew.
 pub(crate) struct Hud {
     model: IndicatorModel,
@@ -393,21 +316,17 @@ pub(crate) struct Hud {
     position: IndicatorPosition,
     /// The overlay itself, to show and hide it.
     this: Option<OverlayHandle<Hud>>,
-    /// Whether a show is requested. It flips before Rune applies the queued
-    /// show or hide, so the pump's macOS Space check guards on the panel's
-    /// `isVisible` for that gap.
+    presence: HudPresence,
+    /// Lock-free mirror of `presence` for the macOS main-thread pump's Space
+    /// check. Updated only through `set_presence`; the pump also checks
+    /// `panel.isVisible()` for the gap before Rune applies a queued show/hide.
+    #[cfg(target_os = "macos")]
     shown: Arc<AtomicBool>,
     /// Rune's Reduce Motion, as of the last frame.
     reduce: bool,
     /// Whether the HUD still moves. The compositor reads it everywhere but
     /// Windows, where the overlay's `poll` asks for the next frame instead.
     animating: Arc<AtomicBool>,
-    #[cfg(target_os = "macos")]
-    placed: Option<crate::rune_hud::hud_placement::Placed>,
-    /// The position the overlay was last placed for, while it stays on that
-    /// display; a capture's start or a hide picks the display again.
-    #[cfg(not(target_os = "macos"))]
-    edge_placed: Option<IndicatorPosition>,
     /// The compositor's painter, so a hide that Rune never draws again still
     /// lets go of it (`release_painter`).
     #[cfg(not(target_os = "macos"))]
@@ -415,6 +334,8 @@ pub(crate) struct Hud {
     /// Windows' first-frame watch, shared with [`HudSender`]: a start opens its
     /// attempt here, where the show is requested, and tags it so the watchdog's
     /// recovery hide can tell whether a later start took the HUD over (#1793).
+    /// A failed attempt also backs shows off, so the HUD's window, swapchain
+    /// and device are not rebuilt on every dictation (#2175).
     #[cfg(target_os = "windows")]
     watch: Arc<Mutex<Watch>>,
     /// When a frame last drew, or this recording's start opened the clock: a
@@ -461,7 +382,38 @@ fn reshow_due(since_frame: Option<Duration>, already: bool) -> bool {
     !already && since_frame.is_some_and(|since| since >= RESHOW_AFTER)
 }
 
+/// Whether a blocked show (the HUD is backing off a failed show, or this
+/// recording's own attempt already presented nothing) hides the HUD: always on
+/// a fresh capture's start (tearing down what an older recording left, while
+/// building nothing), otherwise only when none is up. A first frame that
+/// arrives after its attempt resolved frame-less keeps its backoff for later
+/// dictations, but must not take the HUD away from the recording watching it
+/// (#2175).
+#[cfg(any(target_os = "windows", test))]
+fn blocked_show_hides(fresh_start: bool, shown: bool) -> bool {
+    fresh_start || !shown
+}
+
 impl Hud {
+    pub(super) fn is_shown(&self) -> bool {
+        matches!(self.presence, HudPresence::Shown { .. })
+    }
+
+    fn set_presence(&mut self, presence: HudPresence) {
+        #[cfg(target_os = "macos")]
+        self.shown.store(
+            matches!(presence, HudPresence::Shown { .. }),
+            Ordering::Release,
+        );
+        self.presence = presence;
+    }
+
+    fn clear_placement(&mut self) {
+        if self.is_shown() {
+            self.presence = HudPresence::shown();
+        }
+    }
+
     /// While shown, every `FOLLOW_EVERY`: the HUD and the live text move to
     /// the display under the pointer when it moved to another, at once and
     /// without focus. Windows and X11; a layer-shell surface stays on the
@@ -469,9 +421,7 @@ impl Hud {
     /// primary.
     #[cfg(not(target_os = "macos"))]
     fn follow_pointer(&mut self, now: Instant) {
-        if !self.shown.load(Ordering::Acquire)
-            || self.followed.is_some_and(|at| now < at + FOLLOW_EVERY)
-        {
+        if !self.is_shown() || self.followed.is_some_and(|at| now < at + FOLLOW_EVERY) {
             return;
         }
         self.followed = Some(now);
@@ -484,31 +434,16 @@ impl Hud {
     fn handle(&mut self, event: HudEvent) {
         let starts = matches!(&event, HudEvent::Started);
         let meter = matches!(&event, HudEvent::Meter { .. });
-        // A capture's start sends the display and placement to Rune again,
-        // so a placement Rune resolved wrong on another screen (#873)
-        // doesn't stick.
+        // A capture's start (or dot-scope change) sends the display and
+        // placement to Rune again, so a placement Rune resolved wrong on
+        // another screen (#873) doesn't stick.
         #[cfg(target_os = "macos")]
         if matches!(&event, HudEvent::ConfigureDotScope(_) | HudEvent::Started) {
-            self.placed = None;
+            self.clear_placement();
         }
         #[cfg(not(target_os = "macos"))]
         if starts {
-            self.edge_placed = None;
-        }
-        // Rune can take the HUD away without telling Hex: it drops an overlay
-        // whose layer surface the compositor closed (a monitor unplugged, or a
-        // KVM switching away and back, #1663), hides one whose surface won't
-        // reconfigure or whose GPU device was lost, and `show_fading` gives up
-        // when the window or surface it has to make fails (#1793). Ask Rune
-        // for the HUD at each capture's start instead of trusting `shown`: it
-        // is Hex's record of a request, not of Rune's state. A cloaked
-        // `ShowWindow` is why: Rune still counts the overlay shown then, so it
-        // ignores a show and only the first-frame recovery hide gets it back.
-        // The start's ask also brings back an overlay Rune hid itself,
-        // re-applying the panel's Space behavior as it shows. Rune's show is a
-        // no-op while the overlay is visible, and it cancels an exit fade.
-        if starts {
-            self.shown.store(false, Ordering::Release);
+            self.clear_placement();
         }
         // A start's own first frame has to arrive before a recovery re-ask can
         // call it late: the frame the previous dictation left is not this one's,
@@ -534,9 +469,14 @@ impl Hud {
             let presents = overlay.surface_stats().totals.presents;
             let mut watch = self.watch.lock().unwrap_or_else(|error| error.into_inner());
             if watch.position != IndicatorPosition::Hidden {
-                // Every start is a fresh attempt: its own baseline, clock and
-                // hide, even when the last one never resolved.
-                watch.first_frame.start(Instant::now(), presents);
+                // Every start opens a fresh attempt: its own baseline, clock
+                // and hide, even when the last one never resolved. A refused
+                // start (the HUD is backing off) opens none, so there is no
+                // first frame to wait for: its recording spends its one re-ask
+                // up front, and the show below builds nothing (#2175).
+                if !watch.first_frame.start(Instant::now(), presents) {
+                    self.reshown = true;
+                }
             }
         }
         self.model.handle(event, Instant::now(), self.reduce);
@@ -555,34 +495,46 @@ impl Hud {
                     .map(|at| Instant::now().saturating_duration_since(at)),
                 self.reshown,
             )
+            && !self.show_blocked(Instant::now())
         {
             self.reshown = true;
-            self.shown.store(false, Ordering::Release);
-            self.show();
+            self.reveal(false);
         }
-        if starts || (self.shown.load(Ordering::Acquire) && !meter) {
-            self.show();
+        if starts {
+            self.reveal(true);
+        } else if !meter {
+            self.sync_placement();
         }
     }
 
     #[cfg(not(target_os = "macos"))]
     fn set_position(&mut self, position: IndicatorPosition) {
         self.position = position;
-        if self.shown.load(Ordering::Acquire) {
-            self.show();
-        }
+        self.sync_placement();
     }
 
-    /// Shows the overlay where the HUD belongs, unless it is set to Hidden.
-    fn show(&mut self) {
-        let Some(overlay) = self.this.clone() else {
-            return;
-        };
+    /// Whether the HUD must not be shown: it is backing off a failed show, or
+    /// this recording's own attempt already presented nothing. A show then only
+    /// builds another window, swapchain and device for a HUD that never
+    /// presents, on the thread that pumps Windows' messages (#2175).
+    #[cfg(target_os = "windows")]
+    fn show_blocked(&self, now: Instant) -> bool {
+        let watch = self.watch.lock().unwrap_or_else(|error| error.into_inner());
+        watch.first_frame.backing_off(now) || watch.first_frame.failed()
+    }
+
+    /// Resolves where the HUD should sit, or `None` when Hidden (after placing
+    /// live text where the plate would be).
+    fn visible_position(&mut self) -> Option<IndicatorPosition> {
         #[cfg(target_os = "macos")]
         {
             self.position = crate::app_settings::indicator_position();
         }
-        if self.position == IndicatorPosition::Hidden {
+        // A capture records with its capsule at the screen's top, so a
+        // dictation during one shows at the bottom, clear of it (Labs ›
+        // Dictate while annotating).
+        let position = place_during_capture(self.position, crate::capture_host::recording());
+        if position == IndicatorPosition::Hidden {
             #[cfg(target_os = "macos")]
             self.place_live_text_without_hud();
             #[cfg(not(target_os = "macos"))]
@@ -590,36 +542,89 @@ impl Hud {
                 let plate_start = TOP_OFFSET + (WINDOW.1 - PLATE_HEIGHT) / 2.0;
                 set_live_text(Spot::Edge(ScreenEdge::Top, plate_start));
             }
-            // A start clears `shown` before `show`, so `hide` alone can think
-            // the overlay is already gone and leave Rune's panel up. Rune's
-            // hide on a hidden overlay is harmless (`overlay/presence.rs`).
-            overlay.hide();
-            self.hide();
-            return;
+            return None;
         }
         #[cfg(target_os = "macos")]
-        self.place_on_pointer_screen(&overlay);
+        {
+            self.position = position;
+        }
+        Some(position)
+    }
+
+    fn apply_placement(&mut self, overlay: &OverlayHandle<Hud>, position: IndicatorPosition) {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = position;
+            self.place_on_pointer_screen(overlay);
+        }
         #[cfg(not(target_os = "macos"))]
         {
-            let (edge, margin) = match self.position {
+            let (edge, margin) = match position {
                 IndicatorPosition::Bottom => (ScreenEdge::Bottom, BOTTOM_OFFSET),
                 _ => (ScreenEdge::Top, TOP_OFFSET),
             };
             // Placing picks the display again (`display`); while shown, the
             // HUD follows the pointer to another display at its own pace
             // (`follow_pointer`).
-            if self.edge_placed != Some(self.position) {
+            if let HudPresence::Shown { edge_placed } = &mut self.presence
+                && *edge_placed != Some(position)
+            {
                 overlay.place(edge, margin);
-                self.edge_placed = Some(self.position);
+                *edge_placed = Some(position);
             }
             // The plate sits in the middle of the window.
             let past_plate = margin + (WINDOW.1 + PLATE_HEIGHT) / 2.0 + LIVE_TEXT_GAP;
             set_live_text(Spot::Edge(edge, past_plate));
         }
-        if !self.shown.load(Ordering::Acquire) {
-            overlay.show();
-            self.shown.store(true, Ordering::Release);
+    }
+
+    /// Asks Rune to show the overlay where the HUD belongs, unless Hidden or
+    /// blocked on Windows. Calls `overlay.show()` unconditionally instead of
+    /// trusting `self.presence`: Rune can take the overlay away underneath Hex
+    /// (display unplug, GPU device loss, #1663, #1793), and Rune's own `show()`
+    /// is a no-op when already shown and cancels an exit fade.
+    fn reveal(&mut self, fresh_start: bool) {
+        let Some(overlay) = self.this.clone() else {
+            return;
+        };
+        let Some(position) = self.visible_position() else {
+            overlay.hide();
+            self.hide();
+            return;
+        };
+        #[cfg(target_os = "windows")]
+        if self.show_blocked(Instant::now()) {
+            // Blocked, the HUD makes nothing: no `overlay.show()`, and with it
+            // no window, swapchain or device to build while a saturated GPU
+            // keeps the last one from presenting (#2175).
+            if blocked_show_hides(fresh_start, self.is_shown()) {
+                overlay.hide();
+                self.hide();
+            }
+            return;
         }
+        if fresh_start || !self.is_shown() {
+            self.set_presence(HudPresence::shown());
+        }
+        self.apply_placement(&overlay, position);
+        overlay.show();
+    }
+
+    /// Updates a shown HUD's placement (or hides it if Settings switched to
+    /// Hidden) without asking Rune to show again.
+    pub(super) fn sync_placement(&mut self) {
+        if !self.is_shown() {
+            return;
+        }
+        let Some(overlay) = self.this.clone() else {
+            return;
+        };
+        let Some(position) = self.visible_position() else {
+            overlay.hide();
+            self.hide();
+            return;
+        };
+        self.apply_placement(&overlay, position);
     }
 
     /// Hides the overlay once its exit has settled, fading the window out
@@ -627,7 +632,14 @@ impl Hud {
     /// for the screen reach it before the window and its GPU surface go
     /// (#1359).
     fn fade_out(&mut self) {
-        self.unplace();
+        self.dismiss(true);
+    }
+
+    fn hide(&mut self) {
+        self.dismiss(false);
+    }
+
+    fn dismiss(&mut self, fade: bool) {
         #[cfg(target_os = "windows")]
         {
             // The next show starts a new step, not one from the frame before
@@ -636,44 +648,24 @@ impl Hud {
             self.polled_at = None;
             self.stepped_at = None;
         }
-        if self.shown.swap(false, Ordering::AcqRel) {
+        let was_shown = self.is_shown();
+        self.set_presence(HudPresence::Hidden);
+        if was_shown {
             if let Some(overlay) = &self.this {
                 #[cfg(target_os = "windows")]
-                overlay.fade_out(EXIT_FADE);
+                if fade {
+                    overlay.fade_out(EXIT_FADE);
+                } else {
+                    overlay.hide();
+                }
                 #[cfg(not(target_os = "windows"))]
-                overlay.hide();
+                {
+                    let _ = fade;
+                    overlay.hide();
+                }
             }
             #[cfg(not(target_os = "macos"))]
             release_painter(&self.gpu);
-        }
-    }
-
-    fn hide(&mut self) {
-        self.unplace();
-        #[cfg(target_os = "windows")]
-        {
-            self.armed = false;
-            self.polled_at = None;
-            self.stepped_at = None;
-        }
-        if self.shown.swap(false, Ordering::AcqRel) {
-            if let Some(overlay) = &self.this {
-                overlay.hide();
-            }
-            #[cfg(not(target_os = "macos"))]
-            release_painter(&self.gpu);
-        }
-    }
-
-    /// The next show places the overlay again.
-    fn unplace(&mut self) {
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.edge_placed = None;
-        }
-        #[cfg(target_os = "macos")]
-        {
-            self.placed = None;
         }
     }
 }
@@ -748,6 +740,7 @@ fn prebuilt(device: &wgpu::Device, format: wgpu::TextureFormat) -> Option<Painte
 /// sender.
 pub(crate) fn install<S: 'static>(app: &mut rune::App<S>) -> HudSender {
     let animating = Arc::new(AtomicBool::new(false));
+    #[cfg(target_os = "macos")]
     let shown = Arc::new(AtomicBool::new(false));
     let now = Instant::now();
     let model = IndicatorModel::new(dot_scope::lab(), now);
@@ -802,13 +795,11 @@ pub(crate) fn install<S: 'static>(app: &mut rune::App<S>) -> HudSender {
             layout: Layout::default(),
             position: IndicatorPosition::Top,
             this: None,
+            presence: HudPresence::Hidden,
+            #[cfg(target_os = "macos")]
             shown: shown.clone(),
             reduce: false,
             animating: animating.clone(),
-            #[cfg(target_os = "macos")]
-            placed: None,
-            #[cfg(not(target_os = "macos"))]
-            edge_placed: None,
             #[cfg(not(target_os = "macos"))]
             followed: None,
             #[cfg(not(target_os = "macos"))]

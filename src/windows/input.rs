@@ -27,7 +27,9 @@ use crate::dictation::DictationFlavour;
 use crate::dictation::ShortcutMode;
 
 mod activity;
+mod capsule;
 mod disposition;
+mod modifier_chord;
 mod modifiers;
 mod rearm;
 mod watchdog;
@@ -83,13 +85,16 @@ pub struct WindowsHotkey {
 }
 
 impl Default for WindowsHotkey {
+    /// Left Alt alone, as macOS defaults to Option (#2278). The left one
+    /// only: Windows sends AltGr as a synthesized Left Ctrl plus Right Alt,
+    /// and either Alt would press on every AltGr character.
     fn default() -> Self {
         Self {
-            control: Some(ModifierSide::Either),
+            control: None,
             windows: None,
-            alt: None,
+            alt: Some(ModifierSide::Left),
             shift: None,
-            key: Some("space".into()),
+            key: None,
         }
     }
 }
@@ -293,112 +298,11 @@ struct CallbackState {
     mask_release: bool,
 }
 
-#[derive(Default)]
-struct CaptureState {
-    active: bool,
-    locked: bool,
-    second_tap: bool,
-    recording: bool,
-    last_release_ms: Option<u32>,
-    /// When the held press that records began, from the hook's tick count:
-    /// a key joining it a second or more later is the app's (Labs › Hold
-    /// through other keys).
-    pressed_at_ms: Option<u32>,
-    /// Every press acts as the second tap of a double-tap: releasing it
-    /// locks the capture, and the next press finishes it.
-    toggle: bool,
-    /// The shortcut, not another, owns this capture (or the last one).
-    flavour: DictationFlavour,
-}
-
+mod capture;
 mod commands;
 mod hold_through;
 
-impl CaptureState {
-    /// Whether another shortcut owns a capture in progress.
-    fn owned_by_other(&self, flavour: DictationFlavour) -> bool {
-        self.flavour != flavour && (self.active || self.locked)
-    }
-
-    /// Hands an idle capture to one shortcut; a tap of the other one never
-    /// counts toward its double tap.
-    fn claim(&mut self, flavour: DictationFlavour) {
-        if self.flavour != flavour && !self.active && !self.locked {
-            self.flavour = flavour;
-            self.last_release_ms = None;
-        }
-    }
-
-    fn press(
-        &mut self,
-        double_tap_enabled: bool,
-        double_tap_only: bool,
-        timestamp_ms: u32,
-    ) -> Option<HotkeyAction> {
-        if self.locked {
-            self.locked = false;
-            self.recording = false;
-            self.last_release_ms = None;
-            return Some(HotkeyAction::Finish);
-        }
-        if self.active {
-            return None;
-        }
-        self.active = true;
-        let double_tapped = self
-            .last_release_ms
-            .take()
-            .is_some_and(|released| timestamp_ms.wrapping_sub(released) < DOUBLE_TAP_WINDOW_MS);
-        self.second_tap = self.toggle || (double_tap_enabled && double_tapped);
-        if double_tap_only && !self.second_tap {
-            // Double-tap-only: the first tap arms the window silently;
-            // recording waits for the second tap.
-            self.recording = false;
-            return None;
-        }
-        self.recording = true;
-        self.pressed_at_ms = Some(timestamp_ms);
-        Some(HotkeyAction::Start)
-    }
-
-    fn release(&mut self, double_tap_enabled: bool, timestamp_ms: u32) -> Option<HotkeyAction> {
-        if !self.active {
-            return None;
-        }
-        self.active = false;
-        if self.second_tap {
-            self.second_tap = false;
-            self.locked = true;
-            self.last_release_ms = None;
-            return None;
-        }
-        self.last_release_ms = double_tap_enabled.then_some(timestamp_ms);
-        if !self.recording {
-            // Releasing an armed-but-silent first tap emits nothing.
-            return None;
-        }
-        self.recording = false;
-        Some(HotkeyAction::Finish)
-    }
-
-    /// Whether Toggle's cancel shortcut is Hex's now: only while a toggled
-    /// capture records, so the key stays with every app otherwise.
-    fn wants_cancel(&self) -> bool {
-        self.toggle && (self.active || self.locked)
-    }
-
-    fn cancel(&mut self) -> Option<HotkeyAction> {
-        if !self.active && !self.locked {
-            return None;
-        }
-        self.active = false;
-        self.locked = false;
-        self.second_tap = false;
-        self.recording = false;
-        self.last_release_ms = None;
-        Some(HotkeyAction::Cancel)
-    }
-}
+use self::capture::{Capture, CaptureState};
 
 impl CallbackState {
     /// Whether the chord's modifiers are down: the masked view, and, while
@@ -455,7 +359,7 @@ impl CallbackState {
         if is_down && !trigger_down {
             self.set_second_trigger_down(flavour, true);
             self.capture.claim(flavour);
-            let was_locked = self.capture.locked;
+            let was_locked = self.capture.is_locked();
             if let Some(action) =
                 self.capture
                     .press(self.double_tap_enabled, self.double_tap_only, time)
@@ -624,10 +528,7 @@ impl WindowsHotkeyMonitor {
             double_tap_enabled,
             double_tap_only,
             share_trigger,
-            capture: CaptureState {
-                toggle: shortcut_mode == ShortcutMode::Toggle,
-                ..CaptureState::default()
-            },
+            capture: CaptureState::new(shortcut_mode == ShortcutMode::Toggle),
             dirty: false,
             mask_release: false,
         };
@@ -777,7 +678,13 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
     } else {
         event.time
     };
-    let handled = process_button(vk, left_control, is_down, time, key_down);
+    // The capture capsule's keys, once no shortcut of Hex's claimed them (#2113).
+    let handled = capsule::settle(
+        process_button(vk, left_control, is_down, time, key_down),
+        event.vkCode,
+        event.scanCode,
+        is_down,
+    );
     if handled.ends_continuation(is_down, ModifierState::is_modifier(vk), event.dwExtraInfo) {
         activity::invalidate();
     }
@@ -863,6 +770,8 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
         if crate::capture_host::wants_input() {
             report_pointer(wparam as u32, event);
         }
+        // A press may fold the capsule's list or search; the click still lands (#2113).
+        capsule::press(wparam as u32);
         if let Some((vk, down)) = mouse_message(wparam as u32, event.mouseData) {
             // A mouse event settles stale Left Ctrl bits too: a release can
             // land on another desktop and never reach the keyboard hook.
@@ -984,7 +893,7 @@ fn process_button(
             // The hook never sees a release that lands on another desktop,
             // such as the Windows key of Win+L or the modifiers of
             // Ctrl+Alt+Delete, so tracked modifiers stayed held after
-            // unlocking and Ctrl+Space no longer matched. Re-read them on
+            // unlocking and the shortcut no longer matched. Re-read them on
             // every event: the asynchronous key state does not include this
             // event yet, so `update` applies it on top.
             let read = ModifierState::read(key_held);
@@ -1009,7 +918,7 @@ fn process_button(
             // now, so the HUD shows at once rather than after them (#1229).
             if modifier_event
                 && is_down
-                && !state.capture.active
+                && !state.capture.is_down()
                 && [
                     Some(&state.binding),
                     state.raw.as_ref(),
@@ -1031,8 +940,7 @@ fn process_button(
             let annotate_event = state.annotate_trigger_vk == Some(vk)
                 && (state.annotate_trigger_down
                     || (is_down
-                        && !state.capture.active
-                        && !state.capture.locked
+                        && state.capture.is_idle()
                         && !state.dirty
                         && state
                             .annotate
@@ -1075,8 +983,7 @@ fn process_button(
             // Escape stops Annotate's drawing, never its recording, when no
             // dictation takes it.
             if vk == u32::from(VK_ESCAPE)
-                && !state.capture.active
-                && !state.capture.locked
+                && state.capture.is_idle()
                 && (state.drawing_escape_down || (is_down && crate::capture_host::exit_drawing()))
             {
                 state.drawing_escape_down = is_down;
@@ -1098,8 +1005,7 @@ fn process_button(
             let paste_event = state.paste_trigger_vk == Some(vk)
                 && (state.paste_trigger_down
                     || (is_down
-                        && !state.capture.active
-                        && !state.capture.locked
+                        && state.capture.is_idle()
                         && !state.dirty
                         && state
                             .paste_last
@@ -1125,7 +1031,7 @@ fn process_button(
                         state.trigger_down = true;
                         suppressed = !state.share_trigger;
                         state.capture.claim(DictationFlavour::Normal);
-                        let was_locked = state.capture.locked;
+                        let was_locked = state.capture.is_locked();
                         if let Some(action) = state.capture.press(
                             state.double_tap_enabled,
                             state.double_tap_only,
@@ -1164,8 +1070,8 @@ fn process_button(
                 // and leaves the key to the app in front.
                 if is_down
                     && state.trigger_vk.is_none()
-                    && state.capture.active
-                    && state.capture.flavour.normal()
+                    && state.capture.is_down()
+                    && state.capture.flavour().normal()
                     && !state
                         .capture
                         .holds_through_joining_keys(crate::labs::hold_through_keys(), time)
@@ -1183,57 +1089,7 @@ fn process_button(
                     state.mask_release = false;
                     mask = !state.share_trigger;
                 }
-                if state.trigger_vk.is_none()
-                    && state.capture.locked
-                    && state.capture.flavour.normal()
-                    && !state.dirty
-                    && is_down
-                    && state.holds(&state.binding)
-                    && state.side_down.together(&state.binding)
-                {
-                    // Only a modifier-only shortcut finishes on a modifier
-                    // press. A key chord such as Ctrl+Space finishes on its
-                    // key, so resting a finger on Ctrl never ends a locked
-                    // or toggled capture.
-                    if let Some(action) =
-                        state
-                            .capture
-                            .press(state.double_tap_enabled, state.double_tap_only, time)
-                    {
-                        state.dirty = true;
-                        send_event(state, action, time);
-                    }
-                } else if state.capture.active
-                    && state.capture.flavour.normal()
-                    && !state.holds(&state.binding)
-                {
-                    if let Some(action) = state.capture.release(state.double_tap_enabled, time) {
-                        state.dirty = state.holds_any_required(&state.binding);
-                        send_event(state, action, time);
-                    }
-                } else if state.trigger_vk.is_none()
-                    && !state.capture.active
-                    && !state.capture.locked
-                    && !state.dirty
-                    && is_down
-                    && state.holds(&state.binding)
-                    && state.side_down.together(&state.binding)
-                {
-                    state.capture.claim(DictationFlavour::Normal);
-                    if let Some(action) =
-                        state
-                            .capture
-                            .press(state.double_tap_enabled, state.double_tap_only, time)
-                    {
-                        send_event(state, action, time);
-                    }
-                }
-                if is_down && state.binding.masks_release() && state.holds(&state.binding) {
-                    state.mask_release = true;
-                }
-                if state.dirty && !state.holds_any_required(&state.binding) {
-                    state.dirty = false;
-                }
+                state.modifier_chord(vk, is_down, time);
             }
         }
     }
@@ -1255,7 +1111,7 @@ fn holds_menu(binding: Option<&WindowsHotkey>) -> bool {
 fn send_event(state: &mut CallbackState, action: HotkeyAction, timestamp_ms: u32) {
     match state.events.try_send(HotkeyEvent {
         action,
-        flavour: state.capture.flavour,
+        flavour: state.capture.flavour(),
         timestamp_ms,
     }) {
         Ok(()) => crate::windows::dictation::wake(),
@@ -1488,6 +1344,8 @@ mod tests {
 
     use super::*;
 
+    mod chords;
+
     #[test]
     fn a_shared_shortcut_trigger_does_not_end_a_paste_continuation() {
         // Labs › Share shortcut lets the dictation trigger's key reach the
@@ -1503,8 +1361,31 @@ mod tests {
         assert!(!Handled::PASS.ends_continuation(true, false, HEX_INJECTED));
     }
 
+    /// A key chord, Ctrl+Space, for the tests that drive a trigger key; the
+    /// default is one modifier alone.
+    fn ctrl_space() -> WindowsHotkey {
+        WindowsHotkey {
+            control: Some(ModifierSide::Either),
+            windows: None,
+            alt: None,
+            shift: None,
+            key: Some("space".into()),
+        }
+    }
+
+    /// One test at a time drives the hook's process-wide [`CALLBACK_STATE`].
+    /// Nextest gives every test its own process, but plain `cargo test` runs
+    /// them as threads, and these tests install, drive, and clear the same
+    /// state.
+    static STATE_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Holds [`STATE_LOCK`] for a test that touches [`CALLBACK_STATE`].
+    pub(super) fn state_lock() -> std::sync::MutexGuard<'static, ()> {
+        STATE_LOCK.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
     /// The hook's state machine as the keyboard hook installs it, for one
-    /// Ctrl+Space binding; the caller drives events through
+    /// keyed binding; the caller drives events through
     /// [`process_button`], whose `key_held` lookup stands in for the physical
     /// modifiers a test cannot press.
     fn callback_state(binding: WindowsHotkey, share_trigger: bool) -> Receiver<HotkeyEvent> {
@@ -1564,12 +1445,13 @@ mod tests {
 
     #[test]
     fn a_bare_trigger_key_ends_a_paste_continuation_but_the_shortcut_does_not() {
+        let _state = state_lock();
         let space = u32::from(VK_SPACE);
         let ctrl_held = |key: u16| key == VK_LCONTROL;
 
         // Labs › Share shortcut: Ctrl+Space reaches the app in front, and
         // since Hex's shortcut fired, its press is Hex's key, not typing.
-        let events = callback_state(WindowsHotkey::default(), true);
+        let events = callback_state(ctrl_space(), true);
         let handled = process_button(space, LeftControl::Other, true, 1_000, ctrl_held);
         assert_eq!(handled.disposition, Disposition::Pass);
         assert!(!handled.ends_continuation(true, false, 0));
@@ -1580,7 +1462,7 @@ mod tests {
 
         // A bare Space without the shortcut's Ctrl is the user typing: it
         // reaches the app, starts nothing, and ends the continuation.
-        let events = callback_state(WindowsHotkey::default(), true);
+        let events = callback_state(ctrl_space(), true);
         let handled = process_button(space, LeftControl::Other, true, 2_000, |_| false);
         assert_eq!(handled.disposition, Disposition::Pass);
         assert!(handled.ends_continuation(true, false, 0));
@@ -1588,7 +1470,7 @@ mod tests {
 
         // Sharing off, the shortcut's press is swallowed before it can end
         // anything.
-        let events = callback_state(WindowsHotkey::default(), false);
+        let events = callback_state(ctrl_space(), false);
         let handled = process_button(space, LeftControl::Other, true, 3_000, ctrl_held);
         assert_eq!(handled.disposition, Disposition::Suppress);
         assert!(!handled.ends_continuation(true, false, 0));
@@ -1712,10 +1594,39 @@ mod tests {
     }
 
     #[test]
-    fn default_binding_is_ctrl_space() {
+    fn default_binding_is_left_alt_alone() {
         let binding = WindowsHotkey::default();
-        assert_eq!(binding.label(), "Ctrl+Space");
+        assert_eq!(binding.label(), "Alt");
+        assert_eq!(binding.alt, Some(ModifierSide::Left));
+        assert_eq!(binding.key, None);
         assert!(binding.validate().is_ok());
+        assert!(
+            binding.masks_release(),
+            "Alt alone opens the menu bar, so its release is masked"
+        );
+        // AltGr sends the Right Alt: the default must not press on it, or
+        // every AltGr character would start and cancel a dictation.
+        let altgr = ModifierState {
+            left_control: true,
+            right_alt: true,
+            ..ModifierState::default()
+        };
+        assert!(!altgr.without_altgr(true).holds(&binding, &altgr));
+        let either_alt = WindowsHotkey {
+            alt: Some(ModifierSide::Either),
+            ..binding.clone()
+        };
+        assert!(
+            altgr.without_altgr(true).holds(&either_alt, &altgr),
+            "either side would press on AltGr, which is why the default is left only"
+        );
+        // Left Alt is the default's alone: the right side does not press it.
+        let mut left = ModifierState::default();
+        left.update(u32::from(VK_LMENU), true);
+        assert!(left.matches(&binding));
+        let mut right = ModifierState::default();
+        right.update(u32::from(VK_RMENU), true);
+        assert!(!right.matches(&binding));
     }
 
     #[test]
@@ -1847,7 +1758,10 @@ mod tests {
             alt_space.holds_menu_modifier(),
             "a swallowed key leaves Alt alone, so its release is masked (#1254)"
         );
-        assert!(!WindowsHotkey::default().holds_menu_modifier());
+        assert!(
+            !right_control.holds_menu_modifier(),
+            "Ctrl alone opens nothing, so its release is never masked"
+        );
 
         let mut held = ModifierState::default();
         held.update(u32::from(VK_RMENU), true);
@@ -2020,7 +1934,8 @@ mod tests {
         let mut state = CaptureState::default();
         assert_eq!(state.press(true, false, 100), Some(HotkeyAction::Start));
         assert_eq!(state.interrupt(), Some(HotkeyAction::Cancel));
-        assert!(!state.active && !state.locked);
+        assert!(state.is_idle());
+        assert!(!state.holds_through_joining_keys(true, 2_000));
         assert_eq!(state.release(true, 150), None, "its release is spent");
         // The armed first tap of double-tap-only records nothing, so it
         // reports nothing: a bare cancel would cancel the newest job.
@@ -2028,29 +1943,26 @@ mod tests {
         assert_eq!(state.interrupt(), None);
         assert_eq!(state.press(true, true, 1_100), None, "no double tap");
         // A locked capture is not held, so typing never ends it.
-        let mut locked = CaptureState {
-            toggle: true,
-            ..CaptureState::default()
-        };
+        let mut locked = CaptureState::new(true);
         locked.press(true, false, 100);
         locked.release(true, 140);
         assert_eq!(locked.interrupt(), None);
-        assert!(locked.locked);
+        assert!(locked.is_locked());
     }
 
     #[test]
     fn a_release_missed_while_locked_does_not_block_the_shortcut() {
         let binding = WindowsHotkey::default();
-        // Win+L: the hook saw Windows go down, then the lock screen took
-        // its release, so tracking events alone leaves it held.
+        // Win+L: the hook saw the Windows key go down, then the lock screen
+        // took its release, so tracking events alone leaves it held.
         let mut tracked = ModifierState::default();
         tracked.update(u32::from(VK_LWIN), true);
-        tracked.update(u32::from(VK_LCONTROL), true);
+        tracked.update(u32::from(VK_LMENU), true);
         assert!(!tracked.matches(&binding));
         // After unlocking, the system reports every key up before this
-        // Ctrl press, which `update` then applies.
+        // Alt press, which `update` then applies.
         let mut synced = ModifierState::read(|_| false);
-        synced.update(u32::from(VK_LCONTROL), true);
+        synced.update(u32::from(VK_LMENU), true);
         assert!(synced.matches(&binding));
     }
 
@@ -2126,9 +2038,9 @@ mod tests {
         assert_eq!(state.release(true, 140), Some(HotkeyAction::Finish));
         assert_eq!(state.press(true, false, 250), Some(HotkeyAction::Start));
         assert_eq!(state.release(true, 290), None);
-        assert!(state.locked);
+        assert!(state.is_locked());
         assert_eq!(state.press(true, false, 500), Some(HotkeyAction::Finish));
-        assert!(!state.locked);
+        assert!(state.is_idle());
     }
 
     #[test]
@@ -2139,8 +2051,7 @@ mod tests {
         state.press(true, false, 200);
         state.release(true, 220);
         assert_eq!(state.cancel(), Some(HotkeyAction::Cancel));
-        assert!(!state.active);
-        assert!(!state.locked);
+        assert!(state.is_idle());
     }
 
     #[test]
@@ -2150,7 +2061,7 @@ mod tests {
         assert_eq!(state.release(false, 120), Some(HotkeyAction::Finish));
         assert_eq!(state.press(false, false, 200), Some(HotkeyAction::Start));
         assert_eq!(state.release(false, 220), Some(HotkeyAction::Finish));
-        assert!(!state.locked);
+        assert!(!state.is_locked());
     }
 
     #[test]
@@ -2164,30 +2075,41 @@ mod tests {
         assert_eq!(state.release(true, 2_040), None);
         assert_eq!(state.press(true, true, 2_150), Some(HotkeyAction::Start));
         assert_eq!(state.release(true, 2_190), None);
-        assert!(state.locked);
+        assert!(state.is_locked());
         // The next press finishes the locked capture.
         assert_eq!(state.press(true, true, 3_000), Some(HotkeyAction::Finish));
-        assert!(!state.locked);
+        assert!(state.is_idle());
     }
 
     #[test]
     fn command_capture_finishes_on_the_first_physical_press_in_either_mode() {
         for toggle in [false, true] {
             for flavour in [DictationFlavour::Normal, DictationFlavour::Raw] {
-                let mut state = CaptureState {
-                    toggle,
-                    ..Default::default()
-                };
+                let mut state = CaptureState::new(toggle);
                 state.start_command(flavour);
-                assert!(state.recording);
+                assert!(state.is_recording());
                 assert_eq!(state.wants_cancel(), toggle);
                 assert!(!state.owned_by_other(flavour));
                 assert_eq!(state.press(true, false, 100), Some(HotkeyAction::Finish));
                 assert_eq!(state.release(true, 150), None);
                 assert!(!state.wants_cancel());
-                assert!(!state.recording);
+                assert!(!state.is_recording());
             }
         }
+    }
+
+    #[test]
+    fn command_start_during_a_physical_hold_does_not_orphan_the_release() {
+        let mut state = CaptureState::default();
+        assert_eq!(state.press(true, false, 100), Some(HotkeyAction::Start));
+        state.start_command(DictationFlavour::Normal);
+        assert!(state.is_down() && state.is_recording() && !state.is_locked());
+        assert_eq!(
+            state.release(true, 500),
+            Some(HotkeyAction::Finish),
+            "releasing the held shortcut still finishes the capture"
+        );
+        assert!(state.is_idle());
     }
 
     #[test]
@@ -2202,10 +2124,7 @@ mod tests {
 
     #[test]
     fn command_capture_cancels_without_leaving_the_hook_locked() {
-        let mut state = CaptureState {
-            toggle: true,
-            ..Default::default()
-        };
+        let mut state = CaptureState::new(true);
         state.start_command(DictationFlavour::Normal);
         assert!(state.wants_cancel());
         assert_eq!(state.cancel(), Some(HotkeyAction::Cancel));
@@ -2216,23 +2135,20 @@ mod tests {
     #[test]
     fn toggle_mode_starts_on_a_press_and_finishes_on_the_next() {
         for (double_tap_enabled, double_tap_only) in [(false, false), (true, false), (true, true)] {
-            let mut state = CaptureState {
-                toggle: true,
-                ..CaptureState::default()
-            };
+            let mut state = CaptureState::new(true);
             assert_eq!(
                 state.press(double_tap_enabled, double_tap_only, 100),
                 Some(HotkeyAction::Start)
             );
             // Releasing keeps recording, however long the press was.
             assert_eq!(state.release(double_tap_enabled, 140), None);
-            assert!(state.locked);
+            assert!(state.is_locked());
             assert_eq!(
                 state.press(double_tap_enabled, double_tap_only, 5_000),
                 Some(HotkeyAction::Finish)
             );
             assert_eq!(state.release(double_tap_enabled, 5_050), None);
-            assert!(!state.active && !state.locked);
+            assert!(state.is_idle());
             // The next press starts a fresh capture, not a double tap.
             assert_eq!(
                 state.press(double_tap_enabled, double_tap_only, 5_100),
@@ -2262,7 +2178,7 @@ mod tests {
         );
         state.mask_release = true;
         assert!(!watchdog::heal(&mut state, 2_000, |key| key == VK_LMENU || key == VK_LWIN));
-        assert!(state.capture.active && !state.dirty && state.mask_release);
+        assert!(state.capture.is_down() && !state.dirty && state.mask_release);
         assert!(events.try_recv().is_err());
 
         // Windows is up and Alt still down: the release arrived, and the
@@ -2273,21 +2189,18 @@ mod tests {
             events.try_recv().map(|event| event.action),
             Ok(HotkeyAction::Finish)
         );
-        assert!(!state.capture.active && state.dirty);
+        assert!(!state.capture.is_down() && state.dirty);
 
         // Toggle: the lost release locks, and the next press finishes.
         let (mut state, events) = callback_state_value(binding, false);
-        state.capture = CaptureState {
-            toggle: true,
-            ..CaptureState::default()
-        };
+        state.capture = CaptureState::new(true);
         assert_eq!(
             state.capture.press(false, false, 1_000),
             Some(HotkeyAction::Start)
         );
         state.mask_release = true;
         assert!(watchdog::heal(&mut state, 2_000, |_| false));
-        assert!(!state.capture.active && state.capture.locked && !state.mask_release);
+        assert!(!state.capture.is_down() && state.capture.is_locked() && !state.mask_release);
         assert!(events.try_recv().is_err());
         assert_eq!(
             state.capture.press(false, false, 3_000),
@@ -2299,13 +2212,13 @@ mod tests {
     /// key, another shortcut's capture, and an idle capture.
     #[test]
     fn the_release_heal_leaves_other_captures_alone() {
-        let (mut keyed, events) = callback_state_value(WindowsHotkey::default(), false);
+        let (mut keyed, events) = callback_state_value(ctrl_space(), false);
         assert_eq!(
             keyed.capture.press(false, false, 1_000),
             Some(HotkeyAction::Start)
         );
         assert!(!watchdog::heal(&mut keyed, 2_000, |_| false));
-        assert!(keyed.capture.active);
+        assert!(keyed.capture.is_down());
         assert!(events.try_recv().is_err());
 
         let keyless = WindowsHotkey {
@@ -2316,19 +2229,18 @@ mod tests {
             key: None,
         };
         let (mut other, events) = callback_state_value(keyless, false);
-        other.capture = CaptureState {
-            active: true,
-            recording: true,
-            flavour: DictationFlavour::Raw,
-            ..CaptureState::default()
-        };
+        other.capture.claim(DictationFlavour::Raw);
+        assert_eq!(
+            other.capture.press(false, false, 1_000),
+            Some(HotkeyAction::Start)
+        );
         assert!(!watchdog::heal(&mut other, 2_000, |_| false));
-        assert!(other.capture.active);
+        assert!(other.capture.is_down());
         assert!(events.try_recv().is_err());
 
         let (mut idle, events) = callback_state_value(WindowsHotkey::default(), false);
         assert!(!watchdog::heal(&mut idle, 2_000, |_| false));
-        assert!(!idle.capture.active);
+        assert!(!idle.capture.is_down());
         assert!(events.try_recv().is_err());
     }
 
@@ -2343,18 +2255,15 @@ mod tests {
         let mut held = CaptureState::default();
         assert_eq!(held.press(true, false, 100), Some(HotkeyAction::Start));
         assert!(!held.finish_hands_free());
-        assert!(held.active && held.recording);
+        assert!(held.is_down() && held.is_recording());
 
         // A Toggle press released locks, and the phrase ends that capture.
-        let mut locked = CaptureState {
-            toggle: true,
-            ..CaptureState::default()
-        };
+        let mut locked = CaptureState::new(true);
         assert_eq!(locked.press(true, false, 100), Some(HotkeyAction::Start));
         assert_eq!(locked.release(true, 140), None);
-        assert!(locked.locked);
+        assert!(locked.is_locked());
         assert!(locked.finish_hands_free());
-        assert!(!locked.locked && !locked.recording);
+        assert!(locked.is_idle());
         assert!(!locked.finish_hands_free(), "a capture finishes once");
         // The next press starts a fresh capture, as after a finishing press.
         assert_eq!(locked.press(true, false, 5_000), Some(HotkeyAction::Start));
@@ -2362,29 +2271,23 @@ mod tests {
 
     #[test]
     fn inhibiting_shortcuts_cancels_a_toggled_capture() {
-        let mut state = CaptureState {
-            toggle: true,
-            ..CaptureState::default()
-        };
+        let mut state = CaptureState::new(true);
         state.press(true, false, 100);
         state.release(true, 120);
         assert_eq!(state.cancel(), Some(HotkeyAction::Cancel));
-        assert!(!state.active && !state.locked);
+        assert!(state.is_idle());
     }
 
     /// Toggle's cancel key is Hex's only while a toggled capture records:
     /// held or locked, never idle, and never in Hold mode.
     #[test]
     fn cancel_is_wanted_only_while_a_toggled_capture_records() {
-        let mut state = CaptureState {
-            toggle: true,
-            ..CaptureState::default()
-        };
+        let mut state = CaptureState::new(true);
         assert!(!state.wants_cancel());
         assert_eq!(state.press(true, false, 100), Some(HotkeyAction::Start));
         assert!(state.wants_cancel());
         state.release(true, 120);
-        assert!(state.locked && state.wants_cancel());
+        assert!(state.is_locked() && state.wants_cancel());
         assert_eq!(state.cancel(), Some(HotkeyAction::Cancel));
         assert!(!state.wants_cancel());
         // The next press starts a fresh recording.
@@ -2396,7 +2299,7 @@ mod tests {
         hold.release(true, 120);
         hold.press(true, false, 200);
         hold.release(true, 220);
-        assert!(hold.locked && !hold.wants_cancel());
+        assert!(hold.is_locked() && !hold.wants_cancel());
     }
 
     #[test]
@@ -2408,14 +2311,14 @@ mod tests {
         assert!(state.owned_by_other(DictationFlavour::Raw));
         // The dictation shortcut can't claim or finish another's capture.
         state.claim(DictationFlavour::Normal);
-        assert_eq!(state.flavour, DictationFlavour::TerminalPaste);
+        assert_eq!(state.flavour(), DictationFlavour::TerminalPaste);
         assert_eq!(state.press(true, false, 150), None);
         assert_eq!(state.release(true, 200), Some(HotkeyAction::Finish));
         // A tap of another shortcut right after is not its second tap.
         state.claim(DictationFlavour::Normal);
-        assert_eq!(state.flavour, DictationFlavour::Normal);
+        assert_eq!(state.flavour(), DictationFlavour::Normal);
         assert_eq!(state.press(true, false, 250), Some(HotkeyAction::Start));
-        assert!(!state.locked);
+        assert!(!state.is_locked());
     }
 
     /// Labs › Second dictation shortcut is its own owner too: the dictation,
@@ -2435,18 +2338,18 @@ mod tests {
             DictationFlavour::TerminalPaste,
         ] {
             state.claim(other);
-            assert_eq!(state.flavour, DictationFlavour::Second);
+            assert_eq!(state.flavour(), DictationFlavour::Second);
         }
         assert_eq!(state.release(true, 150), Some(HotkeyAction::Finish));
         // Another shortcut's tap right after is not Second's second tap.
         state.claim(DictationFlavour::Normal);
         assert_eq!(state.press(true, false, 200), Some(HotkeyAction::Start));
-        assert!(!state.locked);
+        assert!(!state.is_locked());
         assert_eq!(state.release(true, 250), Some(HotkeyAction::Finish));
         // Second starts a fresh capture of its own.
         state.claim(DictationFlavour::Second);
         assert_eq!(state.press(true, false, 300), Some(HotkeyAction::Start));
-        assert!(!state.locked);
+        assert!(!state.is_locked());
     }
 
     #[test]
@@ -2457,6 +2360,6 @@ mod tests {
         // Too late for the double-tap window: arms again instead of starting.
         assert_eq!(state.press(true, true, 1_000), None);
         assert_eq!(state.release(true, 1_040), None);
-        assert!(!state.locked);
+        assert!(!state.is_locked());
     }
 }

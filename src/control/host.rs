@@ -175,6 +175,7 @@ fn command(host: &dyn Host, command: ControlCommand) -> ControlReply {
             Ok(()) => ControlReply::done("Copied the last meeting transcript"),
             Err(error) => ControlReply::error("failed", format!("couldn't copy it: {error}")),
         },
+        ControlCommand::MeetingDelete { id } => super::meeting_deleted(crate::meeting::delete(&id)),
         ControlCommand::SettingsGet { key } => reply(load().and_then(|settings| {
             Ok(ControlReply::Settings {
                 settings: match key {
@@ -418,15 +419,15 @@ fn use_model(
 ) -> Result<ControlReply, ControlError> {
     let selection = super::model_selection(&load()?, model, language)?;
     let definition = crate::transcription::models::definition(selection.model);
-    let installed = crate::transcription::models::is_installed(definition, &selection.language);
+    let status = crate::transcription::readiness::readiness(&definition, &selection.language);
     let state = host.state()?;
-    if same_model(&state.settings.transcription, &selection) && installed {
+    if same_model(&state.settings.transcription, &selection) && status.ready {
         return Ok(ControlReply::unchanged(format!(
             "{} ({}) is already in use",
             definition.name, selection.language
         )));
     }
-    if !installed && !install {
+    if !status.installed && !install {
         return Err(ControlError::new(
             "not-installed",
             format!(
@@ -438,7 +439,7 @@ fn use_model(
         ));
     }
     host.choose_model(selection.clone())?;
-    if !installed {
+    if !status.installed {
         return Ok(ControlReply::done(format!(
             "Downloading {} ({}); Hex switches to it once it's ready. \
              `hex status` shows progress, `hex model cancel` stops it",
@@ -457,23 +458,27 @@ fn wait_for_model(
     host: &dyn Host,
     selection: &TranscriptionSelection,
 ) -> Result<ControlReply, ControlError> {
-    let name = crate::transcription::models::definition(selection.model).name;
+    let name = crate::transcription::models::definition(selection.model)
+        .name
+        .to_string();
+    // What the listener runs: the saved selection, or a lost import's fallback.
+    let matches = |settings: &crate::app_settings::AppSettings| {
+        same_model(&settings.transcription, selection)
+            || same_model(
+                &crate::transcription::custom_models::runnable(&settings.transcription),
+                selection,
+            )
+    };
+    let ready = || {
+        crate::transcription::models::validate(selection)
+            .is_ok_and(|model| crate::transcription::models::is_ready(&model, &selection.language))
+    };
     let started = Instant::now();
     let mut seen_preparing = false;
     while started.elapsed() < CONFIRM_WAIT {
         std::thread::sleep(Duration::from_millis(100));
         let state = host.state()?;
-        let preparing = state.transcription.preparing.is_some();
-        seen_preparing |= preparing;
-        if preparing {
-            continue;
-        }
-        if same_model(&state.settings.transcription, selection) {
-            return Ok(ControlReply::done(format!(
-                "Switched to {name} ({})",
-                selection.language
-            )));
-        }
+        // A check that failed reports its reason, never a switch.
         if let Some(error) = &state.transcription.error
             && (seen_preparing || started.elapsed() > Duration::from_secs(1))
         {
@@ -481,6 +486,19 @@ fn wait_for_model(
                 "failed",
                 format!("couldn't switch to {name}: {error}"),
             ));
+        }
+        let preparing = state.transcription.preparing.is_some();
+        seen_preparing |= preparing;
+        if preparing {
+            continue;
+        }
+        // Only a model Hex can actually run counts as switched: a saved
+        // file may still be waiting for its check.
+        if ready() && matches(&state.settings) {
+            return Ok(ControlReply::done(format!(
+                "Switched to {name} ({})",
+                selection.language
+            )));
         }
     }
     Ok(ControlReply::done(format!(
@@ -585,6 +603,7 @@ fn status(host: &dyn Host) -> Result<ControlReply, ControlError> {
                 .map(|model| model.as_str().into()),
             downloaded_bytes: state.transcription.downloaded_bytes,
             error: state.transcription.error.clone(),
+            backend: state.transcription.backend.clone(),
             ..ModelReport::saved(&settings.transcription)
         },
         features: FeatureReport {
@@ -627,6 +646,7 @@ mod tests {
         quits: Mutex<Vec<bool>>,
         dictations: Mutex<Vec<CaptureAction>>,
         history: Option<crate::history::History>,
+        backend: Option<crate::transcription::SpeechBackend>,
     }
 
     impl Host for FakeHost {
@@ -649,6 +669,7 @@ mod tests {
                     preparation_stage: None,
                     selection: Default::default(),
                     preparing: None,
+                    backend: self.backend.clone(),
                 },
                 update: DesktopUpdateStatus::Current,
                 window_open: false,
@@ -822,6 +843,22 @@ mod tests {
                 "ok"
             );
         }
+    }
+
+    #[test]
+    fn status_reports_the_published_speech_backend() {
+        let host = FakeHost {
+            backend: Some(crate::transcription::SpeechBackend {
+                kind: "vulkan".into(),
+                device: "AMD Radeon RX 9060 XT".into(),
+                crash_fallback: false,
+            }),
+            ..Default::default()
+        };
+        let ControlReply::Status(status) = ask(&host, ControlCommand::Status) else {
+            panic!("expected status");
+        };
+        assert_eq!(status.model.backend, host.backend);
     }
 
     #[test]

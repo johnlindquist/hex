@@ -10,6 +10,7 @@
 //! design language (`rune-theme-opencode`); see `docs/design-system.md`.
 
 mod activity;
+mod calls;
 #[cfg(hex_capture)]
 pub(crate) mod capture_capsule;
 mod controls;
@@ -44,11 +45,12 @@ pub(crate) use self::meetings::meeting_import_failed;
 #[cfg(hex_capture)]
 mod captures;
 mod meetings_host;
-pub(crate) use meetings_host::{meeting_failed, meeting_settings_saved};
+pub(crate) use meetings_host::{meeting_edit_failed, meeting_failed, meeting_settings_saved};
 mod model_details;
 mod model_import;
 mod models;
 mod modes;
+mod notes_writer;
 mod onboarding;
 mod onboarding_kit;
 mod output;
@@ -75,7 +77,7 @@ mod spark;
 mod speech_model;
 #[cfg(target_os = "macos")]
 pub(crate) mod story_link;
-mod vocabulary;
+pub(crate) mod vocabulary;
 mod whats_new;
 
 use std::sync::Arc;
@@ -284,21 +286,19 @@ pub(crate) fn render_app(rune_args: Vec<String>) -> rune::App<Ui> {
     app
 }
 
-/// The window's compositor: the UI (through the first run's GPU stage or
-/// the practice game's strike and burn while they show), then the Sounds
-/// sheet's HUD over its stage.
+/// The window's compositor: the UI, through the first run's GPU stage or
+/// the practice game's strike and burn while they show.
 #[derive(Default)]
 pub(crate) struct WindowCompositor {
     onboarding: Option<onboarding_kit::gpu_stage::OnboardingGpu>,
     game: Option<onboarding_kit::game::fx::GameFx>,
-    sounds: sound_sets::Preview,
     /// The device whose backend `process.log` names.
     logged: Option<rune::compose::DeviceKey>,
 }
 
 impl rune::compose::Compositor<Ui> for WindowCompositor {
     fn features(&self) -> wgpu::Features {
-        // The Sounds sheet's HUD, and one device shared with the HUD overlay.
+        // One device shared with the HUD overlay.
         crate::rune_hud::Painter::FEATURES
     }
 
@@ -328,7 +328,6 @@ impl rune::compose::Compositor<Ui> for WindowCompositor {
         } else {
             f.draw_ui();
         }
-        self.sounds.render(f);
         onboarding_kit::live::frame_drawn();
     }
 }
@@ -599,6 +598,16 @@ struct ServiceView {
     editing: bool,
 }
 
+/// The one modal sheet currently open over the window.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Modal {
+    Picker,
+    Explainer,
+    SoundSets,
+    Vocabulary,
+    Calls,
+}
+
 /// The one anchored menu or popover that is open.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Menu {
@@ -607,10 +616,6 @@ enum Menu {
     InputSourceModel(usize),
     /// An input source's language in keyboard model switching.
     InputSourceLanguage(usize),
-    /// A mode's speech model in the Modes pane (Labs › Switch model with app).
-    ModeSpeechModel(modes::Selection),
-    /// A mode's speech language in the Modes pane.
-    ModeSpeechLanguage(modes::Selection),
     /// How long History keeps dictations.
     HistoryRetention,
     /// The installed models History's Transcribe again offers.
@@ -652,6 +657,7 @@ pub(crate) struct Ui {
     /// The settings the host last reported, to adopt only its changes.
     service_settings: Option<AppSettings>,
     pane: Pane,
+    modal: Option<Modal>,
     open: Option<Menu>,
     // General
     microphones: Result<crate::audio::InputDevices, String>,
@@ -681,6 +687,9 @@ pub(crate) struct Ui {
     screenshot_folder: labs::screenshots::FolderChoice,
     /// A scene previewing the badge of a build kind this binary is not.
     build_preview: Option<BuildKind>,
+    /// A scene showing the Paste Last picker over the window.
+    #[cfg(all(target_os = "macos", hex_capture))]
+    paste_preview: bool,
     capture: Capture,
     vocabulary: vocabulary::VocabularyEditor,
     /// The model the service was last seen preparing, and since when.
@@ -688,7 +697,6 @@ pub(crate) struct Ui {
     /// When a text field last changed without being saved.
     draft_since: Option<Instant>,
     duck_volume_drag: Option<f32>,
-    sound_volume_drag: Option<f32>,
     models: models::Models,
     history: history::HistoryPane,
     /// Labs › Transcribe dropped audio: the drop target, its queue, and the
@@ -696,6 +704,10 @@ pub(crate) struct Ui {
     drop: drop_transcribe::DropTranscribe,
     #[cfg(hex_capture)]
     captures: captures::CapturesPane,
+    /// The Annotate pane's Agents section: coding agents' skill folders and
+    /// the hex link, read when the pane opens and after an install.
+    #[cfg(hex_capture)]
+    agents: scrawl::Agents,
     modes: modes::ModesPane,
     output: output::OutputPane,
     picker: picker::Picker,
@@ -703,6 +715,8 @@ pub(crate) struct Ui {
     found: found::FoundState,
     explainer: explainer::Explainer,
     sound_sets: sound_sets::SoundSets,
+    /// Meetings › Settings' Calls sheet and the calls Hex has seen.
+    calls: calls::Calls,
     tour: Option<onboarding::Tour>,
     /// The new first run over the tour (Labs).
     first_run: Option<onboarding_kit::Onboard>,
@@ -730,7 +744,7 @@ struct Drafts {
     vocabulary: bool,
     phrase: bool,
     stop_phrase: bool,
-    origins: bool,
+    signature: bool,
 }
 
 impl Ui {
@@ -801,6 +815,7 @@ impl Ui {
             connection_error: None,
             service_settings: None,
             pane: Pane::General,
+            modal: None,
             open: None,
             microphones: Ok(Default::default()),
             microphones_route: None,
@@ -815,23 +830,27 @@ impl Ui {
             #[cfg(all(target_os = "macos", hex_capture))]
             screenshot_folder: labs::screenshots::FolderChoice::default(),
             build_preview: None,
+            #[cfg(all(target_os = "macos", hex_capture))]
+            paste_preview: false,
             capture: Capture::Idle,
             vocabulary,
             preparing: None,
             draft_since: None,
             duck_volume_drag: None,
-            sound_volume_drag: None,
             models: models::Models::default(),
             history: history::HistoryPane::default(),
             drop: drop_transcribe::DropTranscribe::default(),
             #[cfg(hex_capture)]
             captures: captures::CapturesPane::default(),
+            #[cfg(hex_capture)]
+            agents: scrawl::Agents::default(),
             modes,
             output: output::OutputPane::default(),
             picker: picker::Picker::default(),
             found: found::FoundState::default(),
             explainer: explainer::Explainer::default(),
             sound_sets: sound_sets::SoundSets::default(),
+            calls: calls::Calls::default(),
             tour: None,
             first_run: None,
             platform: platform::PlatformState::new(platform::Capabilities::current()),
@@ -904,18 +923,7 @@ impl Ui {
         if candidate.vocabulary != submitted.vocabulary {
             self.vocabulary.reload(&candidate.vocabulary);
         }
-        self.lab_store.rebase_phrase(
-            &submitted.labs.voice_prompt_phrase,
-            &candidate.labs.voice_prompt_phrase,
-        );
-        self.lab_store.rebase_stop_phrase(
-            &submitted.labs.stop_phrase_text,
-            &candidate.labs.stop_phrase_text,
-        );
-        self.lab_store.rebase_origins(
-            &submitted.labs.api_browser_origins,
-            &candidate.labs.api_browser_origins,
-        );
+        self.lab_store.rebase_labs(&submitted.labs, &candidate.labs);
         self.settings = candidate;
         self.modes.committed(&self.settings);
         self.draft_since = None;
@@ -938,7 +946,7 @@ impl Ui {
         candidate.vocabulary = self.vocabulary.project();
         self.lab_store.project_phrase(&mut candidate);
         self.lab_store.project_stop_phrase(&mut candidate);
-        self.lab_store.project_origins(&mut candidate);
+        self.lab_store.project_signature(&mut candidate);
         candidate
     }
 
@@ -952,7 +960,7 @@ impl Ui {
             vocabulary: self.vocabulary.project() != settings.vocabulary,
             phrase: self.lab_store.phrase_dirty(settings),
             stop_phrase: self.lab_store.stop_phrase_dirty(settings),
-            origins: self.lab_store.origins_dirty(settings),
+            signature: self.lab_store.signature_dirty(settings),
         }
     }
 
@@ -970,12 +978,11 @@ impl Ui {
         self.commit(candidate)
     }
 
-    /// Saves pending text-field edits now (leaving a pane or a mode).
-    fn flush_drafts(&mut self) {
+    /// Saves pending text-field edits now (leaving a pane or a mode). False
+    /// when a save failed, with `error` saying why.
+    fn flush_drafts(&mut self) -> bool {
         let candidate = self.drafted();
-        if candidate != self.settings {
-            self.commit(candidate);
-        }
+        candidate == self.settings || self.commit(candidate)
     }
 
     /// Asks the OS host for something only it can do.
@@ -1071,9 +1078,15 @@ impl Ui {
             // its refresh moved to now by `send`) rather than show stale
             // state for a tick.
             Ok(()) => {
+                if is_relaunch {
+                    self.platform.relaunch_failed = false;
+                }
                 self.host.poll(&mut self.platform);
             }
-            Err(_) if is_relaunch => self.platform.relaunch_failed = true,
+            Err(_) if is_relaunch => {
+                self.platform.relaunch_failed = true;
+                onboarding::input(self, crate::desktop::onboarding::Input::RelaunchFailed);
+            }
             Err(error) => self.error = Some(error),
         }
     }
@@ -1132,46 +1145,15 @@ impl Ui {
             if !drafts.vocabulary && service.vocabulary != self.settings.vocabulary {
                 self.vocabulary.reload(&service.vocabulary);
             }
-            // Only a saved phrase that actually changed may reset the field,
-            // so any other external save leaves its focus and caret alone. A
-            // lab toggled elsewhere resyncs it, dropping a stale draft.
-            if service.labs.voice_prompt != self.settings.labs.voice_prompt {
-                self.lab_store
-                    .sync_phrase(&service.labs.voice_prompt_phrase);
-            } else if !drafts.phrase
-                && service.labs.voice_prompt_phrase != self.settings.labs.voice_prompt_phrase
-            {
-                self.lab_store.rebase_phrase(
-                    &self.settings.labs.voice_prompt_phrase,
-                    &service.labs.voice_prompt_phrase,
-                );
-            }
-            // Stop phrase's field follows its lab and its saved phrase the
-            // same way.
-            if service.labs.stop_phrase != self.settings.labs.stop_phrase {
-                self.lab_store
-                    .sync_stop_phrase(&service.labs.stop_phrase_text);
-            } else if !drafts.stop_phrase
-                && service.labs.stop_phrase_text != self.settings.labs.stop_phrase_text
-            {
-                self.lab_store.rebase_stop_phrase(
-                    &self.settings.labs.stop_phrase_text,
-                    &service.labs.stop_phrase_text,
-                );
-            }
-            // The origins field follows its lab and its saved list the same
-            // way; a toggled lab resyncs it, dropping a stale draft.
-            if service.labs.api_browser_access != self.settings.labs.api_browser_access {
-                self.lab_store
-                    .sync_origins(&service.labs.api_browser_origins);
-            } else if !drafts.origins
-                && service.labs.api_browser_origins != self.settings.labs.api_browser_origins
-            {
-                self.lab_store.rebase_origins(
-                    &self.settings.labs.api_browser_origins,
-                    &service.labs.api_browser_origins,
-                );
-            }
+            // A lab field follows its lab and its saved text: only a saved
+            // text that actually changed may reset the field, so any other
+            // external save leaves its focus and caret alone. A lab toggled
+            // elsewhere resyncs it, dropping a stale draft.
+            self.lab_store.follow_saved(
+                &self.settings.labs,
+                &service.labs,
+                (drafts.phrase, drafts.stop_phrase, drafts.signature),
+            );
             self.settings = service.clone();
             self.settings_changed();
         }
@@ -1191,13 +1173,43 @@ impl Ui {
         }
     }
 
+    fn is_modal(&self, modal: Modal) -> bool {
+        self.modal == Some(modal)
+    }
+
+    /// Opens `modal` alone, closing any open sheet and any open menu first so
+    /// two sheets can never be open at once.
+    fn open_modal(&mut self, modal: Modal) {
+        self.close_modal();
+        self.open = None;
+        self.modal = Some(modal);
+    }
+
+    /// Closes the active modal sheet, if any, running its teardown hook.
+    fn close_modal(&mut self) {
+        let Some(old) = self.modal.take() else {
+            return;
+        };
+        match old {
+            Modal::Picker => picker::on_close(self),
+            Modal::Explainer => {}
+            Modal::SoundSets => sound_sets::on_close(self),
+            Modal::Vocabulary => vocabulary::on_close(self),
+            Modal::Calls => calls::on_close(self),
+        }
+    }
+
+    /// Closes `modal` only when it is the active modal sheet.
+    fn close_modal_if(&mut self, modal: Modal) {
+        if self.modal == Some(modal) {
+            self.close_modal();
+        }
+    }
+
     /// Closes the dialogs and sheets a pane switch or window close ends.
     fn close_dialogs(&mut self) {
         find_popover::close(self);
-        picker::close(self);
-        explainer::close(self);
-        sound_sets::close(self);
-        vocabulary::close(self);
+        self.close_modal();
         history::close_stats(self);
     }
 
@@ -1225,9 +1237,14 @@ impl Ui {
             Pane::History => self.history.reload(self.settings.labs.history_stats),
             Pane::HudLab => self.ask(platform::PlatformRequest::ConfigureHud(self.platform.hud)),
             #[cfg(hex_capture)]
-            Pane::Annotate => self.ask(platform::PlatformRequest::Scrawl(
-                platform::ScrawlRequest::Refresh,
-            )),
+            Pane::Annotate => {
+                self.ask(platform::PlatformRequest::Scrawl(
+                    platform::ScrawlRequest::Refresh,
+                ));
+                if self.settings.labs.annotate_agent_install {
+                    self.agents.refresh();
+                }
+            }
             _ => {}
         }
     }
@@ -1266,10 +1283,7 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     }
     if let rune::Key::Command(digit @ '1'..='9') = event.key
         && !event.mods.alt
-        && !ui.picker.open
-        && !ui.explainer.open
-        && !ui.sound_sets.open
-        && !ui.vocabulary.open
+        && ui.modal.is_none()
         && !ui.history.stats_open
         && ui.tour.is_none()
     {
@@ -1288,27 +1302,21 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     {
         return true;
     }
-    if ui.explainer.open {
-        explainer::close(ui);
-        true
-    } else if ui.sound_sets.open {
-        sound_sets::close(ui);
-        true
-    } else if ui.vocabulary.open {
-        vocabulary::close(ui);
-        true
-    } else if ui.picker.open {
-        picker::close(ui);
+    if let Some(modal) = ui.modal {
+        // A row's open menu inside Calls closes before the sheet itself.
+        if modal == Modal::Calls && matches!(ui.open, Some(Menu::Call(_))) {
+            ui.open = None;
+        } else {
+            ui.close_modal();
+        }
         true
     } else if ui.open.is_some() {
         ui.open = None;
         true
-    } else if ui.meetings.renaming.is_some() || ui.meetings.delete_armed.is_some() {
-        ui.meetings.renaming = None;
-        ui.meetings.delete_armed = None;
+    } else if meetings::cancel_edit(ui) {
         true
     } else {
-        ui.pane == Pane::History && ui.history.cancel_delete()
+        ui.pane == Pane::History && ui.history.cancel_delete(tx)
     }
 }
 
@@ -1409,6 +1417,7 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     changed |= modes::poll_chooser(ui);
     changed |= model_import::poll(ui);
     changed |= meetings::poll_import(ui);
+    changed |= vocabulary::poll(ui);
     // Labs › Screenshots' folder chooser, on macOS.
     #[cfg(all(target_os = "macos", hex_capture))]
     {
@@ -1475,6 +1484,9 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
             changed |= leave_hidden_pane(ui);
         }
     }
+    // The lab, the selected meeting's status, or its notes can take the
+    // selection away between frames.
+    changed |= meetings::settle_selection(ui);
     let preparing = ui
         .view
         .as_ref()
@@ -1488,7 +1500,8 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     changed |= general::poll_level(ui, clock, tx);
     let visible = ui.window.as_ref().is_none_or(rune::AppHandle::is_visible);
     changed |= explainer::poll(ui, clock, visible, tx);
-    changed |= sound_sets::poll(ui, clock, visible, tx);
+    changed |= sound_sets::poll(ui, clock, tx);
+    changed |= calls::poll(ui, clock, visible);
     changed | settings::advance_capture(ui, clock, tx)
 }
 
@@ -1504,6 +1517,7 @@ fn leave_hidden_pane(ui: &mut Ui) -> bool {
         Pane::Modes => Pane::Output,
         _ => Pane::General,
     };
+    ui.close_modal();
     ui.open = None;
     true
 }
@@ -1526,7 +1540,10 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     let (actions, body) = match ui.pane {
         _ if ui.labs_open => (vec![labs::tabs(ui, p)], labs::page(ui, p, cx, &mut layer)),
         Pane::General => (Vec::new(), general::pane(ui, p, &mut layer)),
-        Pane::Output => (Vec::new(), output::pane(ui, p, cx.is_reduced_motion())),
+        Pane::Output => (
+            Vec::new(),
+            output::pane(ui, p, cx.is_reduced_motion(), &mut layer),
+        ),
         Pane::Modes => modes::pane(ui, p, &mut layer),
         Pane::History => history::pane(ui, p, cx, &mut layer),
         #[cfg(hex_capture)]
@@ -1579,17 +1596,18 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         .hover_motion_within(Anim::INSTANT, Anim::INSTANT)
         .child(sidebar(ui, p))
         .child(panel);
-    if let Some(modal) = picker::modal(ui, p) {
-        layer.extend(modal);
+    explainer::sync_reduced_motion(ui, cx);
+    match ui.modal {
+        Some(Modal::Picker) => layer.extend(picker::modal(ui, p)),
+        Some(Modal::Explainer) => layer.extend(explainer::modal(ui, cx, p)),
+        Some(Modal::SoundSets) => layer.extend(sound_sets::modal(ui, p)),
+        Some(Modal::Vocabulary) => layer.extend(vocabulary::modal(ui, p)),
+        Some(Modal::Calls) => layer.extend(calls::modal(ui, p)),
+        None => {}
     }
-    if let Some(modal) = explainer::modal(ui, cx, p) {
-        layer.extend(modal);
-    }
-    if let Some(modal) = sound_sets::modal(ui, p) {
-        layer.extend(modal);
-    }
-    if let Some(modal) = vocabulary::modal(ui, p) {
-        layer.extend(modal);
+    #[cfg(all(target_os = "macos", hex_capture))]
+    if ui.paste_preview {
+        layer.push(paste_picker::preview(p));
     }
     if let Some(first_run) = onboarding_kit::live::overlay(ui, p, cx.is_reduced_motion()) {
         layer.push(first_run);
@@ -1619,6 +1637,9 @@ fn window_focused(ui: &mut Ui, focused: bool, tx: &mut Tx) {
         ui.ask(platform::PlatformRequest::Scrawl(
             platform::ScrawlRequest::Refresh,
         ));
+        if ui.settings.labs.annotate_agent_install {
+            ui.agents.refresh();
+        }
     }
 }
 
@@ -1653,9 +1674,6 @@ mod snap_isolation;
 
 #[cfg(test)]
 mod keyboard_model_tests;
-
-#[cfg(test)]
-mod speech_model_tests;
 
 #[cfg(test)]
 mod dmg_keycap;

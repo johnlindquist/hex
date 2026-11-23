@@ -1,10 +1,11 @@
 //! The recording pill and the ready panel: the listening field and timer at
-//! rest, then Stop and the three copies, and the finished meeting's title
+//! rest, then Stop and the two copies, and the finished meeting's title
 //! and summary over the same copies.
 
 use rune::{Cursor, El, Icon, SpringPair, TextStyle, Transition, Tx, col, el, icon, row, text};
 use rune_theme_opencode::icons;
 
+use super::super::notes_writer::NotesWriter;
 use super::*;
 
 /// What a recording says beside its meter, in place of its title.
@@ -42,14 +43,29 @@ pub(super) fn recording_notice(shown: &Recording) -> Option<Notice> {
     }
 }
 
+/// Whether Apple Intelligence writes meeting notes on this computer, which
+/// the Meetings pane reads from its platform host.
+fn apple_intelligence_here() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::apple_intelligence::availability().is_available()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 /// The ready panel's line under its title, and its colour: the summary, the
-/// summary still being written, or why the Markdown wasn't saved.
+/// summary still being written by whichever writer the Meetings pane names,
+/// or why the Markdown wasn't saved.
 pub(super) fn ready_summary(manifest: &MeetingManifest) -> Option<(String, bool)> {
     if meeting::notes_in_progress(&manifest.id) {
-        return Some((
-            tr("Writing a title and summary with Apple Intelligence…").to_owned(),
-            false,
-        ));
+        let writer = NotesWriter::for_choice(
+            crate::app_settings::meeting_summaries(),
+            apple_intelligence_here(),
+        );
+        return Some((writer.running_label().to_owned(), false));
     }
     if let Some(summary) = manifest
         .notes
@@ -68,42 +84,6 @@ pub(super) fn ready_summary(manifest: &MeetingManifest) -> Option<(String, bool)
 /// The timer: elapsed while recording, the length once finished.
 fn timer_style() -> TextStyle {
     TextStyle::new(13.0, 500.0).mono().lh(18.0)
-}
-
-/// "4 min new", "Up to date", "Transcribing…", or ✓ Copied: what Copy new
-/// would do now.
-fn copy_new_hint(p: Paint, live: &Live, recording: bool) -> Option<El> {
-    if live.copying {
-        return Some(hint_text(p, tr("Transcribing…").to_owned()));
-    }
-    if live.copied(LiveCopy::New) {
-        return Some(copied_hint(p));
-    }
-    let meeting::PendingDelta { turns, span_ms } = live.pending;
-    // The ready panel reads its transcript after it shows.
-    if turns == 0 && live.entries.is_empty() && !recording {
-        return None;
-    }
-    Some(hint_text(
-        p,
-        if turns > 0 && span_ms >= 60_000 {
-            tr_fill("{} min new", &(span_ms / 60_000).to_string())
-        } else if turns > 0 {
-            tr_fill("{} sec new", &(span_ms / 1_000).max(1).to_string())
-        } else if !live.entries.is_empty() {
-            tr("Up to date").to_owned()
-        } else {
-            tr("No speech yet").to_owned()
-        },
-    ))
-}
-
-fn hint_text(p: Paint, hint: String) -> El {
-    text(hint)
-        .key("hint")
-        .font(p.k.ty.small.features("'tnum' 1"))
-        .color(p.faint())
-        .truncate()
 }
 
 fn copied_hint(p: Paint) -> El {
@@ -145,7 +125,13 @@ fn panel_row(
         .center_y()
         .radius(ROW_RADIUS)
         .role("button")
-        .cursor(Cursor::Default)
+        // An enabled row is a button; a disabled one only says what it would
+        // do, and keeps the arrow.
+        .cursor(if enabled {
+            Cursor::Pointer
+        } else {
+            Cursor::Default
+        })
         .focus_ring(2., -2., p.k.c.border_focus)
         // The surface steps each row's presence; nothing eases it twice.
         .transition(Transition::none())
@@ -196,29 +182,22 @@ fn panel_row(
     }
 }
 
-/// Copy new, Copy all, and Copy agent prompt, for the recording or the
-/// ready meeting.
+/// Copy agent prompt and Copy all, for the recording or the ready meeting.
 fn copy_rows(p: Paint, capsule: &Capsule, recording: bool) -> Vec<El> {
     let live = &capsule.live;
     let presence = |row| capsule.action_presence(row).opacity;
-    // While recording, reading through the click can find speech the ticker
-    // hasn't shown yet.
-    let new_enabled = !live.copying
-        && (live.pending.turns > 0
-            || live.copied(LiveCopy::New)
-            || (recording && capsule.copy_new.is_some()));
     let copied = |kind| live.copied(kind).then(|| copied_hint(p));
     vec![
         panel_row(
             p,
-            "copy-new",
-            &icons::MENU,
-            tr("Copy new"),
-            copy_new_hint(p, live, recording),
+            "copy-prompt",
+            &icons::OUTLINE_CONSOLE,
+            tr("Copy agent prompt"),
+            copied(LiveCopy::Prompt),
             true,
-            new_enabled,
+            true,
             presence(1),
-            |c, tx| c.press_copy_new(tx),
+            |c, tx| c.copy_prompt(tx),
         ),
         panel_row(
             p,
@@ -230,17 +209,6 @@ fn copy_rows(p: Paint, capsule: &Capsule, recording: bool) -> Vec<El> {
             !recording || !live.entries.is_empty(),
             presence(2),
             |c, tx| c.copy_all(tx),
-        ),
-        panel_row(
-            p,
-            "copy-prompt",
-            &icons::OUTLINE_CONSOLE,
-            tr("Copy agent prompt"),
-            copied(LiveCopy::Prompt),
-            false,
-            true,
-            presence(3),
-            |c, tx| c.copy_prompt(tx),
         ),
     ]
 }
@@ -554,7 +522,8 @@ fn title_label(p: Paint, c: &Capsule, title: &str) -> El {
         .child(label)
 }
 
-// Only the meter band owns the window drag, never an ancestor of an action row.
+/// Only the meter band owns the window drag, never an ancestor of an action
+/// row, so the grab hand stops where the rows' pointer begins.
 fn meter_band() -> El {
     row()
         .key("meta")
@@ -562,7 +531,7 @@ fn meter_band() -> El {
         .px(REST_PX)
         .center_y()
         .transition(Transition::none())
-        .cursor(Cursor::Default)
+        .cursor(Cursor::Grab)
         .on_drag(|c: &mut Capsule, d, tx| c.drag(d, tx))
 }
 
@@ -597,9 +566,11 @@ pub(super) fn rest_width(shown: &Recording) -> f32 {
 /// The minutes on the time the capsule draws.
 fn minutes_shown(capsule: &Capsule) -> u64 {
     match capsule.drawn() {
-        Some(Kind::Recording(shown)) => shown.started.elapsed().as_secs() / 60,
-        Some(Kind::Finalizing { duration_ms }) => duration_ms / 60_000,
-        Some(Kind::Ready(manifest)) => manifest.duration_ms.unwrap_or(0) / 60_000,
+        Some(State::Recording {
+            recording: shown, ..
+        }) => shown.started.elapsed().as_secs() / 60,
+        Some(State::Finalizing { duration_ms, .. }) => duration_ms / 60_000,
+        Some(State::Ready { manifest, .. }) => manifest.duration_ms.unwrap_or(0) / 60_000,
         _ => 0,
     }
 }
@@ -622,8 +593,10 @@ const FIELD_LEAST: f32 = 40.0;
 /// whole header once the panel is open.
 pub(super) fn field_wanted(capsule: &Capsule) -> f32 {
     let open = match capsule.drawn() {
-        Some(Kind::Recording(_)) => capsule.hovered || capsule.stopping,
-        Some(Kind::Finalizing { .. } | Kind::Ready(_)) => true,
+        Some(State::Recording {
+            hovered, stopping, ..
+        }) => *hovered || *stopping,
+        Some(State::Finalizing { .. } | State::Ready { .. }) => true,
         _ => false,
     };
     if open {
@@ -722,10 +695,16 @@ pub(super) fn veil(capsule: &Capsule, width: f32, height: f32) -> El {
 }
 
 impl Capsule {
-    /// How much of action row `row` (Stop, then the three copies) shows.
+    /// How much of action row `row` (Stop, then the two copies) shows.
     /// Whole wherever the surface isn't in motion.
     pub(super) fn action_presence(&self, row: usize) -> stage::Presence {
-        let (Some(o), Some(Kind::Recording(shown))) = (self.stage.outline(), self.drawn()) else {
+        let (
+            Some(o),
+            Some(State::Recording {
+                recording: shown, ..
+            }),
+        ) = (self.stage.outline(), self.drawn())
+        else {
             return stage::Presence::flat(1.0);
         };
         let mut presence = self.stage.presence(stage::Layer::Action(row));
@@ -789,8 +768,14 @@ pub(super) fn arriving_header(
 /// The recording: at rest only its levels and time; under the
 /// pointer it springs open into Stop and the copies, its header nearest the
 /// screen edge.
-pub(super) fn recording(p: Paint, capsule: &Capsule, shown: &Recording) -> El {
-    let open = capsule.hovered || capsule.stopping;
+pub(super) fn recording(
+    p: Paint,
+    capsule: &Capsule,
+    shown: &Recording,
+    hovered: bool,
+    stopping: bool,
+) -> El {
+    let open = hovered || stopping;
     // Rows that are leaving stay drawn until they have gone.
     let actions = open || (0..stage::ACTIONS).any(|row| capsule.action_presence(row).shows());
     let notice = recording_notice(shown);
@@ -849,7 +834,6 @@ pub(super) fn recording(p: Paint, capsule: &Capsule, shown: &Recording) -> El {
     let action = actions.then(|| {
         // Pressed, the same row says so in place: its glyph and first
         // letters stay where they were and it stops taking the pointer.
-        let stopping = capsule.stopping;
         let row = panel_row(
             p,
             "stop",
@@ -1081,7 +1065,7 @@ pub(super) fn ready_window_size(_: &MeetingManifest) -> (f32, f32) {
 }
 
 /// The ready panel's window: its header, a summary while there is one or one
-/// is being written, and the three copies.
+/// is being written, and the two copies.
 #[cfg(target_os = "windows")]
 pub(super) fn ready_window_size(manifest: &MeetingManifest) -> (f32, f32) {
     let summary = if ready_summary(manifest).is_some() {

@@ -176,6 +176,9 @@ impl Pump {
             ControlCommand::Screenshot { pick } => screenshot(pick, reply),
             ControlCommand::MeetingRecord { title } => self.meeting(false, title, reply),
             ControlCommand::MeetingStop => self.meeting(true, None, reply),
+            ControlCommand::MeetingDelete { id } => {
+                Some(control::meeting_deleted(crate::meeting::delete(&id)))
+            }
             ControlCommand::MeetingCopyLast => Some(
                 crate::meeting::latest_transcript_markdown()
                     .and_then(|markdown| {
@@ -214,7 +217,9 @@ impl Pump {
                     Err(error) => return Some(error.into()),
                 };
                 let definition = crate::transcription::models::definition(selection.model);
-                if !crate::transcription::models::is_installed(definition, &selection.language) {
+                if !crate::transcription::readiness::readiness(&definition, &selection.language)
+                    .installed
+                {
                     return Some(ControlReply::error(
                         "not-installed",
                         format!(
@@ -235,7 +240,9 @@ impl Pump {
                     Err(error) => return Some(error.into()),
                 };
                 let definition = crate::transcription::models::definition(selection.model);
-                if crate::transcription::models::is_installed(definition, &selection.language) {
+                if crate::transcription::readiness::readiness(&definition, &selection.language)
+                    .installed
+                {
                     return start_model_use(runtime, selection, reply);
                 }
                 Some(reply_with(
@@ -400,6 +407,9 @@ impl Pump {
                 (Some(ControllerEvent::Stopping), true) => {
                     ControlReply::done("Stopping the meeting recording")
                 }
+                (Some(ControllerEvent::Discarded(_)), true) => {
+                    ControlReply::done("Stopped recording; it had no speech and went to the Trash")
+                }
                 (Some(ControllerEvent::Transcribing | ControllerEvent::Finished(_)), true) => {
                     ControlReply::done("Stopped recording; transcribing the meeting")
                 }
@@ -560,13 +570,6 @@ fn listener_command(
         } => background(reply, move || {
             let action = control::check_flags(action, true, raw)?;
             let printing_start = action == control::CaptureAction::Start;
-            if printing_start && !crate::labs::print_start() {
-                return Err(control::ControlError::new(
-                    "disabled",
-                    "Labs › Dictation for a command is off; turn it on with \
-                     `hex labs on print-start`",
-                ));
-            }
             listener_ready(&runtime)?;
             let (print, printed) = control::PrintReply::channel();
             // A printing start answers only when its dictation ends; a
@@ -798,11 +801,22 @@ fn wait_for_model(
     runtime: &RuntimeHandle,
     selection: crate::transcription::models::TranscriptionSelection,
 ) -> Result<ControlReply, ControlError> {
-    let name = crate::transcription::models::definition(selection.model).name;
+    let name = crate::transcription::models::definition(selection.model)
+        .name
+        .to_string();
+    // What the runtime runs: the saved selection, or a lost import's fallback.
     let matches = |settings: &AppSettings| {
         super::runtime::same_model_and_language(&settings.transcription, &selection)
+            || super::runtime::same_model_and_language(
+                &crate::transcription::custom_models::runnable(&settings.transcription),
+                &selection,
+            )
     };
-    if load().is_ok_and(|settings| matches(&settings)) {
+    let ready = || {
+        crate::transcription::models::validate(&selection)
+            .is_ok_and(|model| crate::transcription::models::is_ready(&model, &selection.language))
+    };
+    if ready() && load().is_ok_and(|settings| matches(&settings)) {
         return Ok(ControlReply::unchanged(format!(
             "{name} ({}) is already in use",
             selection.language
@@ -815,17 +829,6 @@ fn wait_for_model(
         let Some(published) = runtime.published() else {
             continue;
         };
-        let preparing = published.preparation.model.is_some();
-        seen_preparing |= preparing;
-        if preparing {
-            continue;
-        }
-        if matches(&published.settings) {
-            return Ok(ControlReply::done(format!(
-                "Switched to {name} ({})",
-                selection.language
-            )));
-        }
         if let Some(error) = &published.preparation.error
             && (seen_preparing || started.elapsed() > Duration::from_secs(1))
         {
@@ -833,6 +836,17 @@ fn wait_for_model(
                 "failed",
                 format!("couldn't switch to {name}: {error}"),
             ));
+        }
+        let preparing = published.preparation.model.is_some();
+        seen_preparing |= preparing;
+        if preparing {
+            continue;
+        }
+        if ready() && matches(&published.settings) {
+            return Ok(ControlReply::done(format!(
+                "Switched to {name} ({})",
+                selection.language
+            )));
         }
     }
     Ok(ControlReply::done(format!(
@@ -944,6 +958,9 @@ fn status(
                 .map(|model| model.as_str().into()),
             downloaded_bytes: published.preparation.downloaded_bytes,
             error: published.preparation.error.clone(),
+            // The shared engine reports no device for Metal or Apple Speech.
+            backend: crate::transcription::engine::TranscriptionEngine::shared()
+                .and_then(|engine| engine.held_backend()),
             ..ModelReport::saved(&settings.transcription)
         },
         features: FeatureReport {
@@ -999,7 +1016,7 @@ mod tests {
                 None,
             ),
             app_switcher: crate::transcription::app_model_switching::Switcher::new(false, None),
-            automatic_preparation: false,
+            automatic_preparation: None,
             preparation,
             recognition_start: None,
             listener_failure: Default::default(),

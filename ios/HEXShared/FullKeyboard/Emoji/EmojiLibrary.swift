@@ -28,14 +28,14 @@ nonisolated enum EmojiCategory: Int, CaseIterable, Sendable {
     /// The category bar's SF Symbol.
     var symbol: String {
         switch self {
-        case .smileysPeople: "face.smiling"
-        case .animalsNature: "pawprint"
-        case .foodDrink: "fork.knife"
-        case .activity: "soccerball"
-        case .travelPlaces: "car"
-        case .objects: "lightbulb"
-        case .symbols: "number"
-        case .flags: "flag"
+        case .smileysPeople: "face.smiling.inverse"
+        case .animalsNature: "teddybear.fill"
+        case .foodDrink: "takeoutbag.and.cup.and.straw.fill"
+        case .activity: "soccerball.inverse"
+        case .travelPlaces: "building.2.fill"
+        case .objects: "lightbulb.fill"
+        case .symbols: "music.note"
+        case .flags: "flag.fill"
         }
     }
 }
@@ -130,6 +130,22 @@ nonisolated final class EmojiLibrary: @unchecked Sendable {
     /// The newest emoji version every supported iOS draws; newer ones are listed only if
     /// the emoji font draws them.
     static let assumedVersion = 15.1
+
+    @MainActor private static var cached: EmojiLibrary?
+
+    /// The layout's index, kept once per process across keyboard presentations and dropped on a
+    /// memory warning (`evictCached`).
+    @MainActor static func bundled(language: String, bundle: Bundle = .main) -> EmojiLibrary? {
+        let resolved = languages.contains(language) ? language : "en"
+        if let cached, cached.language == resolved { return cached }
+        let loaded = load(language: resolved, bundle: bundle)
+        cached = loaded
+        return loaded
+    }
+
+    @MainActor static func evictCached() {
+        cached = nil
+    }
 
     /// Loads the index for a keyboard layout ("en", "nb", "es", "de"), whose words come
     /// with English's.

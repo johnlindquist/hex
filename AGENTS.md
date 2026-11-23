@@ -44,13 +44,14 @@ hidden while off; a behaviour-only feature is just its toggle. Today: Meetings
 a stable build with the driver keeps its pane for Uninstall alone), Playground
 (Dev), Paste Last picker (Dev, macOS; the mixed dictation-and-annotation
 picker and History, `labs.paste_last_picker`), Live text, Live chapters,
-Vocabulary help, Words on screen
+Vocabulary files, Words on screen, Learn from corrections
 (macOS), Rewrite reads nearby text (macOS), Switch model with keyboard
 language (#216), Mouse shortcuts (#209, macOS), Also pause the browser (#301,
 macOS), Share dictation shortcut (#176, Windows), Free memory when idle
 (#442), Smaller model files (macOS), Terminal paste (Windows), Terminal
-paste shortcut (Windows, Linux), Stop phrase, Hold through other keys
-(macOS and Windows), and Microphone key alone (#181, macOS).
+paste shortcut (Windows, Linux), Stop phrase, Signature, Hold through other keys
+(macOS and Windows), Microphone key alone (#181, macOS), and Dictate while
+annotating.
 Externally contributed features land there too.
 Every `Everyone` lab also gets a page on Hex's website,
 `anoma.ly/hex/labs/<id>` (index at `/hex/labs`), built from
@@ -168,7 +169,13 @@ substitute for source inspection or a second roadmap.
 - `transcription/gguf_session`: the `transcribe.cpp` session owner shared by `parakeet` and
   `transcription/local_transcriber`; it recreates the native session around each run (and
   each live stream) so inference scratch stays bounded, and owns chunked
-  long-audio transcription.
+  long-audio transcription. `transcription/stream_tuning` owns the stream
+  geometry it probes: `HEX_STREAM_CHUNK_MS`/`HEX_STREAM_RIGHT_MS`, else Labs ›
+  Faster live text's tuple chosen from the model's GGUF chunk menus, else the
+  model's default. Only a probe that passed the GPU and capability gates may
+  be re-probed, a change is adopted while nothing records, a failed re-probe
+  keeps the geometry in hand, and a tuple the model's menu rejects falls back
+  to the default instead of disabling streaming.
 - `transcription/speech_detector`: the optional Silero voice activity detector, loaded once on
   the CPU and downloaded in the background, that keeps speechless dictation
   captures and meeting chunks away from the transcription models.
@@ -398,7 +405,7 @@ substitute for source inspection or a second roadmap.
 - `linux/audio_control`: While-dictating mute through `wpctl`/`pactl`, Lower
   audio through `audio/output_ducking`, and MPRIS pause over D-Bus (zbus),
   restoring only what it changed, plus idle-sleep prevention for dictations.
-- `linux/input_route`: System default's Bluetooth avoidance on Linux. ALSA's
+- `linux/input/route`: System default's Bluetooth avoidance on Linux. ALSA's
   default cannot name another PipeWire source, so Hex marks its ALSA streams
   (`PIPEWIRE_ALSA`: `state.restore-target = false` and its PID, set on the
   main thread at startup) and moves them off a Bluetooth default source to
@@ -574,6 +581,11 @@ substitute for source inspection or a second roadmap.
   Rust deciding topic changes, the per-boundary fix-up after publication,
   chapter-extended titles that never touch a user-typed one, and section
   Markdown for Copy section.
+- `meeting/delete`: the one deletion path the Meetings pane's Delete and
+  `hex meetings delete` share: the exported Markdown, the tracked notes file,
+  then the recording folder to the Trash, with a typed refusal (unknown,
+  recording, transcribing, notes, final pending) the control reply turns into
+  its own code.
 - `meeting/query`: read-only meeting queries for agents (`meeting::query`):
   lock-aware listing, in-memory BM25 full-text search with stemming and fuzzy
   matching, transcript paging, stored notes, and Markdown rendering. It never
@@ -583,9 +595,9 @@ substitute for source inspection or a second roadmap.
 - `apple_intelligence`: the weak-linked FoundationModels Swift bridge:
   availability, context size, and guided-generation notes at utility priority.
 - `microphone_activity`: permission-light observation of which apps use the
-  microphone: CoreAudio processes (macOS), a `pw-dump --monitor` of PipeWire
-  capture streams (Linux), audio sessions on capture devices (Windows). No
-  samples are read.
+  microphone and which call apps still play: CoreAudio processes (macOS), one
+  `pw-dump --monitor` of PipeWire capture and playback streams (Linux), and
+  audio sessions on capture and render devices (Windows). No samples are read.
 - `meeting/detection`: pure provider classification, debounce, per-call snooze,
   and call-ended presence.
 - `calendar`: calendar meetings on every OS as a pure model (which events
@@ -939,11 +951,12 @@ CoreAudio formats, AppleScript details, or event serialization.
   missing or changed stays saved while the listener runs the default model;
   never rewrite it away.
 - Models found in the Hugging Face cache are scanned only when the picker or
-  onboarding opens (or `hex model list` runs), never in the background, and
-  only their headers are read. A found file is used in place and is
-  read-only: Hex never writes, moves, or deletes anything in the cache, keeps
-  its receipts in its own models folder, hashes a file in full once when it is
-  chosen (against the pin or the blob name), and removing one only forgets it.
+  onboarding opens (or `hex model list`/`hex model status` runs), never in the
+  background, and only their headers are read. A found file is used in place
+  and is read-only: Hex never writes, moves, or deletes anything in the cache,
+  keeps its receipts in its own models folder, hashes a file in full once when
+  it is chosen or when Enable's installed-only check finds it unverified
+  (against the pin or the blob name), and removing one only forgets it.
 - Hex has one onboarding, on every build and OS, stable and dev alike: the
   first-run story (`rune_ui/onboarding_kit/live.rs`) over the tour state
   machine (`rune_ui/onboarding.rs`, `desktop::onboarding::Flow`). No flag,
@@ -1099,8 +1112,9 @@ CoreAudio formats, AppleScript details, or event serialization.
   command waits, at most 60 s, for the text, processed as a paste. It never
   pastes, even on failure or timeout; no speech exits 4. History records it as
   Printed and Paste Last skips it.
-- Option-Shift-V pastes the last completed dictation. Option-Control-V pastes
-  completed meeting turns added since the previous successful invocation.
+- Option-Shift-V pastes the last completed dictation. Meetings have no paste
+  shortcut: the recording capsule's Copy agent prompt and Copy all are the
+  in-call copies.
 - Do not persist captured audio by default. Explicit foreground meeting
   recording must remain visibly active. Diagnostic dictation retention is an
   explicit, bounded, owner-only opt-in through `HEX_RETAIN_DICTATION_AUDIO`.
@@ -1127,9 +1141,13 @@ CoreAudio formats, AppleScript details, or event serialization.
   owner; searches never return expired entries while waiting for disk cleanup.
   The hard caps are 10,000 entries and 16 MiB of raw + final text (oldest evicted
   first), with existing per-entry metadata and text limits. There is no archive.
-- `hex history` and `hex meetings` are read-only, release-available on every OS,
-  independent of feature opt-ins. Dispatch before process
-  logging, the instance lock, local API, GUI, permissions, or Hex Microphone.
+- `hex history` and `hex meetings list|show|chapters|search` are read-only,
+  release-available on every OS, independent of feature opt-ins. Dispatch
+  before process logging, the instance lock, local API, GUI, permissions, or Hex
+  Microphone. `hex meetings delete <id>` is the one writing command: a control
+  command the running Hex carries out through the pane's own delete
+  (`meeting::delete`), refusing while the meeting records, transcribes, writes
+  notes, or waits for its final transcript.
   History reads one open
   file through concurrent atomic replacements, applies the saved retention at
   query time, and reports malformed files/settings without repairing them.
@@ -1148,7 +1166,10 @@ CoreAudio formats, AppleScript details, or event serialization.
   detected call app leaves the microphone, offer `Keep Recording` or
   `Stop & Transcribe`; never stop automatically, except a recording Hex
   started on its own while `meetings.stop_when_call_ends` (Detected calls ›
-  Stop when the call ends, default off) is on. An active recording stays
+  Stop when the call ends, default off) is on, or an offered, calendar, or
+  by-hand recording that watches a call app while the Labs switch
+  `labs.stop_any_call_recording` (Stop every call recording when the call
+  ends, default off) is on. An active recording stays
   visible and stoppable from the menu bar without the Settings window.
 - Calendar access is asked for only by Meetings › Settings' Connect calendar, never at
   launch, and only with Meetings on; Meetings off means no EventKit reads and
@@ -1182,8 +1203,8 @@ CoreAudio formats, AppleScript details, or event serialization.
   quitting begins, no meeting work starts a chunk or loads a model. The next
   launch with Meetings on runs the final pass on the dictation engine's model
   (or its own after 30 s without an engine).
-- Every in-call meeting view and copy (the Meetings pane,
-  Option-Control-V, provisional titles, `hex meetings`, and MCP) reads the
+- Every in-call meeting view and copy (the Meetings pane, the capsule's
+  Copy all, provisional titles, `hex meetings`, and MCP) reads the
   rolling Parakeet transcript, which publishes only entries no later chunk
   can replace; after Stop they read the final transcript.
 - Meeting system audio uses a Core Audio process tap on macOS (System Audio
@@ -1231,7 +1252,10 @@ CoreAudio formats, AppleScript details, or event serialization.
   no undo. There is no separate draw shortcut and no send-to list
   shortcut; Send to… is a capsule click. `hex annotate draw` toggles the
   pen for desktops without the portal. While a capture records, the
-  dictation shortcut starts nothing on either OS. Sends
+  dictation shortcut starts nothing on either OS, unless Labs › Dictate while
+  annotating (off by default) lets it dictate as usual: the text pastes into
+  the app in front, History and Paste Last keep it, and the capture keeps
+  recording, its words including the dictated span. Sends
   carry the contact sheet and keyframes as inline `data:` image parts, never
   a local path. The Linux capsule doesn't open suggestions by itself.
   `validate-app.sh` requires
@@ -1288,7 +1312,11 @@ CoreAudio formats, AppleScript details, or event serialization.
   microphone, installs a tap of its own, or loads a model: it copies the dictation
   timeline through a bounded sink that records a gap rather than block, so a
   stalled capture never stalls dictation, and while a sink is open the
-  release-while-idle close waits for it. While a capture records it holds a
+  release-while-idle close waits for it. One exception: a Labs › Screenshots
+  recording whose toolbar names another microphone
+  (`screenshots.record_microphone`) opens that device for that recording
+  only (never the one dictation has open), closes it at stop, cancel, or
+  quit, and records a gap while it fails; "none" keeps no microphone. While a capture records it holds a
   recording-environment session with the same "While dictating" policy
   (`recording_audio_behavior`, read at each start; no capture setting),
   released at stop, cancel, or quit; it composes with dictation's,
@@ -1343,13 +1371,11 @@ CoreAudio formats, AppleScript details, or event serialization.
   meeting is also written as Markdown to the configured folder (default
   `~/Documents/Hex Meetings`) without overwriting existing files; an export
   failure does not fail the meeting.
-- Meeting paste cursors advance only after successful insertion and reset when
-  Hex restarts. They track, per source, the end of the text already handed
-  out, so rewrites near the live edge and the switch to the final transcript
-  neither repeat nor drop turns.
 - Deleting a meeting moves its exported Markdown and then its recording folder
-  to the Trash (never `rm`), after a two-step confirmation, and is refused while
-  it records, transcribes, or writes notes. Renaming rewrites the manifest and
+  to the Trash (never `rm`), after a two-step confirmation in the pane (the CLI
+  `hex meetings delete` asks none; its callers do), and is refused while
+  it records, transcribes, writes notes, or waits for its final transcript.
+  Renaming rewrites the manifest and
   only a Markdown heading that still reads the previous title; files keep
   their names unless Export › Descriptive meeting file names is on, which renames
   the exported Markdown to the new title, keeping its date and time prefix and
@@ -1594,7 +1620,9 @@ CoreAudio formats, AppleScript details, or event serialization.
   through XWayland, bounded reads); there is no consumption acknowledgment. The RemoteDesktop paste session closes 15 s after the last
   paste when its grant restores, so GNOME's remote-control indicator shows
   only around pastes (#718); the next paste reopens it without a dialog, and
-  only a session that showed the dialog waits the 250 ms focus settle.
+  only a session that showed the dialog waits the 250 ms focus settle. On KDE
+  it stays open for the paster's lifetime, since Plasma notifies on every
+  session start (#2508).
 
 ## Development
 
@@ -1656,7 +1684,10 @@ New, unproven, user-requested, and externally contributed features
 its settings key, description, and group (`Feature::group`), a card on the Labs page, and a
 `hex settings` key; gate where the feature's work starts (worker, thread,
 capture), not just its UI. Never add a master switch or ship such a feature
-on by default. Remove it from Labs when it graduates or is dropped.
+on by default. Remove it from Labs when it graduates or is dropped. Before
+merging a new lab or any new persisted setting, run
+`scripts/check labs control::settings` locally: Compile alone doesn't run the
+check that every persisted setting has a `hex settings` key.
 
 Use `scripts/check [filter]` for the local loop, not raw `cargo test`. It runs
 tests through cargo-nextest (`brew install cargo-nextest`) with

@@ -39,10 +39,17 @@ struct ContentView: View {
     @Bindable var dictation: DictationController
     @Binding var openedFromKeyboard: Bool
     @Binding var showSetup: Bool
+    /// A settings page the keyboard asked for (`KeyboardLaunchRequest.translationSettings`).
+    var openPage: Binding<SettingsPage?> = .constant(nil)
     @State private var setupMonitor = KeyboardSetupMonitor()
+    @State private var keyboardSpeech = KeyboardSpeechPreparation()
     @State private var onboardingPage = OnboardingProgress.launchPage
     @State private var settingsPath = SettingsSnapshotFixture.initialPath
+    /// Settings › Dictation opened from the speech model card: it starts at that card's row.
+    @State private var dictationOpensAtSpeechModel = false
     @State private var showAcknowledgements = false
+    /// Whether Hex went to the background, so only a real return starts the keyboard's check over.
+    @State private var keyboardCheckWasInBackground = false
 
     private static let stageWellHeight: CGFloat = 48
     private static let stageControlHeight: CGFloat = 36
@@ -65,7 +72,7 @@ struct ContentView: View {
                 keyboardHandoffView
                     .transition(.opacity)
             } else if onboardingPage != nil {
-                OnboardingView(dictation: dictation, monitor: setupMonitor, page: $onboardingPage)
+                OnboardingView(dictation: dictation, monitor: setupMonitor, keyboardSpeech: keyboardSpeech, page: $onboardingPage)
                     .transition(.opacity)
             } else {
                 standaloneView
@@ -73,6 +80,33 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .background {
+            // Translate what I say's session before iOS 26 (TranslationSessionHost).
+            if #available(iOS 26.0, *) {
+                EmptyView()
+            } else {
+                TranslationSessionHostView()
+            }
+        }
+        .task { keyboardSpeech.start { dictation.engine } }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                keyboardCheckWasInBackground = true
+            case .active:
+                // Only after a real background trip: an alert, Face ID or Control Center goes
+                // inactive and back without suspending anything, and launch starts active. The
+                // app's own preparation resumes in HEXMobileApp, which tracks it the same way.
+                if keyboardCheckWasInBackground {
+                    keyboardCheckWasInBackground = false
+                    keyboardSpeech.resumeOnForeground { dictation.engine }
+                }
+                // Opened from a keyboard handing its dictations to Hex: check again whether it must.
+                keyboardSpeech.recheckKeyboardHandoff { dictation.engine }
+            default:
+                break
+            }
+        }
         .animation(HexMotion.reducedFade, value: openedFromKeyboard)
         .animation(HexMotion.reducedFade, value: onboardingPage == nil)
     }
@@ -121,7 +155,8 @@ struct ContentView: View {
     }
 
     private var setupStepsLeft: Int {
-        setupMonitor.stepsLeft(modelReady: dictation.isModelReady)
+        // The Hex key's own model counts: Ready means dictation works in other apps.
+        setupMonitor.stepsLeft(modelReady: dictation.isModelReady && keyboardSpeech.isReady)
     }
 
     private var hasTranscript: Bool {
@@ -139,21 +174,36 @@ struct ContentView: View {
                     settingsPage(page)
                 }
         }
+        .onChange(of: openPage.wrappedValue, initial: true) { _, page in
+            guard let page else { return }
+            settingsPath = [page]
+            openPage.wrappedValue = nil
+        }
         .tint(HexTheme.textBase)
         .sheet(isPresented: $showSetup) {
-            SetupSheet(dictation: dictation, monitor: setupMonitor)
-        }
-        .task {
-            while !Task.isCancelled {
-                setupMonitor.refresh()
-                try? await Task.sleep(for: .seconds(1))
-            }
+            SetupSheet(dictation: dictation, monitor: setupMonitor, keyboardSpeech: keyboardSpeech)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 setupMonitor.refresh()
             }
         }
+        // While Home or its setup sheet shows, once a second: what changes with Hex still in
+        // front (the keyboard's Allow Paste flag, keyboards added from Settings beside it in
+        // Split View) has no notification of its own.
+        .task(id: setupIsShowing) {
+            while setupIsShowing, !Task.isCancelled {
+                setupMonitor.refresh()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+        .onChange(of: settingsPath) { _, path in
+            if path.isEmpty { dictationOpensAtSpeechModel = false }
+        }
+    }
+
+    private var setupIsShowing: Bool {
+        scenePhase == .active && (settingsPath.isEmpty || showSetup)
     }
 
     /// Fits one screen: the header and its status line, Dictate, and the four pages.
@@ -182,6 +232,30 @@ struct ContentView: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
 
+                // Experiments › Multilingual model: its download or load, beside dictation.
+                MultilingualModelStatus(
+                    download: dictation.multilingualDownload,
+                    retry: { dictation.retryMultilingualParakeet() },
+                    turnOff: { dictation.turnOffMultilingualParakeet() }
+                )
+
+                SpeechModelHomeCard(download: KeyboardParakeetDownload.shared, open: {
+                    dictationOpensAtSpeechModel = true
+                    settingsPath = [.dictation]
+                })
+
+                if setupMonitor.needsAllowPasteSetting {
+                    AllowPasteBanner(
+                        openSettings: {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                openURL(url)
+                            }
+                        },
+                        dismiss: { setupMonitor.dismissAllowPasteSetting() }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                }
+
                 SettingsCard {
                     ForEach(Array(SettingsPage.allCases.enumerated()), id: \.element) { index, page in
                         if index > 0 {
@@ -201,17 +275,17 @@ struct ContentView: View {
                             openURL(url)
                         }
                     } label: {
-                        SettingsLinkLabel(title: "Keyboard settings", icon: "gearshape", trailingIcon: "arrow.up.right")
+                        SettingsLinkLabel(title: String(localized: "iOS Settings"), icon: "gearshape", trailingIcon: "arrow.up.right")
                     }
                     .buttonStyle(.plain)
 
                     SettingsDivider(leading: 50)
 
                     Button {
-                        OnboardingProgress.save(.welcome)
-                        onboardingPage = .welcome
+                        OnboardingProgress.save(.setup)
+                        onboardingPage = .setup
                     } label: {
-                        SettingsLinkLabel(title: "Run setup again", icon: "arrow.counterclockwise")
+                        SettingsLinkLabel(title: String(localized: "Run setup again"), icon: "arrow.counterclockwise")
                     }
                     .buttonStyle(.plain)
                 }
@@ -222,7 +296,7 @@ struct ContentView: View {
                     Button {
                         SafariSheet.present(HexLinks.privacyPolicy)
                     } label: {
-                        SettingsLinkLabel(title: "Privacy policy", icon: "hand.raised", trailingIcon: "arrow.up.right")
+                        SettingsLinkLabel(title: String(localized: "Privacy policy"), icon: "hand.raised", trailingIcon: "arrow.up.right")
                     }
                     .buttonStyle(.plain)
 
@@ -231,16 +305,19 @@ struct ContentView: View {
                     Button {
                         SafariSheet.present(HexLinks.support)
                     } label: {
-                        SettingsLinkLabel(title: "Support", icon: "questionmark.circle", trailingIcon: "arrow.up.right")
+                        SettingsLinkLabel(title: String(localized: "Support"), icon: "questionmark.circle", trailingIcon: "arrow.up.right")
                     }
                     .buttonStyle(.plain)
+
+                    // Absent in a build without a report key (FeedbackRow).
+                    FeedbackRow(screen: "Home", dictation: dictation, divider: true)
 
                     SettingsDivider(leading: 50)
 
                     Button {
                         showAcknowledgements = true
                     } label: {
-                        SettingsLinkLabel(title: "Acknowledgements", icon: "doc.text")
+                        SettingsLinkLabel(title: String(localized: "Acknowledgements"), icon: "doc.text")
                     }
                     .buttonStyle(.plain)
                     .sheet(isPresented: $showAcknowledgements) {
@@ -257,6 +334,7 @@ struct ContentView: View {
             .animation(HexMotion.settleAnimation(reduceMotion: reduceMotion), value: dictation.keyboardSessionEnabled)
             .animation(HexMotion.settleAnimation(reduceMotion: reduceMotion), value: hasTranscript)
             .animation(HexMotion.settleAnimation(reduceMotion: reduceMotion), value: setupStepsLeft)
+            .animation(HexMotion.settleAnimation(reduceMotion: reduceMotion), value: setupMonitor.needsAllowPasteSetting)
         }
         .scrollBounceBehavior(.basedOnSize)
         .scrollDismissesKeyboard(.interactively)
@@ -267,9 +345,13 @@ struct ContentView: View {
     private func settingsPage(_ page: SettingsPage) -> some View {
         switch page {
         case .dictation:
-            DictationSettingsPage(dictation: dictation)
+            DictationSettingsPage(dictation: dictation, opensAtSpeechModel: dictationOpensAtSpeechModel)
         case .keyboard:
-            KeyboardSettingsPage()
+            KeyboardSettingsPage(
+                fullAccessOn: setupMonitor.fullAccessOn,
+                needsAllowPasteSetting: setupMonitor.needsAllowPasteSetting,
+                onDismissAllowPasteSetting: { setupMonitor.dismissAllowPasteSetting() }
+            )
         case .privacy:
             PrivacySettingsPage()
         case .experiments:
@@ -320,7 +402,7 @@ struct ContentView: View {
                     .background(Color.white.opacity(0.07), in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("End warm microphone session")
+                .accessibilityLabel("Turn off warm mic")
                 .hexTrayReveal(showWarmPill, reduceMotion: reduceMotion, offsetY: 2)
             }
         }
@@ -412,9 +494,12 @@ struct ContentView: View {
             .padding(.horizontal, Self.stageInset)
 
             HStack(spacing: 12) {
-                Text("Preparing model…")
+                Text(dictation.modelPreparation.detail)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(HexTheme.textMuted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .layoutPriority(1)
                 ProgressView(value: dictation.modelPreparation.fractionCompleted)
                     .tint(HexTheme.textBase)
             }
@@ -473,7 +558,7 @@ struct ContentView: View {
             HStack(spacing: 6) {
                 Spacer()
 
-                Button(dictation.copied ? "Copied" : "Copy") {
+                Button(dictation.copied ? String(localized: "Copied") : String(localized: "Copy")) {
                     dictation.copyTranscript()
                 }
                 .font(.system(size: 13, weight: .medium))
@@ -714,7 +799,7 @@ struct ContentView: View {
                 .foregroundStyle(HexTheme.textBase)
             Spacer(minLength: 0)
             if let offer {
-                Button("Use \(SpeechModelUnavailable.englishName(offer))") {
+                Button("Use \(SpeechModelUnavailable.interfaceName(offer))") {
                     dictation.useOfferedLanguage()
                 }
                 .font(.system(size: 13, weight: .medium))
@@ -751,21 +836,11 @@ struct ContentView: View {
     }
 
     private var primaryActionLabel: String {
-        switch dictation.phase {
-        case .modelRequired, .failed:
-            "Set up"
-        default:
-            "Dictate"
-        }
+        dictation.primaryActionPreparesModel ? String(localized: "Set up") : String(localized: "Dictate")
     }
 
     private var primaryActionIcon: String {
-        switch dictation.phase {
-        case .modelRequired, .failed:
-            "arrow.down"
-        default:
-            "mic.fill"
-        }
+        dictation.primaryActionPreparesModel ? "arrow.down" : "mic.fill"
     }
 
     private var handoffStatusLine: String? {
@@ -776,13 +851,13 @@ struct ContentView: View {
         case .failed(let message):
             return message
         case .requestingPermission:
-            return "Allow microphone access"
+            return String(localized: "Allow microphone access")
         case .preparingModel:
-            return "Preparing model…"
+            return dictation.modelPreparation.detail
         case .transcribing:
-            return "Transcribing…"
+            return String(localized: "Transcribing…")
         case .ready where dictation.keyboardSessionEnabled:
-            return "Ready"
+            return String(localized: "Ready")
         default:
             return nil
         }

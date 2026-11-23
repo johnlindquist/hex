@@ -1,16 +1,16 @@
-//! Russian (ru) interface strings, keyed by the English source string like
-//! [`super::TRANSLATIONS`]; used for any Russian system language. Not yet
-//! reviewed by a native speaker. Terms: dictation is "диктовка", shortcut
-//! "сочетание клавиш", Settings "Настройки", meetings "встречи", and
-//! vocabulary "словарь".
+//! Russian (ru) interface strings; not yet reviewed by a native speaker.
+//! Terms: dictation is "диктовка", shortcut "сочетание клавиш", Settings
+//! "Настройки", meetings "встречи", and vocabulary "словарь".
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use super::screenshots::{Language, merged};
+
 /// The Russian strings by their English source.
 pub(super) fn table() -> &'static HashMap<&'static str, &'static str> {
     static TABLE: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    TABLE.get_or_init(|| TRANSLATIONS.iter().copied().collect())
+    TABLE.get_or_init(|| merged(TRANSLATIONS, Language::Russian))
 }
 
 #[rustfmt::skip]
@@ -97,6 +97,14 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Microphone key alone", "Клавиша микрофона отдельно"),
     ("Use the mic key in F5's spot on Mac laptops as a shortcut; once set, only Hex gets it", "Использовать клавишу микрофона на месте F5 на ноутбуках Mac как сочетание; после назначения её получает только Hex"),
     ("Annotate on GNOME", "Annotate в GNOME"),
+    (
+        "Record the screen under the pointer",
+        "Записывать экран под указателем",
+    ),
+    (
+        "On Wayland, a capture records the monitor you point at, and each monitor remembers its own screen",
+        "В Wayland запись идёт с монитора, на который вы указываете, и каждый монитор запоминает свой экран",
+    ),
     ("Restore clipboard on GNOME", "Восстановление буфера обмена в GNOME"),
     ("Put back what you copied before a dictation, through XWayland. Works only while XWayland is already running", "Возвращает через XWayland то, что было скопировано до диктовки. Работает, только когда XWayland уже запущен"),
     ("This desktop doesn't let Hex put your clipboard back after a paste. Turn on Labs › Restore clipboard on GNOME to try it.", "Это окружение не позволяет Hex восстановить буфер обмена после вставки. Чтобы попробовать, включите Лаборатория › Восстановление буфера обмена в GNOME."),
@@ -144,17 +152,19 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Tap Paste Last to paste the newest dictation or annotation; hold it to pick another", "Коснитесь «Вставить последний», чтобы вставить последнее диктуемое или аннотацию; удерживайте, чтобы выбрать другое"),
     ("Copy one of your last five dictations from the menu bar, under Paste Last Dictation", "Копируйте одну из пяти последних диктовок в строке меню, в разделе «Вставить последнюю диктовку»"),
     ("Stop when the call ends", "Останавливать по окончании звонка"),
-    ("Stop a recording Hex started on its own 30 s after the call app leaves the microphone and goes quiet", "Останавливает запись, которую Hex начал сам, через 30 с после того, как приложение звонка освободит микрофон и затихнет"),
     ("Hex stops recording in 30 s unless you keep recording.", "Hex остановит запись через 30 с, если вы не продолжите запись."),
     ("Record your screen, draw on it, and talk over it", "Записывайте экран, рисуйте на нём и комментируйте голосом"),
     ("Live text", "Текст в реальном времени"),
+    ("Faster live text", "Более быстрый текст в реальном времени"),
     ("Failure notices", "Уведомления об ошибках"),
+    ("Show live words sooner, and paste text from the same shorter lookahead, at a little more GPU work", "Показывайте слова в реальном времени раньше и вставляйте текст с тем же коротким упреждением, при немного большей работе GPU"),
     ("Live typing", "Ввод в реальном времени"),
     ("Live chapters", "Главы в реальном времени"),
     ("Open apps and press keys by voice", "Открывайте приложения и нажимайте клавиши голосом"),
     ("Try unfinished features. They may change or break.", "Попробуйте незавершённые функции. Они могут измениться или сломаться."),
     ("On while the Hex Microphone driver is installed. Uninstall the driver in Voice Filter to turn it off.", "Включено, пока установлен драйвер Hex Microphone. Чтобы выключить, удалите драйвер в Голосовом фильтре."),
     ("Names in the window you're dictating into help Hex spell them. Never saved", "Имена в окне, в которое вы диктуете, помогают Hex писать их правильно. Никогда не сохраняются"),
+    ("When you fix a name in text Hex just pasted, Hex adds the corrected spelling to Vocabulary. It watches only that field, for up to 5 minutes, and never sends it anywhere.", "Когда вы исправляете имя в тексте, который Hex только что вставил, Hex добавляет исправленное написание в словарь. Он следит только за этим полем, до 5 минут, и никуда его не отправляет."),
     ("Rewrite reads nearby text", "Переписывание читает текст рядом"),
     ("Rewrite uses the text around the cursor to spell names and terms right and fit where it pastes.", "Переписывание использует текст вокруг курсора, чтобы правильно писать имена и термины и подстраиваться под место вставки."),
     ("That text goes to the mode's OpenCode model, which may be a cloud provider. Password fields are never read.", "Этот текст отправляется модели OpenCode режима, которая может быть облачным провайдером. Поля паролей никогда не читаются."),
@@ -175,6 +185,9 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Remove filler words", "Убирать слова-паразиты"),
     ("Remove filler words such as um and uh from dictations, without an AI model", "Убирает из диктовок слова-паразиты вроде «um» и «uh» без модели ИИ"),
     ("Clean up with Apple Intelligence", "Очищать с помощью Apple Intelligence"),
+    ("Neutral voice", "Нейтральный голос"),
+    ("Rewrites on this Mac instead of any other rewrite.", "Переписывает на этом Mac вместо любого другого переписывания."),
+    ("Rewrite dictations in chosen modes into plain, neutral wording on this Mac, so your writing style doesn't show", "Переписывает диктовки в выбранных режимах в простую, нейтральную формулировку на этом Mac, чтобы ваш стиль письма не был заметен"),
     ("Sort and filter models", "Сортировка и фильтрация моделей"),
     ("By recommendation", "По рекомендации"),
     ("By size", "По размеру"),
@@ -376,6 +389,10 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Not granted", "Не назначено"),
     ("Your desktop did not grant every shortcut. Record another one, or free it in your desktop's keyboard settings.", "Окружение рабочего стола назначило не все сочетания. Запишите другое или освободите его в настройках клавиатуры окружения."),
     ("Your desktop has no shortcuts portal. Bind these commands in its keyboard settings.", "В вашем окружении рабочего стола нет портала сочетаний клавиш. Назначьте эти команды в его настройках клавиатуры."),
+    (
+        "Your desktop has no shortcuts portal. Bind this command in its keyboard settings.",
+        "В вашем окружении рабочего стола нет портала сочетаний клавиш. Назначьте эту команду в его настройках клавиатуры.",
+    ),
     ("Hold to dictate", "Удерживать для диктовки"),
     ("Bind start to the key press and stop to its release", "Назначьте start на нажатие клавиши, а stop — на её отпускание"),
     ("Toggle dictation", "Переключить диктовку"),
@@ -410,6 +427,7 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Auto uses the CPU because {device} stopped responding. Choose GPU to try it again.", "Авто использует CPU, потому что {device} перестал отвечать. Выберите GPU, чтобы попробовать снова."),
     ("Hex switched to the CPU because {device} failed during transcription (out of memory). Restart Hex to use the GPU again.", "Hex перешёл на CPU, потому что {device} дал сбой при транскрипции (недостаточно памяти). Перезапустите Hex, чтобы снова использовать GPU."),
     ("Hex uses the CPU because the graphics driver's Vulkan is missing or too old. Update the GPU driver to use the GPU.", "Hex использует CPU, потому что в графическом драйвере нет Vulkan или его версия слишком старая. Обновите драйвер видеокарты, чтобы использовать GPU."),
+    ("Hex crashed twice starting the GPU, so speech runs on the CPU. Choose Auto or GPU to try it again.", "Hex дважды аварийно завершился при запуске GPU, поэтому распознавание речи работает на CPU. Выберите Авто или GPU, чтобы попробовать снова."),
     ("Dictation HUD", "HUD диктовки"),
     ("Call recording", "Запись звонков"),
     ("Check for updates", "Проверить обновления"),
@@ -434,6 +452,41 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Term (e.g. cappuccino)", "Термин (например, капучино)"),
     ("Sounds like (e.g. capuchin, cap a chino)", "Звучит как (например, капуцин, капу чина)"),
     ("Up to 16 spellings per term are saved, and 64 characters per term or spelling.", "Сохраняется до 16 вариантов написания на термин и до 64 символов на термин или вариант."),
+    ("Import…", "Импортировать…"),
+    ("Export…", "Экспортировать…"),
+    ("Import vocabulary", "Импортировать словарь"),
+    ("Export vocabulary", "Экспортировать словарь"),
+    ("CSV files", "Файлы CSV"),
+    ("Text files", "Текстовые файлы"),
+    ("Couldn't import that file: {}", "Не удалось импортировать этот файл: {}"),
+    ("Couldn't export the vocabulary: {}", "Не удалось экспортировать словарь: {}"),
+    ("the file is larger than 1 MB", "файл больше 1 МБ"),
+    ("the file isn't UTF-8 text", "файл не является текстом UTF-8"),
+    ("a quote is never closed", "кавычка не закрыта"),
+    ("it isn't a regular file", "это не обычный файл"),
+    ("Couldn't save the vocabulary: {}", "Не удалось сохранить словарь: {}"),
+    ("No terms found in that file", "В этом файле не найдено терминов"),
+    ("No new terms in that file", "В этом файле нет новых терминов"),
+    ("No terms added; skipped {}", "Термины не добавлены; пропущено {}"),
+    ("Added 1 term", "Добавлен 1 термин"),
+    ("Added {} terms", "Добавлено терминов: {}"),
+    ("Added 1 term, skipped {}", "Добавлен 1 термин, пропущено {}"),
+    ("Added {added} terms, skipped {skipped}", "Добавлено терминов: {added}, пропущено {skipped}"),
+    ("Exported 1 term", "Экспортирован 1 термин"),
+    ("Exported {} terms", "Экспортировано терминов: {}"),
+    ("Updated 1 term", "Обновлён 1 термин"),
+    ("Updated {} terms", "Обновлено терминов: {}"),
+    ("Updated 1 term, skipped {}", "Обновлён 1 термин, пропущено {}"),
+    ("Updated {updated} terms, skipped {skipped}", "Обновлено терминов: {updated}, пропущено {skipped}"),
+    ("Added 1 term, updated {updated}", "Добавлен 1 термин, обновлено {updated}"),
+    ("Added {added} terms, updated {updated}", "Добавлено терминов: {added}, обновлено {updated}"),
+    ("Added 1 term, updated {updated}, skipped {skipped}", "Добавлен 1 термин, обновлено {updated}, пропущено {skipped}"),
+    ("Added {added} terms, updated {updated}, skipped {skipped}", "Добавлено терминов: {added}, обновлено {updated}, пропущено {skipped}"),
+    ("Vocabulary files", "Файлы словаря"),
+    ("Import terms from a CSV file in the Vocabulary sheet, or save the whole list as one", "Импортируйте термины из файла CSV в листе словаря или сохраните весь список как такой файл"),
+    ("Vocabulary menu", "Меню словаря"),
+    ("Add terms to Vocabulary from the menu bar, or open the Vocabulary sheet", "Добавляйте термины в словарь из меню-бара или открывайте лист словаря"),
+    ("Open vocabulary", "Открыть словарь"),
     ("History off", "История выключена"),
     ("Kept forever", "Хранится всегда"),
     ("Kept {}", "Хранится {}"),
@@ -479,7 +532,6 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Pastes your words as Hex heard them", "Вставляет ваши слова так, как их услышал Hex"),
     ("Only: {}", "Только: {}"),
     ("Copied", "Скопировано"),
-    ("Copy new", "Копировать новое"),
     ("Copy all", "Копировать всё"),
     ("Copy section", "Копировать раздел"),
     ("Chapters", "Главы"),
@@ -679,6 +731,10 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Press shortcut", "Нажмите сочетание"),
     ("Press to start dictating, press again to transcribe", "Нажмите, чтобы начать диктовку, нажмите снова, чтобы распознать"),
     ("Re-paste the most recent dictation", "Повторно вставить последнюю диктовку"),
+    (
+        "Start and stop an annotation",
+        "Начать и остановить аннотацию",
+    ),
     ("Refresh", "Обновить"),
     ("Replacement (e.g. OpenCode)", "Замена (например, OpenCode)"),
     ("Switch to {channel} {version}", "Перейти на {channel} {version}"),
@@ -735,7 +791,6 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("How it works", "Как это работает"),
     ("Transformations", "Преобразования"),
     ("Turn Hex on in every app whenever it opens", "Включать Hex во всех приложениях при каждом открытии"),
-    ("Up to date", "Последняя версия"),
     ("Update", "Обновить"),
     ("Use OpenCode default", "Использовать значение OpenCode по умолчанию"),
     ("Configure mouse shortcuts in your Wayland desktop using the hex commands", "Настройте сочетания с мышью в вашем окружении Wayland с помощью команд hex"),
@@ -772,10 +827,6 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Offer to record calls and save local transcripts", "Предлагать запись звонков и сохранять расшифровки локально"),
     ("Screen & System Audio Recording", "Запись экрана и системного звука"),
     ("Captures the other participants' audio", "Записывает звук других участников"),
-    ("Never offer", "Никогда не предлагать"),
-    ("Detected calls", "Обнаруженные звонки"),
-    ("Ask", "Спрашивать"),
-    ("Always record", "Всегда записывать"),
     ("Slack huddles", "Созвоны в Slack"),
     ("Recording automatically", "Автоматическая запись"),
     ("Required to hear the other participants.", "Нужно, чтобы слышать других участников."),
@@ -816,9 +867,6 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Recording failed.", "Запись не удалась."),
     ("Microphone is silent", "Микрофон молчит"),
     ("Started automatically", "Запущено автоматически"),
-    ("No speech yet", "Пока никто не говорил"),
-    ("{} min new", "новое: {} мин"),
-    ("{} sec new", "новое: {} с"),
     ("Your microphone was silent for part of this call. Another app may have been using it with voice processing, so your side may be missing.", "Ваш микрофон молчал часть этого звонка. Возможно, его использует другое приложение с обработкой голоса, поэтому вашей стороны может не хватать."),
     ("Markdown not saved.", "Markdown не сохранён."),
     ("Notes could not be written.", "Не удалось написать заметки."),
@@ -1368,6 +1416,7 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Sat", "Сб"),
     ("Vocabulary help", "Помощь со словарём"),
     ("Words on screen", "Слова на экране"),
+    ("Learn from corrections", "Обучение на исправлениях"),
     ("Free memory when idle", "Освобождать память при простое"),
     ("Left and right keys", "Левые и правые клавиши"),
     ("Model test details", "Подробности проверки моделей"),
@@ -1420,6 +1469,8 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("A command such as hex dictation start --print gets the text back when a dictation ends, without pasting or copying it", "Команда вроде hex dictation start --print получает текст по окончании диктовки, без вставки и копирования"),
     ("A finished Annotate capture copies as one zip file, without the video or audio", "Готовая запись Annotate копируется одним zip-файлом, без видео и звука"),
     ("Add a Stats button to History that summarizes the dictations you kept, with time saved against your typing speed, the hour you dictate most, a year-long heatmap, and all-time totals kept beyond History's retention (counts only, no text). The hex history stats command prints it too", "Добавляет в Историю кнопку «Статистика», которая подводит итог сохранённым диктовкам, с сэкономленным временем относительно скорости печати, часом, когда вы диктуете чаще всего, тепловой картой за год и итогами за всё время, которые хранятся дольше срока хранения Истории (только счётчики, без текста). Команда hex history stats тоже это выводит"),
+    ("Stats on History", "Статистика в истории"),
+    ("Show your dictation totals in a compact strip at the top of History. Needs Dictation stats.", "Показывает итоги диктовок в компактной полосе в верхней части истории. Требуется «Статистика диктовки»."),
     ("If a shortcut is made only of Ctrl, Alt, Shift, or the Windows key, with no letter or number key, pressing another key or clicking after the first second no longer ends the dictation; let go to finish", "Если сочетание состоит только из Ctrl, Alt, Shift или клавиши Windows, без буквенной или цифровой клавиши, нажатие другой клавиши или клик после первой секунды больше не завершает диктовку; отпустите, чтобы закончить"),
     ("Modes editor", "Редактор режимов"),
     ("Edit each mode's apps, corrections and OpenCode rewrite in a Modes pane", "Изменяйте приложения, исправления и переписывание OpenCode каждого режима на панели «Режимы»"),
@@ -1438,6 +1489,11 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Show in folder", "Показать в папке"),
     ("Could not transcribe {}", "Не удалось распознать {}"),
     ("A file could not be chosen.", "Не удалось выбрать файл."),
+    ("Agent tools for captures", "Инструменты агента для записей"),
+    ("Adds hex annotate zoom, inspect, frames, and skill so coding agents can read a capture closely", "Добавляет hex annotate zoom, inspect, frames и skill, чтобы агенты для кода могли внимательно изучить запись"),
+    ("Stop every call recording when the call ends", "Останавливать любую запись звонка при завершении звонка"),
+    ("Also stop an offered, calendar, or by-hand call recording 30 s after its call app leaves the microphone, even with Stop when the call ends off", "Также останавливает запись, начатую по предложению, из календаря или вручную, через 30 с после того, как её приложение звонка отпускает микрофон, даже если «Останавливать по окончании звонка» выключено"),
+    ("Also stop an offered or by-hand call recording 30 s after its call app leaves the microphone, even with Stop when the call ends off", "Также останавливает запись, начатую по предложению или вручную, через 30 с после того, как её приложение звонка отпускает микрофон, даже если «Останавливать по окончании звонка» выключено"),
 ];
 
 #[cfg(test)]

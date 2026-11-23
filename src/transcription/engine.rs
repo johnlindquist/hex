@@ -8,6 +8,7 @@
 //! order on one thread, because a live stream holds the model's compute lease.
 
 use std::collections::VecDeque;
+mod slot;
 mod streaming;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -19,9 +20,10 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{Result, eyre};
 use transcribe_cpp::CancelToken;
 
-/// The model the engine owns: macOS keeps its warm, switchable transcriber
+use slot::{HeldState, ModelSlot};
 use streaming::*;
 
+/// The model the engine owns: macOS keeps its warm, switchable transcriber
 /// (GGUF or Apple Speech); Linux and Windows load one GGUF model.
 #[cfg(target_os = "macos")]
 pub(crate) type Model = crate::transcription::WarmTranscriber;
@@ -101,6 +103,14 @@ pub(crate) enum Command {
         stream: u64,
         samples: Vec<f32>,
     },
+    /// Raises the clip samples ignored at the stream's head, as Hex's output
+    /// suppression only reports that it took effect after the stream began.
+    /// The value only ever increases and is applied before the finalize.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    IgnoreHead {
+        stream: u64,
+        head: usize,
+    },
     Cancel {
         stream: u64,
     },
@@ -137,9 +147,12 @@ pub(crate) enum Command {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Run(Box<dyn FnOnce(&mut Model) + Send>),
     /// Drops the model, then loads `selection` in its place, for a GPU with
-    /// no room for both (#1170).
+    /// no room for both (#1170). Replies once the load commits or fails.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
-    Reload(crate::transcription::models::TranscriptionSelection),
+    Reload {
+        selection: crate::transcription::models::TranscriptionSelection,
+        reply: SyncSender<std::result::Result<(), String>>,
+    },
     Background {
         /// The dictation generation when the work was submitted.
         generation: u64,
@@ -204,27 +217,42 @@ impl Partials {
     }
 }
 
-/// What the worker shares with a yielding stream's owner: whether the stream
-/// is still open on the engine, and its latest partial text.
-#[derive(Clone)]
-pub(crate) struct Yielding {
-    open: Arc<AtomicBool>,
+/// State shared between a yielding stream's owner and the engine worker.
+struct YieldingState {
+    open: AtomicBool,
     /// Samples the model has consumed.
-    consumed: Arc<AtomicUsize>,
+    consumed: AtomicUsize,
     partials: Partials,
 }
 
+/// The engine worker's unique handle to a yielding stream. Dropping it always
+/// marks the stream closed, so a feed error, cancel, preemption, refused
+/// begin, or shutdown can never leave the owner waiting on a dead stream.
+pub(crate) struct Yielding(Arc<YieldingState>);
+
 impl Yielding {
-    fn new() -> Self {
-        Self {
-            open: Arc::new(AtomicBool::new(true)),
-            consumed: Arc::default(),
+    fn pair() -> (Self, Arc<YieldingState>) {
+        let state = Arc::new(YieldingState {
+            open: AtomicBool::new(true),
+            consumed: AtomicUsize::default(),
             partials: Partials::default(),
-        }
+        });
+        (Self(state.clone()), state)
     }
 
-    fn close(&self) {
-        self.open.store(false, Ordering::Release);
+    fn record_consumed(&self, samples: usize, partial: Partial) {
+        self.0.consumed.fetch_add(samples, Ordering::AcqRel);
+        self.0.partials.publish(partial);
+    }
+
+    fn close(self) {
+        drop(self);
+    }
+}
+
+impl Drop for Yielding {
+    fn drop(&mut self) {
+        self.0.open.store(false, Ordering::Release);
     }
 }
 
@@ -235,7 +263,7 @@ impl Yielding {
 pub(crate) struct YieldingStream {
     id: u64,
     cancel: CancelToken,
-    yielding: Yielding,
+    state: Arc<YieldingState>,
     sent: usize,
     finished: bool,
     commands: Sender<Command>,
@@ -245,7 +273,7 @@ impl YieldingStream {
     /// Whether the stream is still open on the engine. Once dictation closes
     /// it, its audio must be transcribed some other way.
     pub(crate) fn open(&self) -> bool {
-        self.yielding.open.load(Ordering::Acquire)
+        self.state.open.load(Ordering::Acquire)
     }
 
     pub(crate) fn feed(&mut self, samples: &[f32]) {
@@ -263,12 +291,12 @@ impl YieldingStream {
     /// keeps a dictation request from queueing behind a pile of feeds.
     pub(crate) fn in_flight(&self) -> usize {
         self.sent
-            .saturating_sub(self.yielding.consumed.load(Ordering::Acquire))
+            .saturating_sub(self.state.consumed.load(Ordering::Acquire))
     }
 
     /// The model's latest text for the audio fed so far.
     pub(crate) fn partial(&self) -> Option<Partial> {
-        self.yielding.partials.latest()
+        self.state.partials.latest()
     }
 
     /// Finalizes the stream within `deadline`. It fails with [`PREEMPTED`]
@@ -396,9 +424,6 @@ pub struct TranscriptionEngine {
     /// Dictation requests sent so far. Background work submitted before a
     /// newer request yields to it.
     requests: Arc<AtomicU64>,
-    /// Whether the loaded model can stream on its device; while it is parked,
-    /// whether its definition advertises streaming.
-    streams: Arc<AtomicBool>,
     /// Whether dictation streams publish their text as they go, asked as
     /// each stream begins: Labs › Live text, or a
     /// [`crate::dictation::live_text::Demand`].
@@ -411,8 +436,7 @@ pub struct TranscriptionEngine {
     thread: Option<JoinHandle<()>>,
 }
 
-/// The GGUF selection the engine's model held after its last command.
-type Held = Arc<Mutex<Option<crate::transcription::models::TranscriptionSelection>>>;
+type Held = Arc<Mutex<HeldState>>;
 
 /// A live stream for one capture. Feed it the capture's 16 kHz audio in order,
 /// then either [`TranscriptionEngine::finish`] or drop it to cancel.
@@ -450,6 +474,19 @@ impl LiveStream {
         let _ = self.commands.send(Command::Feed {
             stream: self.id,
             samples: samples.to_vec(),
+        });
+    }
+
+    /// Raises the clip samples the opening check ignores for this stream. It
+    /// only ever increases, and the engine applies the latest value before it
+    /// finalizes; a value sent after the stream ended is ignored. An
+    /// `IgnoreHead` sent before `finish` is handled before the `Finish` on the
+    /// same channel, so it is seen; one sent after cannot be.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn raise_ignored_head(&self, head: usize) {
+        let _ = self.commands.send(Command::IgnoreHead {
+            stream: self.id,
+            head,
         });
     }
 }
@@ -536,8 +573,7 @@ impl PendingTranscript {
 
 impl TranscriptionEngine {
     pub fn start(model: Model) -> Result<Self> {
-        let streams = model.stream_options().is_some();
-        Self::with_model(Some(model), None, streams)
+        Self::with_slot(ModelSlot::loaded(model))
     }
 
     /// Starts with no model loaded, remembering `selection` to reload on the
@@ -549,44 +585,27 @@ impl TranscriptionEngine {
     pub fn start_parked(
         selection: crate::transcription::models::TranscriptionSelection,
     ) -> Result<Self> {
-        let streams = crate::transcription::models::validate(&selection)
-            .is_ok_and(|definition| definition.streams);
-        Self::with_model(None, Some(selection), streams)
+        Self::with_slot(ModelSlot::parked(selection))
     }
 
-    /// The engine and its worker thread: `model` loaded, or `parked` waiting
-    /// for the first command that needs it. `streams` is what the thread
-    /// publishes until the model loads.
-    fn with_model(
-        model: Option<Model>,
-        parked: Option<crate::transcription::models::TranscriptionSelection>,
-        streams: bool,
-    ) -> Result<Self> {
-        let streams = Arc::new(AtomicBool::new(streams));
+    /// The engine and its worker thread initialized with `slot`.
+    fn with_slot(slot: ModelSlot) -> Result<Self> {
         let (commands, receiver) = mpsc::channel();
         let requests = Arc::new(AtomicU64::new(0));
         let running = Running::default();
         let stalled = Arc::new(AtomicBool::new(false));
-        let held = Held::new(Mutex::new(
-            model
-                .as_ref()
-                .and_then(|model| model.gguf_selection().cloned())
-                .or_else(|| parked.clone()),
-        ));
+        let held = Held::new(Mutex::new(slot.snapshot()));
         let dictating = Arc::new(AtomicBool::new(false));
         // The model the engine adopts speaks for dictation (#1984). A parked
         // engine has no model, so it leaves the last word alone.
-        if let Some(model) = &model {
+        if let Some(model) = slot.model() {
             publish_out_of_memory(model);
         }
         let worker = Worker {
-            model,
-            parked,
-            reload_error: None,
+            slot,
             idle_since: Instant::now(),
             running: running.clone(),
             stalled: stalled.clone(),
-            streams: streams.clone(),
             requests: requests.clone(),
             held: held.clone(),
             dictating: dictating.clone(),
@@ -599,7 +618,6 @@ impl TranscriptionEngine {
             running,
             stalled,
             requests,
-            streams,
             live_text: || {
                 crate::labs::live_text()
                     || crate::labs::stop_phrase()
@@ -623,9 +641,12 @@ impl TranscriptionEngine {
             running: Running::default(),
             stalled: Arc::default(),
             requests: Arc::default(),
-            streams: Arc::new(AtomicBool::new(true)),
             live_text: || false,
-            held: Held::default(),
+            held: Held::new(Mutex::new(HeldState::Loaded {
+                selection: None,
+                backend: None,
+                streams: true,
+            })),
             dictating: Arc::default(),
             next_stream: AtomicU64::new(0),
             deadlines: Deadlines::PRODUCTION,
@@ -638,7 +659,7 @@ impl TranscriptionEngine {
     #[cfg(test)]
     pub(crate) fn for_test_without_streaming() -> (Self, Receiver<Command>) {
         let (engine, receiver) = Self::for_test();
-        engine.streams.store(false, Ordering::Release);
+        *engine.held.lock().unwrap_or_else(|e| e.into_inner()) = HeldState::Empty;
         (engine, receiver)
     }
 
@@ -665,7 +686,7 @@ impl TranscriptionEngine {
     /// clip samples: Hex's own sounds at the capture's head, never a lost
     /// opening.
     pub fn begin_ignoring_head(&self, head_ignored: usize) -> Option<LiveStream> {
-        if !self.streams.load(Ordering::Acquire) {
+        if !self.streams() {
             return None;
         }
         let id = self.next_stream.fetch_add(1, Ordering::Relaxed) + 1;
@@ -693,32 +714,35 @@ impl TranscriptionEngine {
     /// Opens a stream that gives way to dictation, when the loaded model can
     /// stream on this device. See [`YieldingStream`].
     pub(crate) fn begin_yielding(&self) -> Option<YieldingStream> {
-        if !self.streams.load(Ordering::Acquire) {
+        if !self.streams() {
             return None;
         }
         let id = self.next_stream.fetch_add(1, Ordering::Relaxed) + 1;
         let cancel = CancelToken::new();
-        let yielding = Yielding::new();
+        let (yielding, state) = Yielding::pair();
         self.commands
             .send(Command::BeginYielding {
                 stream: id,
                 cancel: cancel.clone(),
-                yielding: yielding.clone(),
+                yielding,
             })
             .ok()?;
         Some(YieldingStream {
             id,
             cancel,
-            yielding,
+            state,
             sent: 0,
             finished: false,
             commands: self.commands.clone(),
         })
     }
 
-    /// Whether the loaded model can stream on its device.
+    /// Whether the loaded model (or parked model) can stream on its device.
     pub(crate) fn streams(&self) -> bool {
-        self.streams.load(Ordering::Acquire)
+        self.held
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .streams()
     }
 
     /// Finishes a capture with its complete 16 kHz clip. Without a stream,
@@ -833,15 +857,18 @@ impl TranscriptionEngine {
 
     /// Replaces the model with `selection` after every command already sent:
     /// the old one is dropped first, so its memory is free for the new one.
-    /// Commands sent meanwhile wait for the load.
+    /// Commands sent meanwhile wait for the load, and the returned receiver
+    /// reports whether the reload committed or failed.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn reload(
         &self,
         selection: crate::transcription::models::TranscriptionSelection,
-    ) -> Result<()> {
+    ) -> Result<Receiver<std::result::Result<(), String>>> {
+        let (reply, receiver) = mpsc::sync_channel(1);
         self.commands
-            .send(Command::Reload(selection))
-            .map_err(|_| eyre!("transcription engine stopped"))
+            .send(Command::Reload { selection, reply })
+            .map_err(|_| eyre!("transcription engine stopped"))?;
+        Ok(receiver)
     }
 
     /// Drops the engine on its own thread, so replacing the model from the
@@ -870,7 +897,8 @@ impl TranscriptionEngine {
     }
 
     /// Whether the model holds the GGUF `selection` as of its last finished
-    /// command. Readable while dictation runs, unlike the model itself.
+    /// command (including a parked model, never a failed reload). Readable
+    /// while dictation runs, unlike the model itself.
     pub(crate) fn holds(
         &self,
         selection: &crate::transcription::models::TranscriptionSelection,
@@ -878,8 +906,7 @@ impl TranscriptionEngine {
         self.held
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-            == Some(selection)
+            .holds(selection)
     }
 }
 
@@ -891,7 +918,16 @@ impl TranscriptionEngine {
         self.held
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .clone()
+            .selection()
+    }
+
+    /// Where the model held after its last finished command runs, for
+    /// `hex status`: `None` before a load and once it is unloaded.
+    pub(crate) fn held_backend(&self) -> Option<crate::transcription::SpeechBackend> {
+        self.held
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .backend()
     }
 
     /// Why a live stream cannot open for a capture, when it can't: the
@@ -899,26 +935,10 @@ impl TranscriptionEngine {
     /// not on the device it loaded on (a CPU, or a GPU whose stream probe
     /// failed). `None` when a stream can open.
     pub(crate) fn stream_refusal(&self) -> Option<&'static str> {
-        if self.streams.load(Ordering::Acquire) {
-            return None;
-        }
-        match self.held_selection() {
-            Some(selection) => {
-                use crate::transcription::models::{TranscriptionModelId, definition};
-                // An imported model's catalog entry says it can't stream, but
-                // its GGUF is only checked when it loads; blame the device.
-                if !matches!(selection.model, TranscriptionModelId::Custom(_))
-                    && !definition(selection.model).streams
-                {
-                    Some("the selected speech model doesn't stream")
-                } else {
-                    Some(
-                        "the speech model isn't streaming on this device (a CPU, or a GPU that could not start streaming)",
-                    )
-                }
-            }
-            None => Some("no streaming speech model is loaded"),
-        }
+        self.held
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .stream_refusal()
     }
 }
 
@@ -1052,18 +1072,13 @@ impl Drop for TranscriptionEngine {
 }
 
 struct Worker {
-    /// `None` while unloaded for idleness (Labs › Free memory when idle) or
-    /// after its reload failed.
-    model: Option<Model>,
-    /// What an unloaded model reloads, before the next command that needs it.
-    parked: Option<crate::transcription::models::TranscriptionSelection>,
-    /// Why the last reload failed, so the job it failed can name it.
-    reload_error: Option<String>,
+    /// Explicit lifecycle of the owned model: empty, loaded, parked, or
+    /// reload-failed.
+    slot: ModelSlot,
     /// When the last command ended.
     idle_since: Instant,
     running: Running,
     stalled: Arc<AtomicBool>,
-    streams: Arc<AtomicBool>,
     requests: Arc<AtomicU64>,
     held: Held,
     dictating: Arc<AtomicBool>,
@@ -1118,15 +1133,18 @@ impl Worker {
                     cancel,
                     yielding,
                 } => {
-                    // Anything already waiting comes first.
+                    // Anything already waiting comes first. Dropping `yielding`
+                    // on any exit closes the stream's open flag.
                     if next.is_empty() {
-                        self.yielding_stream(stream, &cancel, &yielding, &commands, &mut next);
+                        self.yielding_stream(stream, &cancel, yielding, &commands, &mut next);
                     }
-                    yielding.close();
                 }
                 Command::FinishYielding { reply, .. } => {
                     let _ = reply.send(Err(PREEMPTED.into()));
                 }
+                // The stream already ended, so its finalize cannot see a
+                // later head. It is dropped.
+                Command::IgnoreHead { .. } => {}
                 Command::Finish {
                     stream,
                     clip,
@@ -1148,17 +1166,42 @@ impl Worker {
                 Command::Foreground { clip, offline, job } => {
                     self.run_offline(clip, offline, Source::Offline, job);
                 }
+                #[cfg(target_os = "macos")]
+                Command::Run(work) => {
+                    if let Some(model) = self.slot.model_mut() {
+                        work(model);
+                    } else {
+                        // Switching from a parked or failed-reload slot runs
+                        // on a fresh warm transcriber so a broken parked model
+                        // cannot block a switch; if activation fails, the
+                        // previous slot stays intact.
+                        let mut model = Model::default();
+                        work(&mut model);
+                        if model.active().is_some() {
+                            self.slot = ModelSlot::loaded(model);
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
                 Command::Run(work) => {
                     if let Some(model) = self.model() {
                         work(model);
                     }
                 }
-                Command::Reload(selection) => {
+                Command::Reload { selection, reply } => {
                     tracing::info!(model = ?selection.model, "replacing the speech model in place");
-                    self.model = None;
-                    self.parked = Some(selection);
-                    // A failed load stays parked; the next command tries again.
-                    let _ = self.model();
+                    // Drop the running model first so its GPU memory is free
+                    // before loading the replacement.
+                    self.slot = ModelSlot::parked(selection);
+                    let result = match self.model() {
+                        Some(_) => Ok(()),
+                        None => Err(self
+                            .slot
+                            .reload_error()
+                            .unwrap_or("the speech model could not be reloaded")
+                            .to_string()),
+                    };
+                    let _ = reply.send(result);
                 }
                 Command::Background { generation, work } => {
                     let current = self.requests.load(Ordering::Acquire) == generation;
@@ -1170,11 +1213,16 @@ impl Worker {
             }
             // Any command may load or switch the model. A parked engine has
             // no model, so it leaves the last word alone.
-            if let Some(model) = self.model.as_ref() {
+            if let Some(model) = self.slot.model() {
                 publish_out_of_memory(model);
             }
-            self.publish_streams();
-            self.publish_selection();
+            // Only when the engine is quiet: a queued Begin, deferred work,
+            // or a recording must never wait behind the probe.
+            if next.is_empty() && !recording() {
+                self.refresh_stream();
+            }
+            self.slot.sync_streams();
+            self.publish_slot();
             self.idle_since = Instant::now();
         }
     }
@@ -1188,7 +1236,14 @@ impl Worker {
                 // Settings may turn it on meanwhile.
                 match commands.recv_timeout(IDLE_RECHECK) {
                     Ok(command) => return Some(command),
-                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Timeout) => {
+                        // An idle tick, so a toggle change while nothing
+                        // records reaches the model before a capture opens.
+                        if !recording() {
+                            self.refresh_stream();
+                        }
+                        continue;
+                    }
                     Err(RecvTimeoutError::Disconnected) => return None,
                 }
             };
@@ -1200,8 +1255,11 @@ impl Worker {
                 Ok(command) => return Some(command),
                 Err(RecvTimeoutError::Disconnected) => return None,
                 Err(RecvTimeoutError::Timeout) => {
-                    if self.idle_since.elapsed() >= after && !recording() {
-                        self.park();
+                    if !recording() {
+                        self.refresh_stream();
+                        if self.idle_since.elapsed() >= after {
+                            self.park();
+                        }
                     }
                 }
             }
@@ -1211,25 +1269,28 @@ impl Worker {
     /// Unloads a loaded GGUF model, freeing its memory, and keeps its
     /// selection to reload. Apple Speech stays: it holds no model of Hex's.
     fn park(&mut self) {
-        let Some(selection) = self
-            .model
-            .as_ref()
-            .and_then(|model| model.gguf_selection())
-            .cloned()
-        else {
+        let Some(selection) = self.slot.park() else {
             return;
         };
-        self.model = None;
         tracing::info!(model = ?selection.model, "unloaded the idle speech model");
-        self.parked = Some(selection);
+        // The device goes with the model: `hex status` must not keep naming it.
+        self.publish_slot();
     }
 
-    /// The model, reloading an unloaded one first. Audio sent meanwhile waits
-    /// in the queue, so nothing recorded is lost.
+    /// Adopts a changed Labs › Faster live text or env geometry while
+    /// nothing records. A loaded model re-probes; an unloaded one takes the
+    /// change when it next loads, and one the gated probe never cleared
+    /// stays off.
+    fn refresh_stream(&mut self) {
+        if let Some(model) = self.slot.model_mut() {
+            model.refresh_stream();
+        }
+    }
+
+    /// The model, reloading an unloaded or previously failed one first. Audio
+    /// sent meanwhile waits in the queue, so nothing recorded is lost.
     fn model(&mut self) -> Option<&mut Model> {
-        if self.model.is_none()
-            && let Some(selection) = self.parked.clone()
-        {
+        if let Some(selection) = self.slot.reload_target() {
             let started = Instant::now();
             match reload(&selection) {
                 Ok(model) => {
@@ -1238,43 +1299,28 @@ impl Worker {
                         load_ms = started.elapsed().as_millis(),
                         "reloaded the speech model"
                     );
-                    self.model = Some(model);
-                    self.parked = None;
-                    self.reload_error = None;
+                    self.slot = ModelSlot::loaded(model);
                 }
                 Err(error) => {
                     tracing::warn!(
                         error = format!("{error:#}"),
                         "could not reload the speech model"
                     );
-                    self.reload_error = Some(error.to_string());
+                    self.slot = ModelSlot::ReloadFailed {
+                        selection,
+                        error: error.to_string(),
+                    };
                 }
             }
+            self.publish_slot();
         }
-        self.model.as_mut()
+        self.slot.model_mut()
     }
 
-    /// Whether the model can stream, kept as it was while it is unloaded so
-    /// the next capture still opens a stream (which reloads it).
-    fn publish_streams(&self) {
-        if let Some(model) = &self.model {
-            self.streams
-                .store(model.stream_options().is_some(), Ordering::Release);
-        }
-    }
-
-    /// Any command may load or switch the model (a dictation job activates
-    /// its selection), so the held selection is refreshed after each. An
-    /// unloaded model still counts as held: work sent to it reloads it.
-    fn publish_selection(&self) {
-        let current = match &self.model {
-            Some(model) => model.gguf_selection(),
-            None => self.parked.as_ref(),
-        };
-        let mut held = self.held.lock().unwrap_or_else(|error| error.into_inner());
-        if held.as_ref() != current {
-            *held = current.cloned();
-        }
+    /// Publishes the current model slot's selection, device, and streaming
+    /// capability atomically.
+    fn publish_slot(&self) {
+        *self.held.lock().unwrap_or_else(|error| error.into_inner()) = self.slot.snapshot();
     }
 
     fn run_offline(&mut self, clip: Vec<f32>, offline: Offline, source: Source, job: Job) {
@@ -1310,10 +1356,10 @@ impl Worker {
             .model()
             .and_then(|model| model.stream_options().cloned());
         let Some(options) = options else {
-            let loaded = self.model.is_some();
+            let loaded = self.slot.model().is_some();
             let model_streams = self
-                .model
-                .as_ref()
+                .slot
+                .model()
                 .and_then(|model| model.gguf_selection())
                 // An imported model's catalog entry says it can't stream, but
                 // its GGUF is only checked when it loads.
@@ -1343,13 +1389,16 @@ impl Worker {
         let begun = Instant::now();
         let mut stats = FeedStats::default();
         let stalled = &self.stalled;
-        let Some(model) = self.model.as_mut() else {
+        let Some(model) = self.slot.model_mut() else {
             return;
         };
         let trailing_silence = stream_trailing_silence(model);
         let closing_mark = stream_requires_closing_mark(model);
+        let opening_slack = stream_opening_slack(model);
         let ended = model.with_stream(&options, cancel, |stream| {
-            let mut capped = PauseCap::new(stream, trailing_silence).ignoring_head(head_ignored);
+            let mut capped = PauseCap::new(stream, trailing_silence)
+                .ignoring_head(head_ignored)
+                .opening_slack(opening_slack);
             let ended = drive_stream(
                 id,
                 &mut capped,
@@ -1422,21 +1471,21 @@ impl Worker {
         &mut self,
         id: u64,
         cancel: &CancelToken,
-        yielding: &Yielding,
+        yielding: Yielding,
         commands: &Receiver<Command>,
         next: &mut VecDeque<Command>,
     ) {
-        let Some(options) = self
-            .model()
-            .and_then(|model| model.stream_options().cloned())
-        else {
-            return;
-        };
         if cancel.is_cancelled() {
             return;
         }
+        let options = self
+            .model()
+            .and_then(|model| model.stream_options().cloned());
+        let Some(options) = options else {
+            return;
+        };
         self.running.enter(cancel);
-        let Some(model) = self.model.as_mut() else {
+        let Some(model) = self.slot.model_mut() else {
             return;
         };
         let ended = model.with_stream(&options, cancel, |stream| {
@@ -1459,7 +1508,7 @@ impl Worker {
     ) {
         self.running.enter(&job.cancel);
         let Some(model) = self.model() else {
-            let reason = match &self.reload_error {
+            let reason = match self.slot.reload_error() {
                 Some(error) => format!("the speech model could not be reloaded: {error}"),
                 None => "the speech model could not be reloaded".into(),
             };
@@ -1475,7 +1524,8 @@ impl Worker {
             finish_ms: started.elapsed().as_millis() as u64,
         });
         // An offline run may switch the model (macOS activates a selection).
-        self.publish_streams();
+        self.slot.sync_streams();
+        self.publish_slot();
         job.finish(result);
     }
 }
@@ -1629,6 +1679,18 @@ mod tests {
             .collect()
     }
 
+    /// A clip with `(start_ms, length_ms)` tone bursts in order, then the
+    /// 200 ms tail after a stop.
+    fn sparse_speech(bursts: &[(usize, usize)]) -> Vec<f32> {
+        let mut clip = Vec::new();
+        for &(start_ms, length_ms) in bursts {
+            clip.resize(start_ms * 16, 0.0);
+            clip.extend(tone(length_ms * 16));
+        }
+        clip.extend(vec![0.0; 3_200]);
+        clip
+    }
+
     #[test]
     fn a_dictation_stream_hears_only_the_ends_of_long_pauses() {
         // Quiet first, as the pre-roll is, so the noise floor starts low.
@@ -1715,12 +1777,32 @@ mod tests {
         text_start_ms: Option<u64>,
         text_end_ms: u64,
     ) -> Result<String, String> {
+        finish_with_opening_slack(
+            clip,
+            head_ignored,
+            text_start_ms,
+            text_end_ms,
+            UNTRANSCRIBED_SLACK_SAMPLES,
+        )
+    }
+
+    /// As above, with `slack` samples of speech the stream may leave before
+    /// its text starts, for a model whose first-word time lags its audio.
+    fn finish_with_opening_slack(
+        clip: &[f32],
+        head_ignored: usize,
+        text_start_ms: Option<u64>,
+        text_end_ms: u64,
+        slack: usize,
+    ) -> Result<String, String> {
         let mut fake = FakeStream {
             text_start_ms,
             text_end_ms: Some(text_end_ms),
             ..FakeStream::default()
         };
-        let mut capped = PauseCap::new(&mut fake, 0).ignoring_head(head_ignored);
+        let mut capped = PauseCap::new(&mut fake, 0)
+            .ignoring_head(head_ignored)
+            .opening_slack(slack);
         for chunk in clip.chunks(1_600) {
             capped.feed(chunk).unwrap();
         }
@@ -1812,6 +1894,234 @@ mod tests {
     }
 
     #[test]
+    fn parakeets_late_first_word_time_is_not_a_lost_opening() {
+        // An illustrative late first-word timestamp: speech at 220-860 ms and
+        // text at 1280 ms is a 1,060 ms lag, just past the top of the measured
+        // 100-1000 ms range. With no pre-roll to exclude, this is a stream
+        // that lost nothing, as the CPU measurement suggests; the 400 ms
+        // slack refused it.
+        let mut clip = vec![0.0; 3_520]; // 220 ms
+        clip.extend(tone(10_240)); // speech, 220-860 ms
+        clip.extend(vec![0.0; 6_720]); // pause to the text, 860-1280 ms
+        clip.extend(tone(5_120)); // the text's own speech, 1280-1600 ms
+        clip.extend(vec![0.0; 3_200]);
+        assert!(
+            finish_with_text_bounds(&clip, Some(1_280), 1_600)
+                .is_err_and(|reason| reason.contains("precedes")),
+            "the tight slack is what refused this stream"
+        );
+        assert_eq!(
+            finish_with_opening_slack(&clip, 0, Some(1_280), 1_600, PARAKEET_OPENING_SLACK_SAMPLES),
+            Ok(format!("streamed {}", clip.len()))
+        );
+    }
+
+    #[test]
+    fn parakeets_opening_slack_still_refuses_a_lost_opening() {
+        // 3 s of speech the stream lost, then a 1 s pause, then the text at
+        // 4.5 s: more than 1.2 s of slack plus the 300 ms threshold before t0.
+        let mut clip = vec![0.0; 8_000]; // 500 ms
+        clip.extend(tone(48_000)); // the lost speech, 500-3500 ms
+        clip.extend(vec![0.0; 16_000]); // a 1 s pause
+        clip.extend(tone(16_000)); // the text's own speech, 4500-5500 ms
+        clip.extend(vec![0.0; 3_200]);
+        let result =
+            finish_with_opening_slack(&clip, 0, Some(4_500), 5_500, PARAKEET_OPENING_SLACK_SAMPLES);
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|reason| reason.contains("precedes")),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn parakeets_opening_slack_edge_is_one_frame() {
+        use crate::transcription::pause_segmenter::FRAME_SAMPLES;
+        // The 1.2 s slack with the 300 ms threshold: a speech frame counts
+        // only while it ends strictly before t0 - 1.2 s, and the span rule
+        // refuses speech that opens 300 ms or more before that edge once
+        // 100 ms is detected before the 400 ms edge. So 15 frames (300 ms)
+        // ending one frame before the edge are refused, while 14 (280 ms)
+        // ending at the edge are kept: the edge frame is not counted and the
+        // span stays under 300 ms.
+        let text_start_ms: u64 = 3_000;
+        let covered = text_start_ms as usize * 16 - PARAKEET_OPENING_SLACK_SAMPLES; // 28_800
+        let frame: usize = FRAME_SAMPLES;
+        let threshold = UNTRANSCRIBED_SPEECH_SAMPLES / frame; // 15 frames
+        for (speech_end, frames, refused) in [
+            (covered - frame, threshold, true), // 28_480: all 15 frames count
+            (covered, threshold - 1, false),    // 28_800: 13 count, 280 ms span
+        ] {
+            let mut clip = vec![0.0; speech_end - frames * frame];
+            clip.extend(tone(frames * frame)); // the lost opening
+            clip.extend(vec![0.0; 4_800]); // the pause to the text
+            let result = finish_with_opening_slack(
+                &clip,
+                0,
+                Some(text_start_ms),
+                text_start_ms + 300,
+                PARAKEET_OPENING_SLACK_SAMPLES,
+            );
+            assert_eq!(
+                result
+                    .as_ref()
+                    .is_err_and(|reason| reason.contains("precedes")),
+                refused,
+                "{speech_end}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parakeets_sparse_opening_spanning_1800_ms_is_refused() {
+        // Production's waited case: text at 3.92 s with 720 ms of speech
+        // detected from 920 ms, but only 240 ms of it before the slack's edge
+        // at 2.72 s, under the 300 ms threshold. Its span alone refuses it.
+        let clip = sparse_speech(&[
+            (920, 80),
+            (1_620, 80),
+            (2_320, 80),
+            (2_920, 200),
+            (3_220, 280),
+        ]);
+        let result =
+            finish_with_opening_slack(&clip, 0, Some(3_920), 4_220, PARAKEET_OPENING_SLACK_SAMPLES);
+        assert!(
+            result.as_ref().is_err_and(
+                |reason| reason.contains("speech from 920 ms precedes it and spans 1800 ms")
+            ),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn parakeets_sparse_opening_spanning_3080_ms_is_refused() {
+        // The other waited case: text at 4.48 s with 520 ms of speech
+        // detected from 200 ms, but only 240 ms of it before the slack's edge
+        // at 3.28 s, under the 300 ms threshold. Its span alone refuses it.
+        let clip = sparse_speech(&[
+            (200, 80),
+            (900, 80),
+            (1_600, 80),
+            (3_400, 140),
+            (3_920, 140),
+        ]);
+        let result =
+            finish_with_opening_slack(&clip, 0, Some(4_480), 4_780, PARAKEET_OPENING_SLACK_SAMPLES);
+        assert!(
+            result.as_ref().is_err_and(
+                |reason| reason.contains("speech from 200 ms precedes it and spans 3080 ms")
+            ),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn parakeets_sparse_frames_cannot_hide_a_dense_lost_opening() {
+        // Four old frames (80 ms) around 1 s, then 800 ms of lost speech from
+        // 2.8 s to 3.6 s, text at 4 s. Counting only before the 1.2 s edge
+        // (2.8 s) sees 80 ms and accepts; counting before the 400 ms edge
+        // (3.6 s) sees the dense speech, so the 1.84 s span refuses it.
+        let clip = sparse_speech(&[(960, 80), (2_800, 800)]);
+        let result =
+            finish_with_opening_slack(&clip, 0, Some(4_000), 4_300, PARAKEET_OPENING_SLACK_SAMPLES);
+        assert!(
+            result.as_ref().is_err_and(
+                |reason| reason.contains("speech from 960 ms precedes it and spans 1840 ms")
+            ),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn parakeets_span_rule_needs_100_ms_before_the_old_edge() {
+        // Speech at 400 ms starts 1.4 s before the 1.2 s edge at 1.8 s. Four
+        // frames (80 ms) before the 400 ms edge are under the rule's minimum
+        // and kept; five (100 ms) are refused.
+        for (frames, refused) in [(4usize, false), (5, true)] {
+            let mut clip = vec![0.0; 400 * 16];
+            clip.extend(tone(frames * 20 * 16));
+            clip.extend(vec![0.0; 3_200]);
+            let result = finish_with_opening_slack(
+                &clip,
+                0,
+                Some(3_000),
+                3_300,
+                PARAKEET_OPENING_SLACK_SAMPLES,
+            );
+            if refused {
+                assert!(
+                    result.as_ref().is_err_and(|reason| reason
+                        .contains("speech from 400 ms precedes it and spans 1400 ms")),
+                    "{frames}: {result:?}"
+                );
+            } else {
+                assert_eq!(result, Ok(format!("streamed {}", clip.len())), "{frames}");
+            }
+        }
+    }
+
+    #[test]
+    fn parakeets_span_rule_edge_is_one_frame() {
+        // Text at 3 s puts the 1.2 s edge at 1.8 s: speech starting exactly
+        // 300 ms before it is refused, one frame later (280 ms) is kept. Both
+        // have the rule's 100 ms minimum before the 400 ms edge.
+        for (speech_start_ms, refused) in [(1_500usize, true), (1_520, false)] {
+            let mut clip = vec![0.0; speech_start_ms * 16];
+            clip.extend(tone(100 * 16));
+            clip.extend(vec![0.0; 3_200]);
+            let result = finish_with_opening_slack(
+                &clip,
+                0,
+                Some(3_000),
+                3_300,
+                PARAKEET_OPENING_SLACK_SAMPLES,
+            );
+            if refused {
+                assert!(
+                    result.as_ref().is_err_and(|reason| {
+                        reason.contains("speech from") && reason.contains("spans 300 ms")
+                    }),
+                    "{speech_start_ms}: {result:?}"
+                );
+            } else {
+                assert_eq!(
+                    result,
+                    Ok(format!("streamed {}", clip.len())),
+                    "{speech_start_ms}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parakeets_measured_lags_are_not_lost_openings() {
+        // Production refused these streams. Their first detected speech came
+        // 820-1420 ms before the text, under the span rule's 1.5 s, so this
+        // fix keeps them accepted.
+        for (speech_start_ms, text_start_ms) in
+            [(220u64, 1_280u64), (300, 1_120), (220, 1_440), (340, 1_760)]
+        {
+            let mut clip = vec![0.0; speech_start_ms as usize * 16];
+            clip.extend(tone(640 * 16));
+            clip.extend(vec![0.0; 3_200]);
+            let result = finish_with_opening_slack(
+                &clip,
+                0,
+                Some(text_start_ms),
+                text_start_ms + 300,
+                PARAKEET_OPENING_SLACK_SAMPLES,
+            );
+            assert_eq!(
+                result,
+                Ok(format!("streamed {}", clip.len())),
+                "{speech_start_ms} -> {text_start_ms}"
+            );
+        }
+    }
+
+    #[test]
     fn hexs_own_sounds_at_the_captures_head_are_not_a_lost_opening() {
         // The pre-roll (0-0.45 s), the 272 ms Classic start tone (0.45-0.72 s),
         // and the tap's click (0.72-0.82 s) are Hex's own sounds; the first
@@ -1834,6 +2144,188 @@ mod tests {
             finish_with_text_bounds(&clip, Some(1_600), 2_600)
                 .is_err_and(|reason| reason.contains("precedes")),
             "the head exclusion is what keeps this stream"
+        );
+    }
+
+    /// As [`finish_with_text_bounds_ignoring_head`], but the stream begins
+    /// with no head and the capture raises it after `raise_at` samples, as
+    /// the effect report does once suppression actually took effect.
+    fn finish_raising_head(
+        clip: &[f32],
+        raise_at: usize,
+        head: usize,
+        text_start_ms: Option<u64>,
+        text_end_ms: u64,
+    ) -> Result<String, String> {
+        let mut fake = FakeStream {
+            text_start_ms,
+            text_end_ms: Some(text_end_ms),
+            ..FakeStream::default()
+        };
+        let mut capped = PauseCap::new(&mut fake, 0);
+        let (before, after) = clip.split_at(raise_at.min(clip.len()));
+        capped.feed(before).unwrap();
+        capped.raise_ignored_head(head);
+        capped.feed(after).unwrap();
+        let result = finish_stream(&mut capped, clip, clip.len());
+        assert_eq!(fake.fed, clip);
+        result
+    }
+
+    #[test]
+    fn media_speech_before_output_suppression_took_effect_is_not_a_lost_opening() {
+        // 200 ms of room, then 900 ms of what the speakers were playing, then
+        // the dictation at 1.8 s. The stream began with no head; the raise
+        // after it began covers the media, so nothing before the text counts.
+        let mut clip = vec![0.0; 3_200];
+        clip.extend(tone(14_400));
+        clip.extend(vec![0.0; 11_200]);
+        clip.extend(tone(16_000));
+        clip.extend(vec![0.0; 3_200]);
+        assert!(
+            finish_with_text_bounds(&clip, Some(1_800), 2_800)
+                .is_err_and(|reason| reason.contains("precedes")),
+            "without the head the media is a lost opening"
+        );
+        assert_eq!(
+            finish_raising_head(&clip, 4_800, 17_600, Some(1_800), 2_800),
+            Ok(format!("streamed {}", clip.len()))
+        );
+    }
+
+    /// 200 ms of room, 900 ms of what the speakers played, then the
+    /// dictation from 1.8 s: a stream whose text starts at 1.8 s.
+    fn media_then_dictation() -> Vec<f32> {
+        let mut clip = vec![0.0; 3_200];
+        clip.extend(tone(14_400));
+        clip.extend(vec![0.0; 11_200]);
+        clip.extend(tone(16_000));
+        clip.extend(vec![0.0; 3_200]);
+        clip
+    }
+
+    /// Runs the commands the real engine queued through `drive_stream`, the
+    /// way the worker does after taking the `Begin` head.
+    fn drive_queued_stream(
+        mut queued: Vec<Command>,
+        head: usize,
+        text_start_ms: u64,
+        text_end_ms: u64,
+    ) -> (StreamEnd, Receiver<Command>) {
+        let mut fake = FakeStream {
+            text_start_ms: Some(text_start_ms),
+            text_end_ms: Some(text_end_ms),
+            ..FakeStream::default()
+        };
+        let mut capped = PauseCap::new(&mut fake, 0).ignoring_head(head);
+        let (relay, relayed) = mpsc::channel();
+        for command in queued.drain(..) {
+            relay.send(command).unwrap();
+        }
+        let mut stats = FeedStats::default();
+        let ended = drive_stream(
+            1,
+            &mut capped,
+            &relayed,
+            &AtomicBool::new(false),
+            None,
+            &mut VecDeque::new(),
+            &mut stats,
+        );
+        (ended, relayed)
+    }
+
+    fn begin_head(command: Command) -> usize {
+        match command {
+            Command::Begin { head_ignored, .. } => head_ignored,
+            _ => panic!("a stream began"),
+        }
+    }
+
+    #[test]
+    fn a_head_raised_before_the_finish_keeps_the_stream() {
+        let (engine, commands) = TranscriptionEngine::for_test();
+        let mut stream = engine.begin().expect("the test engine streams");
+        let clip = media_then_dictation();
+        stream.feed(&clip);
+        stream.raise_ignored_head(17_600);
+        let _finish = engine
+            .finish_with(
+                Some(stream),
+                clip.clone(),
+                Box::new(|_, _| Ok(String::new())),
+            )
+            .unwrap();
+        let mut queued = commands.try_iter().collect::<Vec<_>>();
+        let head = begin_head(queued.remove(0));
+        let (ended, _) = drive_queued_stream(queued, head, 1_800, 2_800);
+        match ended {
+            StreamEnd::Finished { result, .. } => {
+                assert_eq!(result, Ok(format!("streamed {}", clip.len())));
+            }
+            _ => panic!("the stream should have finished"),
+        }
+    }
+
+    #[test]
+    fn a_head_raised_after_the_finish_cannot_save_the_stream() {
+        let (engine, commands) = TranscriptionEngine::for_test();
+        let mut stream = engine.begin().expect("the test engine streams");
+        let clip = media_then_dictation();
+        stream.feed(&clip);
+        let _finish = engine
+            .finish_with(
+                Some(stream),
+                clip.clone(),
+                Box::new(|_, _| Ok(String::new())),
+            )
+            .unwrap();
+        let mut queued = commands.try_iter().collect::<Vec<_>>();
+        let head = begin_head(queued.remove(0));
+        // The head arrives after the Finish command: the stream finalizes
+        // without it, so the media it heard is a lost opening.
+        queued.push(Command::IgnoreHead {
+            stream: 1,
+            head: 17_600,
+        });
+        let (ended, relayed) = drive_queued_stream(queued, head, 1_800, 2_800);
+        match ended {
+            StreamEnd::Finished { result, .. } => assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|reason| reason.contains("precedes")),
+                "{result:?}"
+            ),
+            _ => panic!("the stream should have finished"),
+        }
+        // The late head was never handled: the finish already ended the stream.
+        assert!(matches!(
+            relayed.try_recv(),
+            Ok(Command::IgnoreHead {
+                stream: 1,
+                head: 17_600
+            })
+        ));
+    }
+
+    #[test]
+    fn speech_after_the_raised_head_is_still_a_lost_opening() {
+        // 200 ms of room and 700 ms of media the raise covers, then 400 ms
+        // the stream missed at 0.95-1.35 s, text at 1.8 s: still a lost
+        // opening.
+        let mut clip = vec![0.0; 3_200];
+        clip.extend(tone(11_200));
+        clip.extend(vec![0.0; 800]);
+        clip.extend(tone(6_400));
+        clip.extend(vec![0.0; 7_200]);
+        clip.extend(tone(9_600));
+        clip.extend(vec![0.0; 3_200]);
+        let result = finish_raising_head(&clip, 4_800, 14_400, Some(1_800), 2_400);
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|reason| reason.contains("precedes")),
+            "{result:?}"
         );
     }
 
@@ -2191,13 +2683,15 @@ mod tests {
         for command in queued {
             relay.send(command).unwrap();
         }
+        let state = yielding.0.clone();
         let mut fake = FakeStream::default();
-        let interrupted = drive_yielding(1, &mut fake, &relayed, &yielding, &mut VecDeque::new());
+        let interrupted = drive_yielding(1, &mut fake, &relayed, yielding, &mut VecDeque::new());
         assert!(interrupted.is_none());
         assert_eq!(finishing.join().unwrap(), Ok("streamed 4".into()));
-        assert_eq!(yielding.consumed.load(Ordering::Acquire), 4);
+        assert!(!state.open.load(Ordering::Acquire));
+        assert_eq!(state.consumed.load(Ordering::Acquire), 4);
         assert_eq!(
-            yielding.partials.latest(),
+            state.partials.latest(),
             Some(Partial {
                 stable: "heard 4".into(),
                 tentative: String::new(),
@@ -2225,7 +2719,7 @@ mod tests {
 
         let mut fake = FakeStream::default();
         let mut deferred = VecDeque::new();
-        let interrupted = drive_yielding(1, &mut fake, &commands, &yielding, &mut deferred);
+        let interrupted = drive_yielding(1, &mut fake, &commands, yielding, &mut deferred);
         assert!(matches!(
             interrupted,
             Some(Command::Begin { stream: 2, .. })
@@ -2238,6 +2732,55 @@ mod tests {
         ));
         // A closed stream answers at once; its owner transcribes offline.
         assert_eq!(stream.finish(Duration::from_secs(5)), Err(PREEMPTED.into()));
+    }
+
+    #[test]
+    fn yielding_stream_closes_on_feed_failure_cancel_and_unread_drop() {
+        // Native feed failure inside drive_yielding must mark the stream closed
+        // so its owner exits its send loop instead of spinning forever.
+        let (engine, commands) = TranscriptionEngine::for_test();
+        let mut stream = engine.begin_yielding().unwrap();
+        let yielding = begun_yielding(&commands);
+        stream.feed(&[0.1; 4]);
+        stream.feed(&[0.2; 4]);
+        let mut failing = FakeStream {
+            fail_after: Some(4),
+            ..FakeStream::default()
+        };
+        assert!(
+            drive_yielding(1, &mut failing, &commands, yielding, &mut VecDeque::new()).is_none()
+        );
+        assert!(
+            !stream.open(),
+            "a failed feed must close the yielding stream"
+        );
+        assert_eq!(stream.finish(Duration::from_secs(5)), Err(PREEMPTED.into()));
+
+        // Explicit cancel closes the stream on exit as well.
+        let (engine, commands) = TranscriptionEngine::for_test();
+        let stream = engine.begin_yielding().unwrap();
+        let yielding = begun_yielding(&commands);
+        let state = yielding.0.clone();
+        drop(stream);
+        assert!(
+            drive_yielding(
+                1,
+                &mut FakeStream::default(),
+                &commands,
+                yielding,
+                &mut VecDeque::new()
+            )
+            .is_none()
+        );
+        assert!(!state.open.load(Ordering::Acquire));
+
+        // Dropping an unread BeginYielding command (e.g. engine shutdown) closes
+        // the stream automatically via Yielding's Drop impl.
+        let (engine, commands) = TranscriptionEngine::for_test();
+        let stream = engine.begin_yielding().unwrap();
+        assert!(stream.open());
+        drop(commands);
+        assert!(!stream.open(), "dropping queued BeginYielding closes open");
     }
 
     #[test]
@@ -2412,6 +2955,43 @@ mod tests {
                 .starts_with("the speech model could not be reloaded"),
             "the failure names why the reload failed"
         );
+        assert!(
+            !engine.holds(&selection),
+            "after reload fails, the engine must not claim to hold the model"
+        );
+        assert_eq!(engine.held_selection(), None);
+        assert!(!engine.streams());
+    }
+
+    #[test]
+    fn a_failed_reload_clears_streaming_and_reports_the_error() {
+        let engine = TranscriptionEngine::start_parked(
+            crate::transcription::models::TranscriptionSelection {
+                model: crate::transcription::models::TranscriptionModelId::ParakeetUnifiedEnglish,
+                language: "en".into(),
+            },
+        )
+        .unwrap();
+        assert!(
+            engine.streams(),
+            "parked streaming model advertises streaming"
+        );
+        let invalid = crate::transcription::models::TranscriptionSelection {
+            language: "zz".into(),
+            ..Default::default()
+        };
+        let result = engine
+            .reload(invalid.clone())
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(result.is_err());
+        assert!(!engine.holds(&invalid));
+        assert_eq!(engine.held_selection(), None);
+        assert!(
+            !engine.streams(),
+            "stale streaming flag from previous slot must be cleared on failed reload"
+        );
     }
 
     /// A real engine thread over macOS's warm transcriber with no model
@@ -2437,11 +3017,19 @@ mod tests {
             assert_eq!(transcribed.source, Source::Offline);
         }
 
+        fn claim_streaming_for_test(engine: &TranscriptionEngine) {
+            *engine.held.lock().unwrap() = HeldState::Loaded {
+                selection: None,
+                backend: None,
+                streams: true,
+            };
+        }
+
         #[test]
         fn an_unusable_stream_falls_back_to_the_complete_clip() {
             let engine = TranscriptionEngine::start(Model::default()).unwrap();
             // Claim streaming so a stream opens that the model cannot serve.
-            engine.streams.store(true, Ordering::Release);
+            claim_streaming_for_test(&engine);
             let mut stream = engine.begin().expect("streaming was claimed");
             stream.feed(&[0.0; 3]);
             let transcribed = engine
@@ -2451,7 +3039,28 @@ mod tests {
                 .unwrap();
             assert_eq!(transcribed.text, "fallback 9");
             assert!(matches!(transcribed.source, Source::Fallback(_)));
-            assert!(!engine.streams.load(Ordering::Acquire));
+            assert!(!engine.streams());
+        }
+
+        #[test]
+        fn run_on_a_parked_slot_still_executes_and_keeps_parked_when_switch_fails() {
+            let selection = crate::transcription::models::TranscriptionSelection {
+                language: "zz".into(),
+                ..Default::default()
+            };
+            let engine = TranscriptionEngine::start_parked(selection.clone()).unwrap();
+            let (tx, rx) = mpsc::channel();
+            engine
+                .run(move |model| {
+                    assert!(model.active().is_none());
+                    tx.send("ran").unwrap();
+                })
+                .unwrap();
+            assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "ran");
+            assert!(
+                engine.holds(&selection),
+                "a switch that left no active model preserves the parked selection"
+            );
         }
 
         #[test]
@@ -2598,7 +3207,7 @@ mod tests {
         #[test]
         fn a_yielding_stream_on_a_model_that_cannot_stream_closes_at_once() {
             let engine = TranscriptionEngine::start(Model::default()).unwrap();
-            engine.streams.store(true, Ordering::Release);
+            claim_streaming_for_test(&engine);
             let mut stream = engine.begin_yielding().expect("streaming was claimed");
             stream.feed(&[0.0; 3]);
             assert_eq!(stream.finish(Duration::from_secs(5)), Err(PREEMPTED.into()));
@@ -2607,7 +3216,7 @@ mod tests {
         #[test]
         fn dropping_the_engine_stops_despite_an_open_stream() {
             let engine = TranscriptionEngine::start(Model::default()).unwrap();
-            engine.streams.store(true, Ordering::Release);
+            claim_streaming_for_test(&engine);
             let stream = engine.begin().expect("streaming was claimed");
             drop(engine);
             drop(stream);
@@ -2657,8 +3266,7 @@ mod tests {
 
     #[test]
     fn an_engine_whose_model_cannot_stream_opens_no_stream() {
-        let (engine, commands) = TranscriptionEngine::for_test();
-        engine.streams.store(false, Ordering::Release);
+        let (engine, commands) = TranscriptionEngine::for_test_without_streaming();
         assert!(engine.begin().is_none());
         let pending = engine
             .finish_with(None, vec![0.0; 7], Box::new(|_, _| Ok(String::new())))
@@ -2676,38 +3284,50 @@ mod tests {
     fn a_stream_refusal_names_the_model_or_the_device() {
         let (engine, _commands) = TranscriptionEngine::for_test();
         assert_eq!(engine.stream_refusal(), None, "it can stream");
-        engine.streams.store(false, Ordering::Release);
+        *engine.held.lock().unwrap() = HeldState::Empty;
         assert_eq!(
             engine.stream_refusal(),
             Some("no streaming speech model is loaded")
         );
-        *engine.held.lock().unwrap() = Some(crate::transcription::models::TranscriptionSelection {
-            model: crate::transcription::models::TranscriptionModelId::ParakeetUnifiedEnglish,
-            language: "en".into(),
-        });
+        *engine.held.lock().unwrap() = HeldState::Loaded {
+            selection: Some(crate::transcription::models::TranscriptionSelection {
+                model: crate::transcription::models::TranscriptionModelId::ParakeetUnifiedEnglish,
+                language: "en".into(),
+            }),
+            backend: None,
+            streams: false,
+        };
         assert_eq!(
             engine.stream_refusal(),
             Some(
                 "the speech model isn't streaming on this device (a CPU, or a GPU that could not start streaming)"
             )
         );
-        *engine.held.lock().unwrap() = Some(crate::transcription::models::TranscriptionSelection {
-            model: crate::transcription::models::TranscriptionModelId::ParakeetV3,
-            language: "en".into(),
-        });
+        *engine.held.lock().unwrap() = HeldState::Loaded {
+            selection: Some(crate::transcription::models::TranscriptionSelection {
+                model: crate::transcription::models::TranscriptionModelId::ParakeetV3,
+                language: "en".into(),
+            }),
+            backend: None,
+            streams: false,
+        };
         assert_eq!(
             engine.stream_refusal(),
             Some("the selected speech model doesn't stream")
         );
         // An imported model's catalog entry says it can't stream, but its
         // GGUF is only checked when it loads: blame the device instead.
-        *engine.held.lock().unwrap() = Some(crate::transcription::models::TranscriptionSelection {
-            model: crate::transcription::models::TranscriptionModelId::Custom(
-                crate::transcription::models::CustomModelId::parse("custom-0123456789abcdef")
-                    .unwrap(),
-            ),
-            language: "en".into(),
-        });
+        *engine.held.lock().unwrap() = HeldState::Loaded {
+            selection: Some(crate::transcription::models::TranscriptionSelection {
+                model: crate::transcription::models::TranscriptionModelId::Custom(
+                    crate::transcription::models::CustomModelId::parse("custom-0123456789abcdef")
+                        .unwrap(),
+                ),
+                language: "en".into(),
+            }),
+            backend: None,
+            streams: false,
+        };
         assert_eq!(
             engine.stream_refusal(),
             Some(

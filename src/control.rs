@@ -113,6 +113,12 @@ pub enum ControlCommand {
     },
     MeetingStop,
     MeetingCopyLast,
+    /// Move a finished meeting to the Trash, as the Meetings pane's Delete
+    /// does: its exported Markdown and notes file, then its recording folder.
+    MeetingDelete {
+        /// The exact id `hex meetings list --json` prints.
+        id: String,
+    },
     SettingsGet {
         #[serde(default)]
         key: Option<String>,
@@ -283,6 +289,19 @@ impl ControlReply {
 impl From<ControlError> for ControlReply {
     fn from(error: ControlError) -> Self {
         Self::error(error.code, error.message)
+    }
+}
+
+/// `hex meetings delete`: the meeting module's typed answer as a reply, so
+/// the refusal codes travel with the reply the wire and the CLI print.
+pub fn meeting_deleted(
+    answer: Result<crate::meeting::TrashedMeeting, crate::meeting::DeleteError>,
+) -> ControlReply {
+    match answer {
+        Ok(meeting) => {
+            ControlReply::done(format!("Deleted “{}”; moved to the Trash", meeting.title))
+        }
+        Err(error) => ControlReply::error(error.code(), error.message()),
     }
 }
 
@@ -686,6 +705,9 @@ pub struct ModelReport {
     pub preparing: Option<String>,
     pub downloaded_bytes: u64,
     pub error: Option<String>,
+    /// The loaded model's device, when the running Hex has one to report.
+    #[serde(default)]
+    pub backend: Option<crate::transcription::SpeechBackend>,
     /// The model Hex runs in place of the saved one while that can't run.
     #[serde(default)]
     pub fallback: Option<FallbackReport>,
@@ -695,18 +717,19 @@ impl ModelReport {
     /// The saved `selection`, and the fallback Hex runs while it can't run;
     /// no preparation.
     pub fn saved(selection: &crate::transcription::models::TranscriptionSelection) -> Self {
-        use crate::transcription::{custom_models, models};
+        use crate::transcription::{custom_models, models, readiness};
         let definition = models::definition(selection.model);
+        let status = readiness::readiness(&definition, &selection.language);
         Self {
             id: selection.model.as_str().into(),
-            name: definition.name.into(),
+            name: definition.name.to_string(),
             language: selection.language.clone(),
-            installed: models::is_installed(definition, &selection.language),
+            installed: status.installed,
             fallback: custom_models::fallback_reason(selection).map(|reason| {
                 let running = custom_models::fallback();
                 FallbackReport {
                     id: running.model.as_str().into(),
-                    name: models::definition(running.model).name.into(),
+                    name: models::definition(running.model).name.to_string(),
                     language: running.language,
                     reason,
                 }
@@ -757,7 +780,7 @@ pub struct ModelInfo {
     pub selected: bool,
     pub streams: bool,
     /// How transcription takes the vocabulary: `prompt` (Whisper,
-    /// Qwen3-ASR), `bias` (Parakeet, with Labs › Vocabulary help), or
+    /// Qwen3-ASR), `bias` (Parakeet), or
     /// `none`.
     pub vocabulary: String,
     /// Deprecated: whether the model reads the vocabulary as its prompt,
@@ -771,56 +794,27 @@ pub struct ModelInfo {
     pub source: String,
 }
 
-/// Where `model`'s file is or comes from, as `hex model list` and the local
-/// API say it: `found: owner/name@abcdef1`, `imported`, `hex`, or `download`.
-pub fn model_source(
-    model: &crate::transcription::models::ModelDefinition,
-    language: &str,
-) -> String {
-    use crate::transcription::found_models::describe;
-    use crate::transcription::models::{is_installed, model_path};
-    let installed = is_installed(model, language);
-    let here = model_path(model)
-        .ok()
-        .filter(|_| installed)
-        .and_then(|path| describe(&path));
-    match (model.id.is_custom(), here) {
-        (true, Some(origin)) => format!("found: {origin} (not tested by Hex)"),
-        (false, Some(origin)) => format!("found: {origin}"),
-        (true, None) => "imported".into(),
-        (false, None) if installed => "hex".into(),
-        (false, None) => "download".into(),
-    }
-}
-
-/// Every model `hex model` can name, with what this Mac has installed.
+/// Every model `hex model` can name, with what this computer has installed.
 pub fn model_infos(
     selection: &crate::transcription::models::TranscriptionSelection,
 ) -> Vec<ModelInfo> {
-    use crate::transcription::found_models;
     use crate::transcription::models::VocabularyUse;
+    use crate::transcription::{found_models, readiness};
     // Listing models looks for ones already on this computer: headers only.
     let found = found_models::scan();
-    let source = |model| model_source(model, &selection.language);
-    let mut infos: Vec<ModelInfo> = crate::transcription::models::all_models()
+    let mut infos: Vec<ModelInfo> = readiness::catalog_models(&selection.language)
         .into_iter()
-        .filter(|model| model.available())
         .map(|model| ModelInfo {
-            source: source(model),
             id: model.id.as_str().into(),
             name: model.name.into(),
-            languages: model.languages.iter().map(|&code| code.into()).collect(),
-            size: model.size_label(),
-            installed: crate::transcription::models::is_installed(model, &selection.language),
+            languages: model.languages.into_iter().map(Into::into).collect(),
+            size: model.size,
+            installed: model.readiness.installed,
             selected: model.id == selection.model,
             streams: model.streams,
-            vocabulary: match model.vocabulary_use() {
-                VocabularyUse::Prompt => "prompt",
-                VocabularyUse::Bias => "bias",
-                VocabularyUse::None => "none",
-            }
-            .into(),
-            supports_recognition_hints: model.vocabulary_use() == VocabularyUse::Prompt,
+            vocabulary: readiness::vocabulary_use_label(model.vocabulary).into(),
+            supports_recognition_hints: model.vocabulary == VocabularyUse::Prompt,
+            source: model.source,
         })
         .collect();
     // Compatible files that aren't catalog models and aren't in use yet:
@@ -831,6 +825,7 @@ pub fn model_infos(
         let Some(sha256) = &model.blob_sha256 else {
             continue;
         };
+        let vocabulary = readiness::vocabulary_use_for_architecture(&model.architecture);
         infos.push(ModelInfo {
             id: format!("custom-{}", &sha256[..16]),
             name: model.name.clone(),
@@ -839,18 +834,8 @@ pub fn model_infos(
             installed: true,
             selected: false,
             streams: false,
-            vocabulary: if matches!(model.architecture.as_str(), "whisper" | "qwen3_asr") {
-                "prompt"
-            } else if model.architecture == "parakeet" {
-                "bias"
-            } else {
-                "none"
-            }
-            .into(),
-            supports_recognition_hints: matches!(
-                model.architecture.as_str(),
-                "whisper" | "qwen3_asr"
-            ),
+            vocabulary: readiness::vocabulary_use_label(vocabulary).into(),
+            supports_recognition_hints: vocabulary == VocabularyUse::Prompt,
             source: format!("found: {} (not tested by Hex)", model.source()),
         });
     }
@@ -1283,6 +1268,9 @@ mod tests {
             },
             ControlCommand::MeetingStop,
             ControlCommand::MeetingCopyLast,
+            ControlCommand::MeetingDelete {
+                id: "1790000500000-1002".into(),
+            },
             ControlCommand::SettingsGet { key: None },
             ControlCommand::SettingsSet {
                 key: "release_microphone_while_idle".into(),
@@ -1385,6 +1373,16 @@ mod tests {
             json,
             serde_json::json!({"version": 4, "command": "meeting-record", "title": "Standup"})
         );
+        // A meeting delete names its id, and nothing else.
+        let json = serde_json::to_value(ControlRequest::new(ControlCommand::MeetingDelete {
+            id: "1790000500000-1002".into(),
+        }))
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"version": 4, "command": "meeting-delete",
+                "id": "1790000500000-1002"})
+        );
         // Optional fields may be left out.
         let request: ControlRequest =
             serde_json::from_str(r#"{"version":4,"command":"quit"}"#).unwrap();
@@ -1411,6 +1409,42 @@ mod tests {
                 always: false,
             }
         );
+    }
+
+    #[test]
+    fn deleting_a_meeting_answers_its_refusal_code() {
+        let deleted = meeting_deleted(Ok(crate::meeting::TrashedMeeting {
+            id: "1790000500000-1002".into(),
+            title: "Design sync".into(),
+            markdown: true,
+        }));
+        assert_eq!(
+            deleted,
+            ControlReply::done("Deleted “Design sync”; moved to the Trash")
+        );
+        for (refusal, code) in [
+            (crate::meeting::DeleteRefusal::Unknown, "not-found"),
+            (
+                crate::meeting::DeleteRefusal::Recording,
+                "meeting-recording",
+            ),
+            (
+                crate::meeting::DeleteRefusal::Transcribing,
+                "meeting-transcribing",
+            ),
+            (crate::meeting::DeleteRefusal::Notes, "meeting-notes"),
+            (
+                crate::meeting::DeleteRefusal::FinalPending,
+                "meeting-final-pending",
+            ),
+            (crate::meeting::DeleteRefusal::Busy, "busy"),
+        ] {
+            assert_eq!(
+                meeting_deleted(Err(refusal.into())),
+                ControlReply::error(code, refusal.message()),
+                "{refusal:?}"
+            );
+        }
     }
 
     #[test]

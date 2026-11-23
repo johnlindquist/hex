@@ -1,5 +1,7 @@
 # Typing logs (Record typing logs)
 
+Part of [Hex for iPhone](../README.md).
+
 Settings › Privacy › Advanced › **Record typing logs** (off by default, asks for
 consent in a dialog before it turns on, App Group key
 `experiments.typingLogs`) makes Hex's keyboard write raw logs of everything it
@@ -8,6 +10,10 @@ did to the text, the text around the cursor, and dictations. They are for
 testing and training keyboard prediction and per-user touch models on a Mac.
 Nothing is sent anywhere; Privacy › Advanced › Typing logs shares a day's file (or
 all of them) through the share sheet, for example by AirDrop.
+
+Once per App Group, the app and the keyboard turn it off at launch for anyone who
+had it on (`migrations.typingLogsOff.v1`, `TypingLogSettings.turnOffOnce`). The
+logs already recorded stay, and turning it back on afterwards keeps it on.
 
 It is separate from Learn how I type, which keeps only word pairs and per-key
 averages and is unchanged.
@@ -113,12 +119,14 @@ Written when the key layout or shift changes, and when a session starts.
   (view size or safe area only), `layer_key` (123/#+=/ABC pressed),
   `layer_auto` (space or return went back to letters), `layer_slide` (hold 123,
   slide, let go), `shift_key`, `typed` (a one-shot shift turned off), `auto`
-  (auto-capitalization), `cancel`, `language` (the keyboard layout changed).
+  (auto-capitalization), `cancel`, `language` (the keyboard layout changed),
+  `letters` (its letters' arrangement changed).
 - `layer` (`letters`/`numbers`/`symbols`), `shift` (`off`/`on`/`locked`),
   `shiftHeld` (only when true), `field` (`text`/`url`/`email`), `orientation`,
   `width`, `height` (the keys' layout), `view` `[w, h]`, `safeArea`,
   `horizontalInset` (landscape), `globe`, `hexPlacement`, `language`
-  (`en`/`nb`/`es`/`de`).
+  (`en`/`nb`/`es`/`de`), `letters` (`own`/`qwerty`/`qwertz`/`azerty`/`dvorak`,
+  Settings › Keyboard › Languages › Layout).
 - The first time a hash appears in a day's file the line also has:
   - `letterWidth` (a 10-key row's; 11-key Norwegian and German letters are
     narrower, see `keys`), `metrics` (`side`, `gap`, `rowGap`, `keyHeight`,
@@ -143,14 +151,18 @@ One finger sample on the keys (not the strip, whose buttons log `ui`/`edit`).
   `majorRadiusTolerance` (pt). `force` and `maxForce` only on devices with
   force. `ts`: `UITouch.timestamp` in ms (monotonic, same clock as `mt`).
 - `layout`: the layout hash at the time.
-- `key`: the key the engine resolves. For `began`, the key under the point
-  (what the engine presses). For `moved` and `ended`, the key the finger is held
+- `key`: the key the engine resolves. For `began`, the key the engine presses:
+  the key under the point, or a neighbouring letter the next-letter odds gave it
+  (`FullKeyboardEngine.letterOdds`). For `moved` and `ended`, the key the finger is held
   on: sliding across character keys moves it; any other key keeps the key it
   went down on. `null` when the finger went down outside every key.
-- `under`: on `moved`/`ended`/`cancelled`, the key under the raw point when it
-  differs from `key` (`null`: outside every key). The engine has no touch
-  correction model today: it uses the hit frames, so `key` on `began` always
-  equals the key under the point.
+- `under`: the key under the raw point when it differs from `key` (`null`:
+  outside every key, on `began`/`ended`/`cancelled`). On `began` it appears
+  only when the next-letter odds moved the press to a neighbouring letter, or
+  (`null`) when a finger on the strip's lower half while typing went to the row-1
+  key below it (`FullKeyboardEngine.takesStripTouch`; `y` is then above the
+  keys); otherwise the engine uses the hit frames as logged, so `key` on
+  `began` is the key under the point.
 - `moved` is throttled: a sample is written once the finger has moved at least
   2 pt and 8 ms since the last line for it, or when it slides onto another key.
 
@@ -169,16 +181,17 @@ cursor, for every `edit` (and `dictation`) line remove `deleted` (a string;
 | `op` | fields |
 | --- | --- |
 | `insert` | `inserted`, `src`: `key` (a character or space), `accent` (long-press pick), `slide` (hold 123, slide, let go), `bar` (the dictation bar's space) |
-| `delete` | `deleted` (the character), `src`: `key` (on press), `repeat` (held, 75 ms), `repeat_fast` (after 0.85 s, two at a time), `bar` |
+| `delete` | `deleted` (the character), `src`: `key` (on press), `repeat` (held, 75 ms), `repeat_fast` (after 0.85 s, two at a time), `bar`, `selection` (Two-thumb selection's Delete), `selection_cut`, `selection_dictate` (its Dictate, when the dictation's words arrive and replace the range; `deletedCount` when the range is longer than 80 characters) |
 | `delete_word` | `deleted`, `src`: `repeat_word` (held past 1.4 s) |
 | `autocorrect` | `from`, `to`, `deleted` (= `from`), `inserted` (`to` + space). Applied on space. |
-| `autocorrect_undo` | `deleted` (the correction and its space), `inserted` (what was typed): one backspace right after a correction undid it. |
+| `autocorrect_undo` | `deleted` (the correction, without its space or mark), `inserted` (what was typed), `src`: `strip`. The strip's revert, offered once delete took the correction's space or mark (or the cursor came back to its end), put back what was typed. |
 | `suggestion` | `slot` (0 left, 1 centre, 2 right), `text` (as shown), `deleted` (the word being typed), `inserted` (the replacement + space), `candidates` (as in `candidates`) |
 | `double_space_period` | `deleted`: `" "`, `inserted`: `". "` |
+| `space_swallowed` | `after`: `suggestion`. A space right after a suggestion typed its own changed nothing. |
 | `return` | `inserted`: `"\n"`, `returnKeyType`, `send` (the key said Send); `ignored: true` and no `inserted` when the key was disabled (empty field) |
 | `paste` | `inserted`: the strip's Paste chip |
 | `undo_dictation` | `deleted` (the dictation), or `deletedCount` when the host showed only its end |
-| `cursor` | `offset`: characters the spacebar trackpad moved the cursor (negative is left) |
+| `cursor` | `offset`: UTF-16 units the cursor moved (negative is left); `src`: absent for the spacebar trackpad (including its settle when a selection starts), `selection` (Two-thumb selection's Copy, or its Delete moving to the range's end), `selection_cut` and `selection_dictate` (the same move before their delete) |
 
 ### `candidates`
 
@@ -193,8 +206,8 @@ dictation, a status, or the clipboard chips.
 
 The host's text around the cursor, as `documentContextBeforeInput` /
 `AfterInput` give it. `why`: `session_start`, `space`, `return`,
-`suggestion`, `delete_word`, `autocorrect_undo`, `paste`, `trackpad`,
-`undo_dictation`, `dictation`, `session_end`, or `text_did_change` (the host
+`suggestion`, `delete_word`, `autocorrect_undo`, `revert`, `paste`, `trackpad`,
+`selection`, `undo_dictation`, `dictation`, `session_end`, or `text_did_change` (the host
 changed the text or moved the cursor: written once things settle for 0.3 s, at
 once when the field emptied). `before` (the last 200 characters), `after` (the
 first 200), `beforeLength` and `afterLength` (before capping; hosts often cut
@@ -208,7 +221,26 @@ Taps that aren't text: `action`:
 
 - `accent_open` (`id`, `key`, `options`), `accent_pick` (`id`, `index`, `chosen`,
   `rollover` when another key committed it), `accent_cancel`;
-- `trackpad_start` (`id`), `trackpad_end` (`id`, `offset`: total characters);
+- `trackpad_start` (`id`; `hold: true`, as only holding the space bar starts it;
+  older logs without it had a 10 pt slide start it), `trackpad_end` (`id`, `offset`: total
+  UTF-16 units; with Two-thumb selection on, the space bar's own lift writes it even while the
+  other thumb keeps selecting), followed by a `context` (`trackpad`);
+- `selection_start` (`id`, the second finger; `thumb: second`, `anchor`: the cursor's
+  UTF-16 offset into the trackpad's known text, which is what the selection lays out),
+  `selection_end` (`id`, `empty: true` when both
+  thumbs lifted with no range and the selection ended like a trackpad lift; when `false`,
+  `start` and `end`: the range's UTF-16 offsets from that anchor), `selection_action`
+  (`action`: `delete`, `cut`, `copy`, `dictate`, `cancel`, `dismiss` (another key closed the
+  actions, or the text no longer matched: `reason` is `key`, `host_edit`, `text` or
+  `context`; no `start` or `end`); `start` and `end` as `selection_end` for the others.
+  A Dictate writes a second `action: dictate` line when its words arrive: `result` is
+  `replaced` (the range was deleted and the words go in there) or `inserted` (the field
+  changed, with a `reason`: `field`, `text` or `context`, and the words go in at the
+  cursor);
+- `selection_cancel` (`id`: the system took a finger away, nothing changed);
+- `language_swipe` (`id`, `step`: 1 the next language, -1 the one before) and
+  `keyboard_language` (`language`: the layout it switched to), with two or more
+  keyboard languages;
 - `hex_key` (`dictation`: `warm`, `keyboard`, `open_hex`), `hex_menu`, `style`
   (`style`, `from`: `hex_menu` or `recording_panel`),
   `dictation_language` (`language`: BCP 47 or `automatic`, from the Hex menu),

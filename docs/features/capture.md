@@ -16,7 +16,9 @@ the clipboard, and sends it to an OpenCode session with Scrawl's router
 (`crates/router`), run in Hex's process. Settings › Annotate (under Labs in
 the sidebar) holds its settings. Scrawl's capsule (switch chips, the
 on-screen picker, route chips) and its ink and laser overlay are Rune
-overlays.
+overlays. A capture's `summary.md` and the text pasted into an agent start
+with `[hex-annotate <clock> · <target> · <folder>]`; older captures say
+`[scrawl …]`.
 
 ```ts
 Turn it on                               // capture.gate
@@ -127,6 +129,26 @@ On Linux                                 // capture.linux
 │   desktop's picker every time (the capsule's Window chip goes straight to
 │   it) and names no output, so the pen keeps its old placement; the cursor
 │   is embedded
+├── Labs › Record the screen under the pointer (`labs.annotate_pointer_screen`,
+│   off) -> each Screen capture first asks the compositor for the output the
+│   pointer is on, with no surface and no frame: one
+│   `ext_image_copy_capture_manager_v1.create_pointer_cursor_session` per
+│   output source, and the session that reports `enter` names its `wl_output`
+│   (`src/linux/pointer_output.rs`; two round trips, everything destroyed
+│   after). Its screen then has its own token file,
+│   `<support>/screencast-token-<output>` (output sanitized to [A-Za-z0-9_-]),
+│   so each monitor is asked once; a monitor without one shows the picker
+│   once. After Start the token is saved for the output the desktop actually
+│   recorded: `mapping_id`, else the output whose xdg-output logical geometry
+│   holds the stream's position (`src/linux/output.rs`), else the pointer's.
+│   The refused-token retry removes and forgets whichever file it read. Off,
+│   or when the lookup fails (no seat, no staging protocols, no session
+│   entering, an output below wl_output v4), the single file above is used
+│   exactly as before. Needs the compositor to export ext-image-copy-capture
+│   to ordinary clients (COSMIC does only for non-sandboxed ones) and, on
+│   wlroots, a hardware cursor (a software cursor reports nothing, read from
+│   wlroots' source rather than observed); not observed on real COSMIC
+│   hardware
 ├── Frames -> the portal's PipeWire stream, libpipewire-0.3 loaded at run
 │   time (`maxFramerate` 60/1); 32-bit RGB as a linear DMA-BUF (niri, GNOME,
 │   KDE) or shared memory. A stream that ends or fails before its first frame
@@ -186,8 +208,10 @@ On Linux                                 // capture.linux
 │   unlike the Mac, a guess doesn't open its suggestions by itself
 │   (Flow::suggesting_on_route(false)): Send to… is a click away
 ├── Shortcuts -> F9 (tap to start and stop, hold to draw) through the
-│   GlobalShortcuts portal ("Annotate") or X11 grabs. There is no separate
-│   draw shortcut and no send-to list shortcut on any OS
+│   GlobalShortcuts portal ("Annotate") or X11 grabs. Without the portal,
+│   General's commands list and this pane's Shortcut row give
+│   `hex annotate toggle` to bind in the desktop instead. There is no
+│   separate draw shortcut and no send-to list shortcut on any OS
 ├── GNOME Wayland -> no layer-shell, so Rune can't show the capsule or ink
 │   until Labs › Annotate on GNOME (`labs.gnome_annotate`, off by default)
 │   opens them on XWayland (`OverlayOptions::xwayland_input`): override-redirect
@@ -206,7 +230,9 @@ On Linux                                 // capture.linux
 │   Area isn't offered), and takes the same opt-in whenever it does. Check:
 │   labs gnome_annotate_is_its_own_bit_*; not run on a GNOME session
 ├── While it records, dictation starts nothing (the portal
-│   or grab already took their keys, so nothing reaches the app)
+│   or grab already took their keys, so nothing reaches the app), unless Labs ›
+│   Dictate while annotating is on: then the shortcut dictates as usual and the
+│   capture keeps recording, hearing the words too
 ├── Pane -> no Screen Recording row, no transcriber choice, no "Show in screen
 │   recordings" (the portal asks; Wayland can't keep overlays out)
 ├── Sending -> OpenCode's sessions and prompts over HTTP to the running
@@ -234,7 +260,8 @@ On Windows                               // capture.windows
 │   records every pointer move, click, wheel turn, and modifier change
 │   (capture_host::report_input, as the macOS tap): Shift alone inks, the
 │   laser follows the pointer, clicks are logged. Injected events are skipped
-├── While it records, dictation starts nothing
+├── While it records, dictation starts nothing, unless Labs › Dictate while
+│   annotating is on
 ├── While dictating -> General's setting through windows/audio_control, one
 │   suppressor per capture, restored when it ends
 ├── Copy and paste -> the engine's own clipboard and Ctrl+V (handoff): the
@@ -244,17 +271,42 @@ On Windows                               // capture.windows
 ├── Overlays -> Rune waits for a swap-chain slot before each frame (Rune
 │   #985), so the picker, capsule, and ink's frames in flight stay bounded
 │   through a long annotation (#1833; not measured on Windows)
+├── The finished capsule -> windows/input's hooks stand in for the macOS tap
+│   (#2113): the search field takes its own clicks (its `.hit()` box is
+│   Windows-only, so the window stops being click-through over it and the
+│   click no longer lands on the app in front), a mouse button going down
+│   away from the capsule folds the list or the search (`CapsuleKey::Press`;
+│   a press on the capsule's own boxes is its click), and the keyboard hook
+│   hands the open list or the suggestions the keys `capture_host::list_key`
+│   names: text, ⌫, ↑↓, ⏎/⇧⏎ and ⇥, Escape and Shift. Text is read from
+│   `ToUnicodeEx` in the foreground window's layout with "change no state",
+│   so a key the app gets is never disturbed and a dead key (`^`, `´`, `¨`)
+│   types nothing in the search rather than half an accent landing nowhere.
+│   The search also keeps the caret's own keys from the app — ⌦, ←→, Home and
+│   End, Page Up and Page Down, Insert — though it draws no caret movement for
+│   them; over the suggestions they pass. A key that edits nothing (Caps Lock,
+│   Num Lock, Scroll Lock, the media and browser keys, Print Screen, Sleep,
+│   Apps, a function key) goes on to the app even in the search, as does a key
+│   the app already had down with its repeats and release, wherever the capsule
+│   stood when it went down. Ctrl, Alt and the Windows key make a chord and stay
+│   the app's, so AltGr types its character in the app, not the search; Hex's
+│   own shortcuts do too, and Escape over the suggestions is the app's. While
+│   a dictation records, Escape cancels that first, as it does everywhere on
+│   Windows, so it never reaches the search. Check:
+│   `windows::input::capsule`'s mapping tests; not observed on a Windows PC
 └── Gaps: no `hex annotate` (Windows has no control transport yet), no
     iPhone, keys pressed in the app are not logged. Checked only by
     cross-compiling (`cargo xwin clippy`, x86_64 and aarch64); never run on
     a Windows machine
 
 Settings › Annotate                      // capture.pane
-├── Capture with Hex (capture.enabled, default off) -> off: no host, shortcut,
+├── Capture with Hex (capture.enabled, default on) -> off: no host, shortcut,
 │   input, retention, or folder
 │   └── On while the shortcut collides -> refused, the shortcut row says why
 ├── Shortcut (capture.hotkey, default ⌥⇧S, F9 on Linux and Windows) -> same keycap and recorder as dictation;
-│   a key is required; refused when it overlaps dictation or paste
+│   a key is required; refused when it overlaps dictation or paste. On a Linux desktop with no
+│   GlobalShortcuts portal (the `commands` fallback) the row is the `hex annotate toggle` command
+│   to bind in the desktop instead, as General's commands list has it
 ├── How it works (on) -> start (tap), draw (hold, no click; Shift too on
 │   macOS), the capsule's pen with Esc, stop (tap again), and send, each
 │   with its keys. Check: rune_ui::scrawl tests
@@ -273,7 +325,11 @@ Settings › Annotate                      // capture.pane
 │   │   (`ScreenCapture` reset on running bundle + retired IDs, re-prompt + guide)
 │   └── Allow -> clears retired Hex IDs, rechecks, then opens the permission
 │       guide over System Settings' list (PermissionKind::ScreenRecording); flips
-│       on the next read. Never part of onboarding (macOS also asks at the first
+│       on the next read. The guide's own preflight caches the launch answer,
+│       so it reads the grant from TCC and the host closes it as soon as the
+│       watched read says granted or needs a restart; it hides while another
+│       app is in front of System Settings and returns when System Settings
+│       does. Never part of onboarding (macOS also asks at the first
 │       capture). Check: rune_ui::scrawl tests
 ├── Show in screen recordings (capture.show_overlays_in_recordings, default
 │   off) -> see capture.own-windows; applies at once, to open windows and a recording capture
@@ -285,6 +341,56 @@ Settings › Annotate                      // capture.pane
 │       shortcut within 2 s of Scrawl leaving
 └── No iPhone pairing row: ScrawlKit pairing needs the ingest server, which Hex
     doesn't run. A cabled iPhone needs no row (capture.phone)
+
+Agents (on; Labs › Install agent skill from Annotate)   // capture.agents; labs.annotate_agent_install
+├── Off -> the pane is exactly as before, and nothing reads a coding agent's folder
+├── One row per coding agent: whether its folder exists, and whether it already has this Hex's skill
+│   ├── Claude Code -> $CLAUDE_CONFIG_DIR or ~/.claude, then skills/hex-annotate/SKILL.md
+│   │   (found with that folder)
+│   ├── Codex -> ~/.agents/skills/hex-annotate/SKILL.md (found with ~/.codex or
+│   │   $CODEX_HOME); $CODEX_HOME/skills is only the legacy place
+│   ├── OpenCode -> $XDG_CONFIG_HOME or ~/.config, then opencode/skills/hex-annotate/SKILL.md
+│   │   (found with the opencode folder)
+│   └── Pi -> ~/.pi/agent/skills/hex-annotate/SKILL.md ($PI_CODING_AGENT_DIR or ~/.pi;
+│       found with that folder), or the shared ~/.agents copy when one exists
+├── npx skills writes Codex and Pi skills to ~/.agents/skills, so that copy counts for
+│   both: read by content, never checked for a second copy, and an outdated shared copy
+│   is the one installing updates
+├── A found agent without the skill reads Not installed and starts checked; the file
+│   differing from this Hex's reads Update available, and installing replaces it
+├── Install -> agent_install::install writes the same embedded
+│   skills/hex-annotate/SKILL.md that hex annotate skill prints into each checked agent's
+│   folder: directories created, a staging file renamed into place in the same folder,
+│   and no other file touched
+├── A symlinked SKILL.md, or a symlinked hex-annotate folder, is managed elsewhere: the
+│   row says Managed elsewhere, it has no switch, and nothing is written through the link
+├── An agent this computer doesn't have reads Not found, has no switch, is never checked,
+│   and gets no folder created for it; Install is disabled while nothing is checked
+├── Install with the skills CLI -> npx skills add anomalyco/hex --skill hex-annotate,
+│   beside Copy for people who manage skills themselves
+├── Command-line tool (macOS) -> a hex symlink to this app's executable (current_exe) in
+│   the first of /opt/homebrew/bin and /usr/local/bin that exists and is writable, else
+│   ~/.local/bin (created)
+│   ├── An existing hex that is a symlink to this Hex or any
+│   │   Hex.app/Contents/MacOS/hex is kept and reads Installed at <path>; a link whose
+│   │   target is gone counts only when it names a Hex app, and is then replaced
+│   ├── A regular file, or a link to anything else (a dangling one included), is never
+│   │   replaced: the row reads Owned by another program
+│   ├── A hex running from App Translocation refuses to link and says to move Hex to
+│   │   Applications first
+│   └── A ~/.local/bin link that $PATH doesn't name adds "<folder> isn't on your PATH"
+├── While Labs › Agent tools for captures is off, a note says the skill's zoom, inspect,
+│   and frames commands need it
+└── Checks: agent_install (finding each agent, installing, updating an outdated file,
+    leaving other files alone, the shared ~/.agents copy for Codex and Pi, a symlinked
+    skill or folder, choosing the link folder, never replacing a foreign hex (a live
+    foreign link or a regular file is never removed even by link() itself), a dangling
+    Hex-app link, App Translocation), and rune_ui::scrawl's
+    the_agents_section_needs_its_lab, installing_writes_each_checked_agents_skill,
+    an_agents_row_checks_only_that_agent, a_linked_skill_has_no_switch.
+    Proof limits: the macOS symlink path runs the same POSIX rules its unit tests
+    cover on Linux; nothing was run on a real Mac, and no real Claude Code, Codex,
+    OpenCode, or Pi read a capture after this installed the skill
 
 First launch with Annotate on            // capture.import
 ├── ~/.config/scrawl/config.json -> transcriber (apple; else Parakeet), capturesDir,
@@ -306,6 +412,7 @@ First launch with Annotate on            // capture.import
 │   and Hex's tap lets it through; a dictation under it goes on too (#786)
 ├── The binding is swallowed, never chord evidence for dictation
 ├── Hold the dictation shortcut mid-capture -> dictation pastes as usual
+│   (only with Labs › Dictate while annotating on; without it, nothing starts)
 └── Another app holds Secure Event Input -> ⌥⇧S still starts and stops (a
     Carbon hotkey while it lasts; Esc doesn't arrive). See dictation.md's
     Shortcuts Under Secure Input
@@ -319,7 +426,11 @@ While a capture records                  // capture.quiet
 │   switch carries it to the next capture without restoring in between
 ├── Dictation shortcut -> starts nothing while it records
 │   (macOS: recognition.rs swallows it in the tap; Linux: linux/dictation
-│   ignores Start). Nothing leaks to the app in front
+│   ignores Start). Nothing leaks to the app in front. With Labs › Dictate
+│   while annotating on it dictates as usual instead: the text pastes into the
+│   app in front, History and Paste Last keep it, the capture keeps recording
+│   and its words include the dictated span, and the dictation HUD sits at the
+│   bottom edge, clear of the capsule at the top
 └── Dictation that began before the capture -> each effect is held from the first session that
     wants it to the last, so neither unmutes or resumes what the other still
     holds; a While dictating change mid-capture composes too (the capture keeps
@@ -582,6 +693,13 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │       press off the capsule (the tap reports mouse-downs while the list
 │   │       is open, and still delivers them) closes the list and gives the
 │   │       keys back; hiding drops the grab
+│   │   └── Windows -> windows/input's keyboard hook stands in for the tap
+│   │       (#2113): the same keys, its text read with ToUnicodeEx in the
+│   │       foreground window's layout and never with the layout's state
+│   │       changed (a dead key types nothing in the search, and AltGr's
+│   │       Ctrl+Alt stays the app's), a press kept only while no shortcut of
+│   │       Hex's claims it, and a key the app already holds left to it;
+│   │       never observed on a Windows PC
 │   ├── `offer` (a rule offer) -> not drawn; Scrawl's capsule doesn't draw it
 │   ├── The ready capsule shows a labeled Paste button, both folded and above
 │   │   the suggestions. A rule waiting to send shows Undo instead. Sending,
@@ -731,7 +849,10 @@ Hex's own windows                        // capture.own-windows
 │   │   still never in the window log or the target. Rune's
 │   │   OverlayHandle::set_exclude_from_capture flips open windows, and the
 │   │   sampler rebuilds its filter mid-recording (OwnWindows::recorded) and
-│   │   the recording's (capture-core's Recording::set_exclusions)
+│   │   the recording's (capture-core's Recording::set_exclusions). macOS's
+│   │   pump and Windows' runtime thread follow the setting while Hex runs
+│   │   (CaptureOverlays::follow_recordings), so it applies live on both, not
+│   │   only to windows made after it changed
 │   └── Rune's presence tests check ordering and sharing together, including
 │       stale fade completions and setting changes. Its native `spaces_probe`
 │       checks this process's WindowServer ordering. A native Hex smoke on
@@ -908,8 +1029,9 @@ What a send carries                      // capture.send (router opencode::send_
 │   server on another machine reads it; the text only names where it was recorded
 ├── Every request goes to the running local service over HTTP
 │   (service.json); a service that isn't up is never started. On Windows with
-│   Labs › OpenCode in WSL on, a service in the default WSL distribution
-│   answers instead (capture.route). The prompt's "Recorded at" line names the
+│   Labs › OpenCode in WSL on, a WSL service that answers is used ahead of a
+│   Windows one; the Windows service is used when WSL answers nothing
+│   (capture.route). The prompt's "Recorded at" line names the
 │   capture folder as its Linux `/mnt/…` path; the summary header keeps the
 │   Windows path
 ├── With an agent host (routing's agentHost), the request body travels on SSH
@@ -1034,6 +1156,40 @@ hex capture list|show|send|route         // capture.cli; docs/cli.md
 │       destination; --always is refused
 ├── route <capture> [--ask-jev] -> what the router sees and decides; sends nothing
 └── <capture> = bundle name, path, or `latest`; unknown -> `not-found`
+
+hex annotate inspect|zoom|frames|skill   // capture.agents; labs.annotate_agent_tools
+├── Off by default (`Audience::Everyone`, every OS); a CLI read in the `hex`
+│   process, never over the control socket: Hex needn't run, and nothing
+│   records, sends, or writes a setting. `frames` extracts with `ffmpeg` from
+│   PATH when one is installed (the engine's own choice), else the engine's
+│   decoder. Off -> refused naming `hex labs on annotate-agent-tools`
+├── inspect [<capture>=latest] -> `summary.md` (sketch::summary_markdown)
+│   ├── --marks -> one `agent_context::MarkEntry::line()` per mark, time order,
+│   │   or `No marks`; --marks --json -> the entries as a JSON array
+│   └── --json -> `scrawl.json` pretty-printed as written
+├── zoom [<capture>=latest] (--at <M:SS|secs|phrase> | --mark <n|id> [--frame N])
+│   [--span secs=2] [--frames N=12] [--full] -> `zoom::zoom` into a sheet at
+│   `<bundle>/zoom/zoom-<from>-<to>.png`; prints the sheet's path,
+│   `0:09.500 → 0:11.500, 12 frames: #1 0:09.500, …`, and `Said: “…”` when
+│   the window has words. A mark prints `find_mark`'s line first, and its
+│   `--frame` picks the keyframe whose ✎① the number counts
+├── frames [<capture>=latest] --from <M:SS|secs> --to <M:SS|secs> [--fps 4] ->
+│   `handoff::extract_frames_range`'s PNGs under `<bundle>/zoom/range-*/`,
+│   each path printed. `--to` is clamped to the bundle's `durationMs`, and a
+│   range over 240 frames is refused `invalid`, counted as the larger of
+│   `(to − from) * fps / 1000 + 1` and the engine decoder's inclusive
+│   `(to − from) / max(1000 / fps, 1) + 1`; without a video, or over an empty
+│   range, it prints the keyframes in `frames/` that fall in the range instead
+├── skill -> `include_str!` of `skills/hex-annotate/SKILL.md`, the guide an
+│   agent installs with `npx skills add anomalyco/hex --skill hex-annotate`
+├── Every command resolves `<capture>` as `hex capture list` does (bundle name,
+│   path, or `latest`, in `capture.folder`); an unknown bundle -> `not-found`.
+│   `zoom` and `frames` write only into `<bundle>/zoom/`; nothing else in the
+│   bundle changes
+└── Proof limits: unit tests cover the mark lines, both JSON shapes, a sheet's
+    printed lines, and every refusal; decoding a bundle's video into a sheet or
+    frames is the engine's own `zoom`/`movie_frames_at` path, unverified on a
+    real bundle here, and no capture was recorded for this change
 
 hex capture cancel -> engine cancelled, sink closed, bundle removed
 hex capture status -> recording (bundle, elapsed), bundles still writing, last outcome
@@ -1347,3 +1503,14 @@ from a folder name. They remain available through their existing actions.
 The [Mac picker](dictation.md#paste-last-picker-labs-macos) (Labs › Paste Last
 picker) reads the mark; failure to write it does not fail the capture or affect
 its send.
+
+## Repeated recording resources (`capture.encoder-memory`)
+
+The macOS HEVC and AAC writer drains native autoreleased objects at creation,
+start, append, finish and cancel, including on Rust workers with no AppKit
+run loop. The opt-in `video_writer::tests::headless_encoder_memory` probe
+and `perf/run-encoder-memory.py` exercise 51 synthetic movies and check
+IOSurface growth. Observed: writer-owned pools kept resident IOSurfaces at
+zero; before the fix they reached 22.3 MiB by movie 31 and encoding then
+failed. See [the measurement](../../perf/encoder-memory.md). This is encoder
+ownership evidence, not a live ScreenCaptureKit or full Annotate test.

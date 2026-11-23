@@ -20,6 +20,9 @@ pub(super) const DESCRIPTION: TextStyle = TextStyle::new(12.0, 440.0).lh(16.0);
 pub(super) const STATS_NUMBER: TextStyle =
     TextStyle::new(18.0, 620.0).lh(22.0).features("'tnum' 1");
 const SELECT_WIDTH: f32 = 220.0;
+/// A select whose rows carry a description: wide enough for a full choice
+/// name beside the hint under it, which takes whatever is left.
+const DESCRIBED_SELECT_WIDTH: f32 = 260.0;
 /// The microphone field, wide enough for "System default" and a faint
 /// "Studio Display Microphone".
 pub(super) const DEVICE_SELECT_WIDTH: f32 = 320.0;
@@ -626,10 +629,49 @@ pub(super) fn segmented_tx(
         .role("segmented")
 }
 
+/// The inset either side of a segment's label, as `SegmentedControl` pads it.
+const SEGMENT_PX: f32 = 12.0;
+
+/// How wide a segment's label draws: its text at the segment's font, the
+/// kit's UI text (a line height takes no width).
+pub(super) fn segment_label_width(p: Paint, label: &str) -> f32 {
+    rune::text::measure(label, &[], p.k.ty.ui, None).0
+}
+
+/// A [`segmented_tx`] that keeps the room the widest label a segment may ever
+/// show needs: `reserved` holds one such label per segment. A control whose
+/// labels count something (`Turned on · 3`) then stays the same size as the
+/// count changes, so it never moves and a tab never slides out from under the
+/// pointer that is about to press it.
+pub(super) fn segmented_reserved_tx(
+    p: Paint,
+    key: &str,
+    labels: &[&str],
+    reserved: &[&str],
+    selected: usize,
+    pick: impl Fn(&mut Ui, usize, &mut Tx) + Clone + 'static,
+) -> El {
+    debug_assert_eq!(labels.len(), reserved.len(), "one reservation per segment");
+    let widest = labels
+        .iter()
+        .zip(reserved)
+        .map(|(label, reserve)| segment_label_width(p, label).max(segment_label_width(p, reserve)))
+        .fold(0.0_f32, f32::max);
+    let segments = labels.len().max(1) as f32;
+    SegmentedControl::new(labels, Some(selected))
+        // Rounded up, so the kit's own layout never has to truncate a label.
+        .width(Some((widest + 2.0 * SEGMENT_PX).ceil() * segments))
+        .on_pick(pick)
+        .build(p.k)
+        .key(key)
+        .role("segmented")
+}
+
 /// One choice of a [`select`].
 pub(super) struct Choice {
     pub(super) label: String,
-    /// Faint text after the label, such as what a choice resolves to.
+    /// Faint text after the label on the field and under it in the menu,
+    /// such as what a choice resolves to.
     pub(super) detail: Option<String>,
     pub(super) selected: bool,
     pub(super) choose: Box<dyn Fn(&mut Ui)>,
@@ -717,17 +759,27 @@ pub(super) fn select_sized(
             .label(name)
             .on_press_tx(press),
     };
+    // A described row stacks its hint, so the menu needs room for both.
+    let menu_width = if choices.iter().any(|choice| choice.detail.is_some()) {
+        width.max(DESCRIBED_SELECT_WIDTH)
+    } else {
+        width
+    };
     let mut menu = Menu::new(key)
         .trigger(trigger)
         .placement(Placement::BottomEnd)
         .gutter(4.0)
-        .min_width(width)
+        .min_width(menu_width)
         .open(open)
         .on_close(|ui: &mut Ui| ui.open = None);
     for choice in choices {
         let mut item = MenuItem::new(choice.label).checked(choice.selected);
         if let Some(detail) = choice.detail {
-            item = item.shortcut(detail);
+            // A sentence, not a shortcut: the kit puts it on a second line,
+            // so the choice's name keeps the room it needs and only the
+            // detail truncates. As a shortcut it would squeeze the name to
+            // an ellipsis.
+            item = item.description(detail);
         }
         menu = menu.item(item.on_select(move |ui: &mut Ui| (choice.choose)(ui)));
     }
@@ -859,6 +911,19 @@ pub(super) fn button(
     kind: ButtonKind,
     press: impl Fn(&mut Ui, &mut Tx) + 'static,
 ) -> El {
+    button_enabled(p, key, label, kind, true, press)
+}
+
+/// A [`button`] that keeps its place but can't be pressed while `enabled` is
+/// false, so an action with nothing to do never silently does nothing.
+pub(super) fn button_enabled(
+    p: Paint,
+    key: &str,
+    label: &str,
+    kind: ButtonKind,
+    enabled: bool,
+    press: impl Fn(&mut Ui, &mut Tx) + 'static,
+) -> El {
     let variant = match kind {
         ButtonKind::Primary => ButtonVariant::Contrast,
         ButtonKind::Secondary => ButtonVariant::Neutral,
@@ -866,6 +931,7 @@ pub(super) fn button(
     };
     Button::new(label)
         .variant(variant)
+        .disabled(!enabled)
         .on_press_tx(press)
         .build_push(p.k)
         .key(key)
@@ -1299,4 +1365,10 @@ pub(super) static PLAY: rune::Icon = rune::Icon {
     name: "hex-play",
     view: 20.0,
     body: r#"<path d="M6.5 5.1v9.8c0 .5.5.8.9.5l7.6-4.9c.4-.2.4-.8 0-1L7.4 4.6c-.4-.3-.9 0-.9.5Z" fill="currentColor"/>"#,
+};
+
+pub(super) static PAUSE: rune::Icon = rune::Icon {
+    name: "hex-pause",
+    view: 20.0,
+    body: r#"<rect x="5.5" y="4.5" width="3" height="11" rx="1" fill="currentColor"/><rect x="11.5" y="4.5" width="3" height="11" rx="1" fill="currentColor"/>"#,
 };

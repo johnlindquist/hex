@@ -1,16 +1,16 @@
-//! French (fr) interface strings, keyed by the English source string like
-//! [`super::TRANSLATIONS`]; used for any French system language. Not yet
-//! reviewed by a native speaker. Terms: dictation is "dictée", shortcut
-//! "raccourci", vocabulary "vocabulaire", Settings "Réglages", and meetings
-//! "réunions".
+//! French (fr) interface strings; not yet reviewed by a native speaker.
+//! Terms: dictation is "dictée", shortcut "raccourci", vocabulary
+//! "vocabulaire", Settings "Réglages", and meetings "réunions".
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use super::screenshots::{Language, merged};
+
 /// The French strings by their English source.
 pub(super) fn table() -> &'static HashMap<&'static str, &'static str> {
     static TABLE: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    TABLE.get_or_init(|| TRANSLATIONS.iter().copied().collect())
+    TABLE.get_or_init(|| merged(TRANSLATIONS, Language::French))
 }
 
 #[rustfmt::skip]
@@ -100,6 +100,14 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Microphone key alone", "Touche micro seule"),
     ("Use the mic key in F5's spot on Mac laptops as a shortcut; once set, only Hex gets it", "Utiliser la touche micro à la place de F5 sur les portables Mac comme raccourci ; seul Hex la reçoit ensuite"),
     ("Annotate on GNOME", "Annotate sous GNOME"),
+    (
+        "Record the screen under the pointer",
+        "Enregistrer l'écran sous le pointeur",
+    ),
+    (
+        "On Wayland, a capture records the monitor you point at, and each monitor remembers its own screen",
+        "Sous Wayland, une capture enregistre le moniteur que vous pointez, et chaque moniteur retient son propre écran",
+    ),
     ("Restore clipboard on GNOME", "Restaurer le presse-papiers sous GNOME"),
     ("Put back what you copied before a dictation, through XWayland. Works only while XWayland is already running", "Remet ce que vous aviez copié avant une dictée, via XWayland. Fonctionne seulement si XWayland est déjà lancé"),
     ("This desktop doesn't let Hex put your clipboard back after a paste. Turn on Labs › Restore clipboard on GNOME to try it.", "Ce bureau ne permet pas à Hex de remettre votre presse-papiers après un collage. Activez Labs › Restaurer le presse-papiers sous GNOME pour essayer."),
@@ -147,17 +155,19 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Tap Paste Last to paste the newest dictation or annotation; hold it to pick another", "Touchez Coller le dernier pour coller la dictée ou l’annotation la plus récente ; maintenez pour en choisir une autre"),
     ("Copy one of your last five dictations from the menu bar, under Paste Last Dictation", "Copiez l'une de vos cinq dernières dictées depuis la barre des menus, sous Coller la dernière dictée"),
     ("Stop when the call ends", "Arrêter à la fin de l'appel"),
-    ("Stop a recording Hex started on its own 30 s after the call app leaves the microphone and goes quiet", "Arrête un enregistrement lancé automatiquement par Hex 30 s après que l'app d'appel a libéré le micro et s'est tue"),
     ("Hex stops recording in 30 s unless you keep recording.", "Hex arrête l'enregistrement dans 30 s, sauf si vous continuez."),
     ("Record your screen, draw on it, and talk over it", "Enregistrez votre écran, dessinez dessus et commentez à voix haute"),
     ("Live text", "Texte en direct"),
+    ("Faster live text", "Texte en direct plus rapide"),
     ("Failure notices", "Notifications d'échec"),
+    ("Show live words sooner, and paste text from the same shorter lookahead, at a little more GPU work", "Affiche les mots en direct plus tôt et colle le texte avec la même anticipation plus courte, pour un peu plus de travail GPU"),
     ("Live typing", "Saisie en direct"),
     ("Live chapters", "Chapitres en direct"),
     ("Open apps and press keys by voice", "Ouvrez des apps et appuyez sur des touches à la voix"),
     ("Try unfinished features. They may change or break.", "Essayez des fonctionnalités inachevées. Elles peuvent changer ou ne plus fonctionner."),
     ("On while the Hex Microphone driver is installed. Uninstall the driver in Voice Filter to turn it off.", "Activé tant que le pilote Hex Microphone est installé. Désinstallez le pilote dans Filtre vocal pour le désactiver."),
     ("Names in the window you're dictating into help Hex spell them. Never saved", "Les noms de la fenêtre où vous dictez aident Hex à bien les écrire. Jamais enregistrés"),
+    ("When you fix a name in text Hex just pasted, Hex adds the corrected spelling to Vocabulary. It watches only that field, for up to 5 minutes, and never sends it anywhere.", "Quand vous corrigez un nom dans le texte que Hex vient de coller, Hex ajoute l'orthographe corrigée au vocabulaire. Il ne surveille que ce champ, pendant 5 minutes au plus, et ne l'envoie nulle part."),
     ("Rewrite reads nearby text", "La réécriture lit le texte proche"),
     ("Rewrite uses the text around the cursor to spell names and terms right and fit where it pastes.", "La réécriture utilise le texte autour du curseur pour bien orthographier les noms et les termes et s'adapter au point d'insertion."),
     ("That text goes to the mode's OpenCode model, which may be a cloud provider. Password fields are never read.", "Ce texte va au modèle OpenCode du mode, qui peut être un fournisseur cloud. Les champs de mot de passe ne sont jamais lus."),
@@ -178,6 +188,9 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Remove filler words", "Supprimer les mots de remplissage"),
     ("Remove filler words such as um and uh from dictations, without an AI model", "Supprime des dictées les mots de remplissage comme « um » et « uh », sans modèle d'IA"),
     ("Clean up with Apple Intelligence", "Nettoyer avec Apple Intelligence"),
+    ("Neutral voice", "Voix neutre"),
+    ("Rewrites on this Mac instead of any other rewrite.", "Réécrit sur ce Mac au lieu de toute autre réécriture."),
+    ("Rewrite dictations in chosen modes into plain, neutral wording on this Mac, so your writing style doesn't show", "Réécrit les dictées des modes choisis en une formulation simple et neutre sur ce Mac, pour que votre style d'écriture ne se voie pas"),
     ("Sort and filter models", "Trier et filtrer les modèles"),
     ("By recommendation", "Par recommandation"),
     ("By size", "Par taille"),
@@ -379,6 +392,10 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Not granted", "Non accordé"),
     ("Your desktop did not grant every shortcut. Record another one, or free it in your desktop's keyboard settings.", "Votre bureau n'a pas accordé tous les raccourcis. Enregistrez-en un autre ou libérez-le dans les paramètres clavier de votre bureau."),
     ("Your desktop has no shortcuts portal. Bind these commands in its keyboard settings.", "Votre bureau n'a pas de portail de raccourcis. Associez ces commandes dans ses paramètres clavier."),
+    (
+        "Your desktop has no shortcuts portal. Bind this command in its keyboard settings.",
+        "Votre bureau n'a pas de portail de raccourcis. Associez cette commande dans ses paramètres clavier.",
+    ),
     ("Hold to dictate", "Maintenir pour dicter"),
     ("Bind start to the key press and stop to its release", "Associez start à l'appui sur la touche et stop à son relâchement"),
     ("Toggle dictation", "Basculer la dictée"),
@@ -413,6 +430,7 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Auto uses the CPU because {device} stopped responding. Choose GPU to try it again.", "Le mode auto utilise le CPU, car {device} a cessé de répondre. Choisissez GPU pour réessayer."),
     ("Hex switched to the CPU because {device} failed during transcription (out of memory). Restart Hex to use the GPU again.", "Hex est passé au CPU, car {device} a échoué pendant la transcription (mémoire insuffisante). Redémarrez Hex pour réutiliser le GPU."),
     ("Hex uses the CPU because the graphics driver's Vulkan is missing or too old. Update the GPU driver to use the GPU.", "Hex utilise le CPU, car le pilote graphique n'a pas Vulkan ou en a une version trop ancienne. Mettez à jour le pilote GPU pour utiliser le GPU."),
+    ("Hex crashed twice starting the GPU, so speech runs on the CPU. Choose Auto or GPU to try it again.", "Hex a planté deux fois en démarrant le GPU, donc la reconnaissance vocale utilise le CPU. Choisissez Auto ou GPU pour réessayer."),
     ("Dictation HUD", "HUD de dictée"),
     ("Call recording", "Enregistrement des appels"),
     ("Check for updates", "Rechercher des mises à jour"),
@@ -437,6 +455,41 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Term (e.g. cappuccino)", "Terme (ex. : cappuccino)"),
     ("Sounds like (e.g. capuchin, cap a chino)", "Se prononce comme (ex. : capuchin, cap a chino)"),
     ("Up to 16 spellings per term are saved, and 64 characters per term or spelling.", "Jusqu'à 16 graphies par terme sont enregistrées, et 64 caractères par terme ou graphie."),
+    ("Import…", "Importer…"),
+    ("Export…", "Exporter…"),
+    ("Import vocabulary", "Importer le vocabulaire"),
+    ("Export vocabulary", "Exporter le vocabulaire"),
+    ("CSV files", "Fichiers CSV"),
+    ("Text files", "Fichiers texte"),
+    ("Couldn't import that file: {}", "Impossible d’importer ce fichier : {}"),
+    ("Couldn't export the vocabulary: {}", "Impossible d’exporter le vocabulaire : {}"),
+    ("the file is larger than 1 MB", "le fichier dépasse 1 Mo"),
+    ("the file isn't UTF-8 text", "le fichier n'est pas du texte UTF-8"),
+    ("a quote is never closed", "un guillemet n'est jamais fermé"),
+    ("it isn't a regular file", "ce n'est pas un fichier ordinaire"),
+    ("Couldn't save the vocabulary: {}", "Impossible d’enregistrer le vocabulaire : {}"),
+    ("No terms found in that file", "Aucun terme trouvé dans ce fichier"),
+    ("No new terms in that file", "Aucun nouveau terme dans ce fichier"),
+    ("No terms added; skipped {}", "Aucun terme ajouté ; {} ignoré(s)"),
+    ("Added 1 term", "1 terme ajouté"),
+    ("Added {} terms", "{} termes ajoutés"),
+    ("Added 1 term, skipped {}", "1 terme ajouté, {} ignoré(s)"),
+    ("Added {added} terms, skipped {skipped}", "{added} termes ajoutés, {skipped} ignoré(s)"),
+    ("Exported 1 term", "1 terme exporté"),
+    ("Exported {} terms", "{} termes exportés"),
+    ("Updated 1 term", "1 terme mis à jour"),
+    ("Updated {} terms", "{} termes mis à jour"),
+    ("Updated 1 term, skipped {}", "1 terme mis à jour, {} ignoré(s)"),
+    ("Updated {updated} terms, skipped {skipped}", "{updated} termes mis à jour, {skipped} ignoré(s)"),
+    ("Added 1 term, updated {updated}", "1 terme ajouté, {updated} mis à jour"),
+    ("Added {added} terms, updated {updated}", "{added} termes ajoutés, {updated} mis à jour"),
+    ("Added 1 term, updated {updated}, skipped {skipped}", "1 terme ajouté, {updated} mis à jour, {skipped} ignoré(s)"),
+    ("Added {added} terms, updated {updated}, skipped {skipped}", "{added} termes ajoutés, {updated} mis à jour, {skipped} ignoré(s)"),
+    ("Vocabulary files", "Fichiers de vocabulaire"),
+    ("Import terms from a CSV file in the Vocabulary sheet, or save the whole list as one", "Importez des termes depuis un fichier CSV dans la feuille Vocabulaire, ou enregistrez toute la liste dans un fichier"),
+    ("Vocabulary menu", "Menu du vocabulaire"),
+    ("Add terms to Vocabulary from the menu bar, or open the Vocabulary sheet", "Ajoutez des termes au vocabulaire depuis la barre des menus, ou ouvrez la feuille de vocabulaire"),
+    ("Open vocabulary", "Ouvrir le vocabulaire"),
     ("History off", "Historique désactivé"),
     ("Kept forever", "Conservé indéfiniment"),
     ("Kept {}", "Conservé {}"),
@@ -482,7 +535,6 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Pastes your words as Hex heard them", "Colle vos mots tels que Hex les a entendus"),
     ("Only: {}", "Seulement : {}"),
     ("Copied", "Copié"),
-    ("Copy new", "Copier les nouveautés"),
     ("Copy all", "Tout copier"),
     ("Copy section", "Copier la section"),
     ("Chapters", "Chapitres"),
@@ -682,6 +734,10 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Press shortcut", "Appuyez sur le raccourci"),
     ("Press to start dictating, press again to transcribe", "Appuyez pour commencer à dicter, appuyez à nouveau pour transcrire"),
     ("Re-paste the most recent dictation", "Recoller la dictée la plus récente"),
+    (
+        "Start and stop an annotation",
+        "Démarrer et arrêter une annotation",
+    ),
     ("Refresh", "Actualiser"),
     ("Replacement (e.g. OpenCode)", "Remplacement (ex. : OpenCode)"),
     ("Switch to {channel} {version}", "Passer à {channel} {version}"),
@@ -738,7 +794,6 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("How it works", "Fonctionnement"),
     ("Transformations", "Transformations"),
     ("Turn Hex on in every app whenever it opens", "Activer Hex dans toutes les apps à chaque ouverture"),
-    ("Up to date", "À jour"),
     ("Update", "Mettre à jour"),
     ("Use OpenCode default", "Utiliser le réglage par défaut d'OpenCode"),
     ("Configure mouse shortcuts in your Wayland desktop using the hex commands", "Configurez les raccourcis souris dans votre bureau Wayland avec les commandes hex"),
@@ -775,10 +830,6 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Offer to record calls and save local transcripts", "Proposer d'enregistrer les appels et d'enregistrer les transcriptions en local"),
     ("Screen & System Audio Recording", "Enregistrement de l'écran et de l'audio du système"),
     ("Captures the other participants' audio", "Capte l'audio des autres participants"),
-    ("Never offer", "Ne jamais proposer"),
-    ("Detected calls", "Appels détectés"),
-    ("Ask", "Demander"),
-    ("Always record", "Toujours enregistrer"),
     ("Slack huddles", "Huddles Slack"),
     ("Recording automatically", "Enregistrement automatique"),
     ("Required to hear the other participants.", "Nécessaire pour entendre les autres participants."),
@@ -819,9 +870,6 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Recording failed.", "L'enregistrement a échoué."),
     ("Microphone is silent", "Le micro est muet"),
     ("Started automatically", "Démarré automatiquement"),
-    ("No speech yet", "Personne n'a encore parlé"),
-    ("{} min new", "{} min nouvelles"),
-    ("{} sec new", "{} s nouvelles"),
     ("Your microphone was silent for part of this call. Another app may have been using it with voice processing, so your side may be missing.", "Votre micro est resté muet pendant une partie de cet appel. Une autre app l'utilisait peut-être avec le traitement vocal, donc votre voix peut manquer."),
     ("Markdown not saved.", "Markdown non enregistré."),
     ("Notes could not be written.", "Impossible d'écrire les notes."),
@@ -1368,6 +1416,7 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Sat", "Sam"),
     ("Vocabulary help", "Aide au vocabulaire"),
     ("Words on screen", "Mots à l'écran"),
+    ("Learn from corrections", "Apprendre des corrections"),
     ("Free memory when idle", "Libérer la mémoire au repos"),
     ("Left and right keys", "Touches gauche et droite"),
     ("Model test details", "Détails des tests des modèles"),
@@ -1420,6 +1469,8 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("A command such as hex dictation start --print gets the text back when a dictation ends, without pasting or copying it", "Une commande comme hex dictation start --print récupère le texte à la fin d'une dictée, sans le coller ni le copier"),
     ("A finished Annotate capture copies as one zip file, without the video or audio", "Une capture Annotate terminée est copiée en un seul fichier zip, sans la vidéo ni l'audio"),
     ("Add a Stats button to History that summarizes the dictations you kept, with time saved against your typing speed, the hour you dictate most, a year-long heatmap, and all-time totals kept beyond History's retention (counts only, no text). The hex history stats command prints it too", "Ajoute un bouton Statistiques dans l'historique, qui résume les dictées conservées, avec le temps gagné par rapport à votre vitesse de frappe, l'heure où vous dictez le plus, une carte de chaleur sur un an, et des totaux depuis toujours conservés au-delà de la conservation de l'historique (des chiffres seulement, aucun texte). La commande hex history stats l'affiche aussi"),
+    ("Stats on History", "Statistiques dans l'historique"),
+    ("Show your dictation totals in a compact strip at the top of History. Needs Dictation stats.", "Affiche les totaux de vos dictées dans une bande compacte en haut de l'historique. Nécessite Statistiques de dictée."),
     ("If a shortcut is made only of Ctrl, Alt, Shift, or the Windows key, with no letter or number key, pressing another key or clicking after the first second no longer ends the dictation; let go to finish", "Si un raccourci n'est fait que de Ctrl, Alt, Majuscule ou de la touche Windows, sans touche de lettre ni de chiffre, appuyer sur une autre touche ou cliquer après la première seconde ne termine plus la dictée ; relâchez pour finir"),
     ("Modes editor", "Éditeur de modes"),
     ("Edit each mode's apps, corrections and OpenCode rewrite in a Modes pane", "Modifiez les apps, les corrections et la réécriture OpenCode de chaque mode dans un panneau Modes"),
@@ -1438,6 +1489,11 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Show in folder", "Afficher dans le dossier"),
     ("Could not transcribe {}", "Impossible de transcrire {}"),
     ("A file could not be chosen.", "Impossible de choisir un fichier."),
+    ("Agent tools for captures", "Outils d'agent pour les captures"),
+    ("Adds hex annotate zoom, inspect, frames, and skill so coding agents can read a capture closely", "Ajoute hex annotate zoom, inspect, frames et skill pour que les agents de code lisent une capture de près"),
+    ("Stop every call recording when the call ends", "Arrêter chaque enregistrement d'appel à la fin de l'appel"),
+    ("Also stop an offered, calendar, or by-hand call recording 30 s after its call app leaves the microphone, even with Stop when the call ends off", "Arrête aussi un enregistrement lancé depuis une proposition, le calendrier ou à la main 30 s après que son app d'appel libère le micro, même avec « Arrêter à la fin de l'appel » désactivé"),
+    ("Also stop an offered or by-hand call recording 30 s after its call app leaves the microphone, even with Stop when the call ends off", "Arrête aussi un enregistrement lancé depuis une proposition ou à la main 30 s après que son app d'appel libère le micro, même avec « Arrêter à la fin de l'appel » désactivé"),
 ];
 
 #[cfg(test)]

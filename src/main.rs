@@ -8,6 +8,10 @@ const VERSION: &str = env!("HEX_BUILD_VERSION");
 
 #[cfg(target_os = "macos")]
 mod accessibility;
+/// The Annotate pane's Agents section: the hex-annotate skill in coding
+/// agents' folders and hex on PATH (`capture.agents`).
+#[cfg(hex_capture)]
+mod agent_install;
 mod app_paths;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod app_settings;
@@ -28,8 +32,6 @@ mod caps_lock_dictation;
 mod capture_host;
 #[cfg(hex_capture)]
 mod capture_zip;
-/// The macOS and Windows paste continuation; Linux does not join yet.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
 mod continuation;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod control;
@@ -60,7 +62,6 @@ mod microphone_activity;
 mod net;
 #[cfg(target_os = "macos")]
 mod parakeet;
-#[cfg(target_os = "macos")]
 mod paste;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod personal_commands;
@@ -924,7 +925,7 @@ fn main() -> Result<()> {
     // portal or rtkit.
     // SAFETY: Before any other thread exists to read the environment.
     unsafe { std::env::set_var("DISABLE_RTKIT", "1") };
-    linux::input_route::mark_streams();
+    linux::input::route::mark_streams();
     linux::run(&SHUTDOWN)
 }
 

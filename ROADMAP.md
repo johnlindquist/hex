@@ -133,6 +133,15 @@ capture actions. Keep the callback regressions for delayed releases and Fn
 evidence alongside physical Option-hold checks; a physical Fn/Globe smoke test
 and general cross-tap delivery-order validation remain outstanding.
 
+Linux and Windows hotkey captures still count audio the speakers made after
+the press as a missed opening. Their suppressors duck or mute after the hold
+like macOS, but only the macOS recording environment reports when the effect
+took effect, so their ignored head stays without that window
+(`docs/features/dictation.md`, opening after output suppression). Follow-up:
+report the effective moment from the Linux and Windows suppressors, raise the
+live stream's head with the same engine message, and mark the dictation map's
+line for every OS.
+
 Settings > Shortcut mode now offers Toggle (press to start, press again to
 finish) beside Hold on macOS, Linux, and Windows; see
 [dictation](docs/features/dictation.md#shortcut-mode). Physically check it with
@@ -293,6 +302,33 @@ used it on a real Mac:
 - Copy the text in a shot (OCR, Apple's Vision).
 - A self-timer before the shot.
 - Pin a shot to the screen as a floating window.
+
+## Grow Hex Mobile (iOS)
+
+Hex Mobile is in TestFlight with an on-device dictation keyboard. These are the
+larger asks from testers (X replies and TestFlight feedback, Nov 2026) that
+aren't being built yet. Everything stays on device and commercially safe.
+
+- **Keys that learn how you type:** per-user key offsets learned on device from
+  confirmed corrections, feeding the touch decoder before visible hit areas
+  change; bounded, decaying and resettable. Research is under way; ship as an
+  Experiment first.
+- **Chinese input:** Pinyin and Shuangpin layouts with candidate selection.
+- **Themes:** keyboard colour themes (for example a carbon theme), each matched
+  in light and dark.
+- **GIFs:** only with a design that keeps the keyboard offline by default,
+  such as an opt-in search the user starts.
+- **Choose the speech model:** pick between the local models Hex supports
+  (Apple Speech, Parakeet). No cloud models.
+- **Grammar-aware autocorrect:** use the whole phrase, not just the word, beyond
+  the its/it's and their/they're pairs.
+- **Clipboard history:** recent copies to paste again from the keyboard, kept on device. iOS asks before each clipboard read, so it can only remember copies the keyboard sees.
+- **More translation:** detect the language you speak instead of picking it, and translate a copied message back into your own language from the keyboard, all on device.
+- **Interface languages:** translate the app into Ukrainian and more, with help
+  from testers who offered.
+- **Start dictating on switch:** the Dictation bar can start recording when you
+  switch to Hex (built as an Experiment, `ios-dictation-bar-autostart`); needs
+  real-iPhone checks before it ships.
 
 ## Deliberate Deferrals
 
