@@ -29,8 +29,8 @@ public final class KeyboardSettings {
     public void setHaptics(boolean value) { prefs.edit().putBoolean("haptics", value).apply(); }
 
     public enum SpacebarFixMode {
-        FLICK_SCRUBBER("flick_scrubber", "Flick up → inline word scrubber"),
-        LONG_PRESS_PANEL("long_press_panel", "Long-press → Fix Tail panel"),
+        FLICK_SCRUBBER("flick_scrubber", "Swipe up → corrected sentence picker"),
+        LONG_PRESS_PANEL("long_press_panel", "Long-press → corrected sentence picker"),
         HOLD_SLIDE_PICKER("hold_slide_picker", "Hold + slide up → release to pick");
 
         public final String id, label;

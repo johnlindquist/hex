@@ -511,6 +511,11 @@ public final class AutocorrectEngine {
         return TailCorrectionEngine.analyze(textBeforeCursor, dictionary, decodeContext(""));
     }
 
+    /** Analyzes the entire current sentence before cursor for the full-keyboard swipe-up sentence picker. */
+    public TailCorrectionEngine.TailAnalysis analyzeSentence(String textBeforeCursor) {
+        return TailCorrectionEngine.analyzeSentence(textBeforeCursor, dictionary, decodeContext(""));
+    }
+
     /** Returns top spatial candidate words for optional local Gemma contextual reranking. */
     public List<String> spatialCandidates(String currentWord) {
         return spatialCandidates("", currentWord);

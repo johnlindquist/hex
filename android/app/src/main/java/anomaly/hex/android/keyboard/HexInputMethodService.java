@@ -313,12 +313,10 @@ public final class HexInputMethodService extends InputMethodService implements F
   }
   public void onSpacebarTailTrigger(KeyboardSettings.SpacebarFixMode mode) {
     if (ic() == null || fullView == null || !words || privateField || autocorrect == null) return;
-    String ctx = before(256);
-    TailCorrectionEngine.TailAnalysis analysis = autocorrect.analyzeTail(ctx);
     switch (mode) {
-      case FLICK_SCRUBBER -> fullView.showTailScrubber(analysis);
-      case LONG_PRESS_PANEL -> fullView.showTailPanel(analysis);
-      case HOLD_SLIDE_PICKER -> fullView.showTailSlide(analysis);
+      case FLICK_SCRUBBER -> fullView.showSentencePicker(autocorrect.analyzeSentence(before(512)));
+      case LONG_PRESS_PANEL -> fullView.showTailPanel(autocorrect.analyzeSentence(before(512)));
+      case HOLD_SLIDE_PICKER -> fullView.showTailSlide(autocorrect.analyzeTail(before(256)));
     }
   }
   public void onTailFixApply(int replaceLength, String replacement, String modeId, String originalTail) {

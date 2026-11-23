@@ -4,23 +4,27 @@ import android.content.Context;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
-import android.text.TextUtils;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.StyleSpan;
+import android.text.style.UnderlineSpan;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.*;
-import java.util.List;
+import java.util.*;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import static anomaly.hex.android.keyboard.KeyboardPalette.*;
 
 /**
- * Option 1 UI: Long-press Spacebar -> Fix Tail panel.
- * Top: 1-tap full-tail phrase corrections.
- * Bottom: tappable chips for the last ~6 words + per-word spatial/real-word neighbor pills.
+ * Full-keyboard replacement UI for choosing from fully corrected sentence options
+ * (triggered by swiping up from the spacebar, or long-press in panel mode).
+ * Displays scrollable multi-line sentence cards with changed words highlighted, plus
+ * optional surgical per-word chips below.
  */
 final class TailFixPanelView extends LinearLayout {
     private final LinearLayout phraseList, wordChipRow, wordCandRow;
-    private final TextView subtitle;
+    private final TextView titleView, subtitle;
+    private final ScrollView scroll;
     private TailCorrectionEngine.TailAnalysis analysis;
     private int selectedWordIndex = -1;
     private Consumer<TailCorrectionEngine.PhraseFix> onPickPhrase;
@@ -30,18 +34,18 @@ final class TailFixPanelView extends LinearLayout {
         super(c);
         setOrientation(VERTICAL);
         setBackgroundColor(BACKDROP);
-        setPadding(dp(c, 10), dp(c, 8), dp(c, 10), dp(c, 10));
+        setPadding(dp(c, 12), dp(c, 8), dp(c, 12), dp(c, 10));
 
-        // Header
+        // Fixed Header
         LinearLayout header = new LinearLayout(c);
         header.setOrientation(HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = new TextView(c);
-        title.setText("Fix recent words");
-        title.setTextColor(TEXT);
-        title.setTextSize(14f);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        header.addView(title, new LayoutParams(0, -2, 1f));
+        titleView = new TextView(c);
+        titleView.setText("Choose a corrected sentence");
+        titleView.setTextColor(TEXT);
+        titleView.setTextSize(14.5f);
+        titleView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        header.addView(titleView, new LayoutParams(0, -2, 1f));
 
         TextView close = new TextView(c);
         close.setText("✕");
@@ -49,7 +53,7 @@ final class TailFixPanelView extends LinearLayout {
         close.setTextSize(15f);
         close.setGravity(Gravity.CENTER);
         close.setBackground(pillPress(c, CHIP_FILL));
-        close.setContentDescription("Close fix panel");
+        close.setContentDescription("Close sentence picker");
         close.setOnClickListener(v -> onClose.run());
         header.addView(close, new LayoutParams(dp(c, 32), dp(c, 30)));
         addView(header, new LayoutParams(-1, -2));
@@ -57,21 +61,28 @@ final class TailFixPanelView extends LinearLayout {
         subtitle = new TextView(c);
         subtitle.setTextColor(TEXT_MUTED);
         subtitle.setTextSize(12f);
-        subtitle.setPadding(0, dp(c, 2), 0, dp(c, 6));
+        subtitle.setMaxLines(2);
+        subtitle.setPadding(0, dp(c, 2), 0, dp(c, 8));
         addView(subtitle, new LayoutParams(-1, -2));
 
-        // Top: full-phrase instant fixes
+        // Scrollable body filling the entire keyboard area
+        scroll = new ScrollView(c);
+        scroll.setVerticalScrollBarEnabled(false);
+        LinearLayout body = new LinearLayout(c);
+        body.setOrientation(VERTICAL);
+
+        // Full corrected sentence cards
         phraseList = new LinearLayout(c);
         phraseList.setOrientation(VERTICAL);
-        addView(phraseList, new LayoutParams(-1, -2));
+        body.addView(phraseList, new LayoutParams(-1, -2));
 
-        // Bottom: surgical word chips
+        // Optional surgical word-level swap row
         TextView chipLabel = new TextView(c);
         chipLabel.setText("Or tap a word to swap");
         chipLabel.setTextColor(TEXT_MUTED);
         chipLabel.setTextSize(11.5f);
         chipLabel.setPadding(0, dp(c, 8), 0, dp(c, 4));
-        addView(chipLabel, new LayoutParams(-1, -2));
+        body.addView(chipLabel, new LayoutParams(-1, -2));
 
         HorizontalScrollView chipScroll = new HorizontalScrollView(c);
         chipScroll.setHorizontalScrollBarEnabled(false);
@@ -79,17 +90,19 @@ final class TailFixPanelView extends LinearLayout {
         wordChipRow.setOrientation(HORIZONTAL);
         wordChipRow.setGravity(Gravity.CENTER_VERTICAL);
         chipScroll.addView(wordChipRow, new FrameLayout.LayoutParams(-2, -2));
-        addView(chipScroll, new LayoutParams(-1, -2));
+        body.addView(chipScroll, new LayoutParams(-1, -2));
 
-        // Selected word's candidates
         HorizontalScrollView candScroll = new HorizontalScrollView(c);
         candScroll.setHorizontalScrollBarEnabled(false);
         wordCandRow = new LinearLayout(c);
         wordCandRow.setOrientation(HORIZONTAL);
         wordCandRow.setGravity(Gravity.CENTER_VERTICAL);
-        wordCandRow.setPadding(0, dp(c, 6), 0, 0);
+        wordCandRow.setPadding(0, dp(c, 6), 0, dp(c, 4));
         candScroll.addView(wordCandRow, new FrameLayout.LayoutParams(-2, -2));
-        addView(candScroll, new LayoutParams(-1, -2));
+        body.addView(candScroll, new LayoutParams(-1, -2));
+
+        scroll.addView(body, new FrameLayout.LayoutParams(-1, -2));
+        addView(scroll, new LayoutParams(-1, 0, 1f));
     }
 
     void show(TailCorrectionEngine.TailAnalysis analysis,
@@ -99,6 +112,7 @@ final class TailFixPanelView extends LinearLayout {
         this.onPickPhrase = onPickPhrase;
         this.onPickWord = onPickWord;
         this.selectedWordIndex = analysis == null ? -1 : analysis.defaultFocusIndex();
+        scroll.scrollTo(0, 0);
         render();
     }
 
@@ -109,35 +123,35 @@ final class TailFixPanelView extends LinearLayout {
         wordCandRow.removeAllViews();
 
         if (analysis == null || analysis.isEmpty()) {
-            subtitle.setText("Type a few words first.");
+            subtitle.setText("Type a sentence first, then swipe up from the spacebar.");
             return;
         }
-        subtitle.setText("“" + analysis.originalTail().trim() + "”");
+        String origTrim = analysis.originalTail().trim();
+        subtitle.setText("Typed: “" + origTrim + "”");
 
         List<TailCorrectionEngine.PhraseFix> phrases = analysis.phraseFixes();
         if (phrases.isEmpty()) {
             TextView none = new TextView(c);
-            none.setText("No phrase fixes found — tap a word below to inspect neighbors.");
+            none.setText("Looks clean — tap any word below to inspect close alternatives.");
             none.setTextColor(TEXT_MUTED);
-            none.setTextSize(12.5f);
-            none.setPadding(0, dp(c, 2), 0, dp(c, 4));
+            none.setTextSize(13f);
+            none.setPadding(0, dp(c, 4), 0, dp(c, 6));
             phraseList.addView(none);
         } else {
             for (int i = 0; i < phrases.size(); i++) {
                 TailCorrectionEngine.PhraseFix pf = phrases.get(i);
                 TextView row = new TextView(c);
-                row.setText(pf.label());
+                row.setText(highlightChanges(origTrim, pf.label()));
                 row.setTextColor(i == 0 ? ON_PILL_TEXT : TEXT);
-                row.setTextSize(14f);
-                row.setSingleLine(true);
-                row.setEllipsize(TextUtils.TruncateAt.START);
-                row.setPadding(dp(c, 12), dp(c, 9), dp(c, 12), dp(c, 9));
+                row.setTextSize(15f);
+                row.setLineSpacing(dp(c, 2), 1.0f);
+                row.setPadding(dp(c, 14), dp(c, 11), dp(c, 14), dp(c, 11));
                 row.setBackground(cardPress(c, i == 0 ? RETURN_PILL_FILL : CHIP_FILL));
                 row.setOnClickListener(v -> {
                     if (onPickPhrase != null) onPickPhrase.accept(pf);
                 });
                 LayoutParams lp = new LayoutParams(-1, -2);
-                lp.bottomMargin = dp(c, 5);
+                lp.bottomMargin = dp(c, 7);
                 phraseList.addView(row, lp);
             }
         }
@@ -190,10 +204,34 @@ final class TailFixPanelView extends LinearLayout {
         }
     }
 
+    /** Bolds and underlines words in {@code candidate} that differ from {@code original}. */
+    static CharSequence highlightChanges(String original, String candidate) {
+        if (original == null || candidate == null || original.equals(candidate)) return candidate == null ? "" : candidate;
+        Set<String> origTokens = new HashSet<>();
+        for (String t : original.split("\\s+")) {
+            if (!t.isEmpty()) origTokens.add(t.toLowerCase(Locale.ROOT));
+        }
+        SpannableStringBuilder ssb = new SpannableStringBuilder(candidate);
+        int i = 0, n = candidate.length();
+        while (i < n) {
+            while (i < n && Character.isWhitespace(candidate.charAt(i))) i++;
+            int start = i;
+            while (i < n && !Character.isWhitespace(candidate.charAt(i))) i++;
+            if (i > start) {
+                String tok = candidate.substring(start, i);
+                if (!origTokens.contains(tok.toLowerCase(Locale.ROOT))) {
+                    ssb.setSpan(new StyleSpan(Typeface.BOLD), start, i, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    ssb.setSpan(new UnderlineSpan(), start, i, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+            }
+        }
+        return ssb;
+    }
+
     private static StateListDrawable cardPress(Context c, int fill) {
         StateListDrawable st = new StateListDrawable();
-        st.addState(new int[]{android.R.attr.state_pressed}, rounded(c, KEY_PRESSED, 11));
-        st.addState(new int[0], rounded(c, fill, 11));
+        st.addState(new int[]{android.R.attr.state_pressed}, rounded(c, KEY_PRESSED, 12));
+        st.addState(new int[0], rounded(c, fill, 12));
         return st;
     }
 

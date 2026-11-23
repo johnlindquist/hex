@@ -12,6 +12,7 @@ import java.util.regex.Pattern;
  */
 public final class TailCorrectionEngine {
     public static final int MAX_WORDS = 6;
+    public static final int MAX_SENTENCE_WORDS = 24;
     private static final Pattern WORD_SPAN = Pattern.compile("[\\p{L}][\\p{L}'’]{0,23}");
 
     public record WordSlot(
@@ -38,6 +39,28 @@ public final class TailCorrectionEngine {
             String textBeforeCursor,
             WordDictionary dict,
             SpatialKeyboardDecoder.DecodeContext ctx) {
+        return analyzeRange(textBeforeCursor, dict, ctx, MAX_WORDS, false, 3);
+    }
+
+    /**
+     * Analyzes the entire current sentence before the cursor (from the last sentence boundary
+     * '.', '!', '?', or newline, capped at MAX_SENTENCE_WORDS) and generates up to 4 fully
+     * corrected sentence options for the full-keyboard swipe-up sentence picker.
+     */
+    public static TailAnalysis analyzeSentence(
+            String textBeforeCursor,
+            WordDictionary dict,
+            SpatialKeyboardDecoder.DecodeContext ctx) {
+        return analyzeRange(textBeforeCursor, dict, ctx, MAX_SENTENCE_WORDS, true, 4);
+    }
+
+    private static TailAnalysis analyzeRange(
+            String textBeforeCursor,
+            WordDictionary dict,
+            SpatialKeyboardDecoder.DecodeContext ctx,
+            int maxWords,
+            boolean stopAtSentenceBoundary,
+            int maxPhrases) {
         if (textBeforeCursor == null || textBeforeCursor.isBlank()) {
             return new TailAnalysis("", 0, List.of(), List.of(), -1);
         }
@@ -45,10 +68,26 @@ public final class TailCorrectionEngine {
         Map<String, String> screen = dc.screenWords() == null ? Map.of() : dc.screenWords();
         PersonalAutocorrectStore store = dc.personalStore();
 
+        int sentenceMinIndex = 0;
+        if (stopAtSentenceBoundary) {
+            int trimmedEnd = textBeforeCursor.length();
+            while (trimmedEnd > 0 && Character.isWhitespace(textBeforeCursor.charAt(trimmedEnd - 1))) trimmedEnd--;
+            for (int k = trimmedEnd - 1; k >= 0; k--) {
+                char c = textBeforeCursor.charAt(k);
+                if (c == '\n' || c == '\r' || c == '.' || c == '!' || c == '?') {
+                    // Ignore a trailing sentence mark at the very end of the sentence itself.
+                    if (k == trimmedEnd - 1) continue;
+                    sentenceMinIndex = k + 1;
+                    break;
+                }
+            }
+        }
+
         List<int[]> spans = new ArrayList<>();
         Matcher m = WORD_SPAN.matcher(textBeforeCursor);
         while (m.find()) {
             int s = m.start(), e = m.end();
+            if (s < sentenceMinIndex) continue;
             if (s > 0) {
                 char prev = textBeforeCursor.charAt(s - 1);
                 if (prev == '@' || prev == '/' || prev == '#' || prev == '_' || Character.isDigit(prev)) continue;
@@ -59,7 +98,7 @@ public final class TailCorrectionEngine {
             return new TailAnalysis("", 0, List.of(), List.of(), -1);
         }
 
-        int fromIdx = Math.max(0, spans.size() - MAX_WORDS);
+        int fromIdx = Math.max(0, spans.size() - maxWords);
         int tailStart = spans.get(fromIdx)[0];
         String tail = textBeforeCursor.substring(tailStart);
         int replaceLen = tail.length();
@@ -85,7 +124,6 @@ public final class TailCorrectionEngine {
             if (suspicious) focusIndex = slotIdx;
         }
         if (focusIndex < 0 && !slots.isEmpty()) {
-            // If all words are valid English words, focus the rightmost word that has real-word neighbors.
             for (int i = slots.size() - 1; i >= 0; i--) {
                 if (!slots.get(i).candidates().isEmpty()) {
                     focusIndex = i;
@@ -95,7 +133,7 @@ public final class TailCorrectionEngine {
             if (focusIndex < 0) focusIndex = slots.size() - 1;
         }
 
-        List<PhraseFix> phrases = buildPhraseFixes(tail, slots, focusIndex);
+        List<PhraseFix> phrases = buildPhraseFixes(tail, slots, focusIndex, maxPhrases);
         return new TailAnalysis(tail, replaceLen, List.copyOf(slots), List.copyOf(phrases), focusIndex);
     }
 
@@ -150,10 +188,10 @@ public final class TailCorrectionEngine {
         return list.size() > 4 ? list.subList(0, 4) : list;
     }
 
-    private static List<PhraseFix> buildPhraseFixes(String tail, List<WordSlot> slots, int focusIndex) {
+    private static List<PhraseFix> buildPhraseFixes(String tail, List<WordSlot> slots, int focusIndex, int maxPhrases) {
         LinkedHashMap<String, PhraseFix> unique = new LinkedHashMap<>();
 
-        // Phrase 1: Fix ALL suspicious words in the tail at once
+        // Phrase 1: Fix ALL suspicious words in the sentence at once
         boolean anySuspicious = false;
         StringBuilder allFixed = new StringBuilder(tail.length() + 8);
         int cursor = 0;
@@ -173,34 +211,56 @@ public final class TailCorrectionEngine {
             unique.put(p1, new PhraseFix(p1.trim(), p1));
         }
 
-        // Phrases 2..3: Alternate candidates on the focused word (handles real-word slips & ambiguity)
-        if (focusIndex >= 0 && focusIndex < slots.size()) {
-            WordSlot focus = slots.get(focusIndex);
-            for (String cand : focus.candidates()) {
-                if (unique.size() >= 3) break;
-                // Build from the all-fixed tail if other words were also suspicious, else from original tail
-                StringBuilder sb = new StringBuilder(tail.length() + 8);
-                int c = 0;
-                for (int i = 0; i < slots.size(); i++) {
-                    WordSlot w = slots.get(i);
-                    sb.append(tail, c, w.startInTail());
-                    if (i == focusIndex) {
-                        sb.append(cand);
-                    } else if (w.suspicious() && !w.candidates().isEmpty()) {
-                        sb.append(w.candidates().get(0));
-                    } else {
-                        sb.append(w.original());
-                    }
-                    c = w.endInTail();
-                }
-                sb.append(tail.substring(c));
-                String variant = sb.toString();
-                if (!variant.equals(tail) && !unique.containsKey(variant)) {
-                    unique.put(variant, new PhraseFix(variant.trim(), variant));
-                }
-            }
+        // Alternates on the focused word first
+        addAlternatesForSlot(tail, slots, focusIndex, unique, maxPhrases);
+
+        // Alternates on other suspicious words (right-to-left)
+        for (int i = slots.size() - 1; i >= 0 && unique.size() < maxPhrases; i--) {
+            if (i == focusIndex || !slots.get(i).suspicious()) continue;
+            addAlternatesForSlot(tail, slots, i, unique, maxPhrases);
         }
+
+        // Finally, if we still have room, offer high-confidence real-word neighbor swaps (right-to-left)
+        for (int i = slots.size() - 1; i >= 0 && unique.size() < maxPhrases; i--) {
+            if (i == focusIndex || slots.get(i).suspicious() || slots.get(i).candidates().isEmpty()) continue;
+            addSingleCandidateForSlot(tail, slots, i, slots.get(i).candidates().get(0), unique);
+        }
+
         return new ArrayList<>(unique.values());
+    }
+
+    private static void addAlternatesForSlot(
+            String tail, List<WordSlot> slots, int targetIndex,
+            LinkedHashMap<String, PhraseFix> unique, int maxPhrases) {
+        if (targetIndex < 0 || targetIndex >= slots.size()) return;
+        for (String cand : slots.get(targetIndex).candidates()) {
+            if (unique.size() >= maxPhrases) break;
+            addSingleCandidateForSlot(tail, slots, targetIndex, cand, unique);
+        }
+    }
+
+    private static void addSingleCandidateForSlot(
+            String tail, List<WordSlot> slots, int targetIndex, String cand,
+            LinkedHashMap<String, PhraseFix> unique) {
+        StringBuilder sb = new StringBuilder(tail.length() + 8);
+        int c = 0;
+        for (int i = 0; i < slots.size(); i++) {
+            WordSlot w = slots.get(i);
+            sb.append(tail, c, w.startInTail());
+            if (i == targetIndex) {
+                sb.append(cand);
+            } else if (w.suspicious() && !w.candidates().isEmpty()) {
+                sb.append(w.candidates().get(0));
+            } else {
+                sb.append(w.original());
+            }
+            c = w.endInTail();
+        }
+        sb.append(tail.substring(c));
+        String variant = sb.toString();
+        if (!variant.equals(tail) && !unique.containsKey(variant)) {
+            unique.put(variant, new PhraseFix(variant.trim(), variant));
+        }
     }
 
     private static String canonical(String lower, Map<String, String> screen, PersonalAutocorrectStore store) {

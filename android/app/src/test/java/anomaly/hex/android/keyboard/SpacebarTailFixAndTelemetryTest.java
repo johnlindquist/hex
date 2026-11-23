@@ -93,6 +93,21 @@ public class SpacebarTailFixAndTelemetryTest {
         assertTrue(foodAnalysis.words().get(2).candidates().contains("good"));
     }
 
+    @Test public void sentenceAnalysisScansFullCurrentSentenceAndBuildsMultipleOptions() {
+        String text = "First sentence stays untouched. I really wantbto check teh configuration befroe we shup";
+        var analysis = TailCorrectionEngine.analyzeSentence(
+                text, dict, SpatialKeyboardDecoder.DecodeContext.EMPTY);
+        assertFalse(analysis.isEmpty());
+        assertEquals("I really wantbto check teh configuration befroe we shup", analysis.originalTail());
+        assertFalse("Expected at least 1 full corrected sentence option", analysis.phraseFixes().isEmpty());
+        String top = analysis.phraseFixes().get(0).label();
+        assertTrue("Top sentence should fix 'wantbto' -> 'want to', got: " + top, top.contains("want to"));
+        assertTrue("Top sentence should fix 'teh' -> 'the', got: " + top, top.contains("the"));
+        assertTrue("Top sentence should fix 'befroe' -> 'before', got: " + top, top.contains("before"));
+        assertTrue("Should offer multiple corrected sentence options, got " + analysis.phraseFixes().size(),
+                analysis.phraseFixes().size() >= 2);
+    }
+
     @Test public void spacebarFixModeDefaultsToFlickScrubber() {
         assertEquals(KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER,
                 KeyboardSettings.SpacebarFixMode.fromId(null));

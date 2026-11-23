@@ -366,7 +366,7 @@ public final class KeyPlaneView extends View {
         else if(down.kind()==KeyKind.SPACE && !spaceGestureHandled && !dragging
                 && spaceFixEnabled && !searching
                 && spaceFixMode == KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER
-                && (originY - y) >= 24f && Math.abs(x - origin) < 30f) {
+                && (originY - y) >= 24f && Math.abs(x - origin) < 44f) {
             removeCallbacks(spaceHold);
             spaceGestureHandled = true;
             if(haptics) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);

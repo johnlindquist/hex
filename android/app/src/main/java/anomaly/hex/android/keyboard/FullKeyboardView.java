@@ -235,7 +235,13 @@ public final class FullKeyboardView extends FrameLayout {
                 },
                 this::closeTailFix);
     }
+    public void showSentencePicker(TailCorrectionEngine.TailAnalysis analysis) {
+        showFullKeyboardFixPanel(analysis, KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER);
+    }
     public void showTailPanel(TailCorrectionEngine.TailAnalysis analysis) {
+        showFullKeyboardFixPanel(analysis, KeyboardSettings.SpacebarFixMode.LONG_PRESS_PANEL);
+    }
+    private void showFullKeyboardFixPanel(TailCorrectionEngine.TailAnalysis analysis, KeyboardSettings.SpacebarFixMode mode) {
         closeEmoji();
         closeRewrite();
         strip.hideScrubber();
@@ -252,7 +258,7 @@ public final class FullKeyboardView extends FrameLayout {
                     closeTailFix();
                     if (a != null) {
                         host.onTailFixApply(a.replaceLength(), phrase.replacement(),
-                                KeyboardSettings.SpacebarFixMode.LONG_PRESS_PANEL.id, a.originalTail().trim());
+                                mode.id, a.originalTail().trim());
                     }
                 },
                 (wordIdx, cand) -> {
@@ -261,7 +267,7 @@ public final class FullKeyboardView extends FrameLayout {
                     String replaced = TailCorrectionEngine.replaceWord(a, wordIdx, cand);
                     closeTailFix();
                     host.onTailFixApply(a.replaceLength(), replaced,
-                            KeyboardSettings.SpacebarFixMode.LONG_PRESS_PANEL.id, a.words().get(wordIdx).original());
+                            mode.id, a.words().get(wordIdx).original());
                 });
         tailFixPanel.setVisibility(VISIBLE);
         strip.setVisibility(INVISIBLE);
