@@ -9,7 +9,9 @@ public enum LabId {
     TYPE_ANYWHERE("type_anywhere", "Type anywhere", "Keyboard", "Tap the accessibility button anywhere to capture the screen and ask AI."),
     EMOJI_KEYBOARD("emoji_keyboard", "Emoji keyboard", "Keyboard", "Adds an emoji key and searchable emoji panel to Hex Keyboard."),
     SPATIAL_AUTOCORRECT("spatial_autocorrect", "Thumb-position autocorrect", "Keyboard", "Experimental: fix fat-thumb slips by QWERTY position, pull words on screen into the dictionary, and learn from every word you type."),
-    TWO_THUMB_SPACE("two_thumb_space", "Two-thumb tap for space", "Keyboard", "Experimental: tap both thumbs on the keyboard at the same time to trigger the spacebar.");
+    TWO_THUMB_SPACE("two_thumb_space", "Two-thumb tap for space", "Keyboard", "Experimental: tap both thumbs on the keyboard at the same time to trigger the spacebar."),
+    SPACEBAR_FIX_TAIL("spacebar_fix_tail", "Spacebar tail fix", "Keyboard", "Experimental: flick up or hold the spacebar to fix fat-finger typos in the last few words."),
+    TYPING_TELEMETRY("typing_telemetry", "Typing telemetry log", "Keyboard", "Record keystrokes, tap coordinates, and corrections locally so you can export and share them for tuning.");
     public final String id, title, group, summary;
     LabId(String id, String title, String group, String summary) {
         this.id = id; this.title = title; this.group = group; this.summary = summary;

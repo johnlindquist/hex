@@ -560,6 +560,33 @@ public final class HexHomeActivity extends Activity {
   @Override
   protected void onActivityResult(int request, int result, Intent data) {
     super.onActivityResult(request, result, data);
+    if (request == 22 && result == RESULT_OK && data != null && data.getData() != null) {
+      Uri dest = data.getData();
+      Context app = getApplicationContext();
+      new Thread(() -> {
+        anomaly.hex.android.keyboard.TypingTelemetryLog log =
+            anomaly.hex.android.keyboard.TypingTelemetryLog.get(app);
+        log.flushSync();
+        File src = log.file();
+        boolean ok = false;
+        if (src.isFile()) {
+          try (InputStream in = new java.io.FileInputStream(src);
+               java.io.OutputStream out = app.getContentResolver().openOutputStream(dest)) {
+            if (out != null) {
+              byte[] buf = new byte[8192];
+              int n;
+              while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+              out.flush();
+              ok = true;
+            }
+          } catch (Exception ignored) {}
+        }
+        final boolean saved = ok;
+        runOnUiThread(() -> Toast.makeText(this,
+            saved ? "Saved typing telemetry log" : "Nothing to export yet", Toast.LENGTH_SHORT).show());
+      }, "hex-telemetry-export").start();
+      return;
+    }
     if (request != 21 || result != RESULT_OK || data == null)
       return;
     Set<Uri> files = new LinkedHashSet<>();
@@ -1259,6 +1286,23 @@ public final class HexHomeActivity extends Activity {
         act("Gemini API key · " + anomaly.hex.android.anywhere.TypeAnywhereAiClient.connectionSummary(this),
             false, this::configureAnywhereKey);
       }
+      if (lab == LabId.SPACEBAR_FIX_TAIL && labs.isEnabled(lab)) {
+        KeyboardSettings kb = new KeyboardSettings(this);
+        act("Gesture mode · " + kb.spacebarFixMode().label, false, this::configureSpacebarFixMode);
+      }
+      if (lab == LabId.TYPING_TELEMETRY && labs.isEnabled(lab)) {
+        anomaly.hex.android.keyboard.TypingTelemetryLog log =
+            anomaly.hex.android.keyboard.TypingTelemetryLog.get(this);
+        log.flushSync();
+        String summary = anomaly.hex.android.keyboard.TypingTelemetryLog.formatStats(log.stats());
+        act("Share telemetry log · " + summary, false, this::shareTelemetryLog);
+        act("Save telemetry log to Files", false, this::saveTelemetryLog);
+        act("Clear telemetry log", false, () -> {
+          log.clear();
+          Toast.makeText(this, "Typing telemetry cleared", Toast.LENGTH_SHORT).show();
+          render();
+        });
+      }
       if (lab == LabId.WORDS_ON_SCREEN && labs.isEnabled(lab))
         act("Configure window access", false, this::accessibility);
       if (lab == LabId.RECOVERY_DRAFTS && labs.isEnabled(lab))
@@ -1270,6 +1314,55 @@ public final class HexHomeActivity extends Activity {
       settings.setOnboardingCompleted(false);
       page(0);
     });
+  }
+  private void configureSpacebarFixMode() {
+    KeyboardSettings kb = new KeyboardSettings(this);
+    KeyboardSettings.SpacebarFixMode[] modes = KeyboardSettings.SpacebarFixMode.values();
+    String[] labels = new String[modes.length];
+    int checked = 0;
+    KeyboardSettings.SpacebarFixMode current = kb.spacebarFixMode();
+    for (int i = 0; i < modes.length; i++) {
+      labels[i] = modes[i].label + (modes[i] == KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER ? " (Default)" : "");
+      if (modes[i] == current) checked = i;
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Spacebar tail fix behavior")
+        .setSingleChoiceItems(labels, checked, (d, which) -> {
+          kb.setSpacebarFixMode(modes[which]);
+          d.dismiss();
+          render();
+        })
+        .setNegativeButton("Cancel", null)
+        .show();
+  }
+  private void shareTelemetryLog() {
+    anomaly.hex.android.keyboard.TypingTelemetryLog log =
+        anomaly.hex.android.keyboard.TypingTelemetryLog.get(this);
+    log.flushSync();
+    if (!log.file().isFile() || log.file().length() == 0) {
+      Toast.makeText(this, "No typing telemetry recorded yet — type a few words first", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    Intent share = new Intent(Intent.ACTION_SEND)
+        .setType("application/x-ndjson")
+        .putExtra(Intent.EXTRA_SUBJECT, "Hex typing telemetry log")
+        .putExtra(Intent.EXTRA_STREAM, anomaly.hex.android.keyboard.TypingTelemetryProvider.FILE_URI)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+    startActivity(Intent.createChooser(share, "Share Hex typing telemetry"));
+  }
+  private void saveTelemetryLog() {
+    anomaly.hex.android.keyboard.TypingTelemetryLog log =
+        anomaly.hex.android.keyboard.TypingTelemetryLog.get(this);
+    log.flushSync();
+    if (!log.file().isFile() || log.file().length() == 0) {
+      Toast.makeText(this, "No typing telemetry recorded yet", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+        .addCategory(Intent.CATEGORY_OPENABLE)
+        .setType("application/x-ndjson")
+        .putExtra(Intent.EXTRA_TITLE, anomaly.hex.android.keyboard.TypingTelemetryLog.FILE_NAME);
+    startActivityForResult(save, 22);
   }
   private void anywhereSizeRow() {
     divider(group);

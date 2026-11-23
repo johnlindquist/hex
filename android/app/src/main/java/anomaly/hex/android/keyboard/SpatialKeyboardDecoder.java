@@ -117,6 +117,57 @@ public final class SpatialKeyboardDecoder {
     return sorted.size() > limit ? sorted.subList(0, limit) : sorted;
   }
 
+  /**
+   * Detects when a bottom-row key directly above the spacebar (c, v, b, n, m) was accidentally
+   * hit instead of the spacebar between two valid words (e.g. "wantbto" -> "want to",
+   * "inmthe" -> "in the", "gotvthere" -> "got there").
+   */
+  public static String splitSpacebarMiss(WordDictionary dict, String lower, DecodeContext ctx) {
+    if (dict == null || lower == null || lower.length() < 4 || lower.length() > 22) return null;
+    if (dict.contains(lower)) return null;
+    DecodeContext dc = ctx == null ? DecodeContext.EMPTY : ctx;
+    Map<String, String> screen = dc.screenWords() == null ? Map.of() : dc.screenWords();
+    PersonalAutocorrectStore store = dc.personalStore();
+    if (screen.containsKey(lower) || (store != null && store.isPersonalWord(lower))) return null;
+
+    String best = null;
+    int bestScore = Integer.MAX_VALUE;
+    int n = lower.length();
+    for (int i = 1; i < n - 1; i++) {
+      char mid = lower.charAt(i);
+      if (mid != 'c' && mid != 'v' && mid != 'b' && mid != 'n' && mid != 'm') continue;
+      String left = lower.substring(0, i);
+      String right = lower.substring(i + 1);
+      int rLeft = splitWordRank(dict, left, screen, store);
+      if (rLeft < 0) continue;
+      int rRight = splitWordRank(dict, right, screen, store);
+      if (rRight < 0) continue;
+      // Avoid splitting very short obscure fragments unless both are very common words
+      if ((left.length() == 1 || right.length() == 1) && (rLeft > 1200 || rRight > 1200)) continue;
+      int score = rLeft + rRight;
+      // Slight preference for b/v/n which sit dead-center above the spacebar
+      if (mid == 'c' || mid == 'm') score += 400;
+      if (score < bestScore) {
+        bestScore = score;
+        String leftOut = left.equals("i") ? "I" : left;
+        String rightOut = right.equals("i") ? "I" : right;
+        best = leftOut + " " + rightOut;
+      }
+    }
+    return best;
+  }
+
+  private static int splitWordRank(
+      WordDictionary dict, String w, Map<String, String> screen, PersonalAutocorrectStore store) {
+    if (w.equals("i") || w.equals("a")) return 5;
+    if (w.length() < 2) return -1;
+    if (screen.containsKey(w)) return 25;
+    if (store != null && store.isPersonalWord(w)) return 150;
+    int r = dict.rankOf(w);
+    if (r >= 0 && r < 10000) return r;
+    return -1;
+  }
+
   private static void scanDynamicPool(
       String lower, int n, int maxSlips, Collection<String> pool, int baseRank,
       PersonalAutocorrectStore store, Map<String, WordDictionary.Candidate> best) {

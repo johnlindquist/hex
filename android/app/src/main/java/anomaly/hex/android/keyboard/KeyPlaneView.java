@@ -19,12 +19,20 @@ public final class KeyPlaneView extends View {
         void onDeleteChar();
         void onDeleteWord();
         void onSpace();
+        void onTwoThumbSpace();
         void onReturn();
         void onCursorMove(int delta);
         void onSelectionStart();
         void onSelectionExtend(int delta);
         void onSelectionEnd();
         void onSwitchKeyboard();
+        void onKeyTapTelemetry(String keyLabel, String kind, float tapXdp, float tapYdp,
+                               float keyCenterXdp, float keyCenterYdp, String layer, float kbWidthDp);
+        void onSpacebarFlickUp();
+        void onSpacebarLongPress();
+        void onSpacebarSlideStart();
+        void onSpacebarSlideMove(float dyUpDp);
+        void onSpacebarSlideEnd();
     }
     private final Input host;
     private final Runnable openEmoji;
@@ -40,9 +48,11 @@ public final class KeyPlaneView extends View {
     private Key down;
     private long started;
     private int pointer = -1, heldShiftPointer = -1, selection;
-    private float origin, cursor, lastX, pickerLeft, cell;
+    private float origin, originY, cursor, lastX, pickerLeft, cell;
     private String[] variants;
     private boolean dragging, selecting, searching, popups = true, haptics = true, emoji, twoThumbSpace, chordConsumed;
+    private boolean spaceFixEnabled, spaceGestureHandled, spaceSlideActive;
+    private KeyboardSettings.SpacebarFixMode spaceFixMode = KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER;
 
     KeyPlaneView(Context c, Input host, Runnable openEmoji) {
         super(c); this.host = host; this.openEmoji = openEmoji;
@@ -60,6 +70,10 @@ public final class KeyPlaneView extends View {
     }
     void setTwoThumbSpace(boolean enabled) {
         twoThumbSpace = enabled;
+    }
+    void setSpacebarFix(boolean enabled, KeyboardSettings.SpacebarFixMode mode) {
+        spaceFixEnabled = enabled;
+        spaceFixMode = mode == null ? KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER : mode;
     }
     void field(FieldKind kind, String label) {
         field(kind, label, Layer.LETTERS, true);
@@ -245,12 +259,27 @@ public final class KeyPlaneView extends View {
             postDelayed(this,75);
         }
     };
+    private final Runnable spaceHold = this::onSpaceHoldElapsed;
+    private void onSpaceHoldElapsed() {
+        if (down == null || down.kind() != KeyKind.SPACE || dragging || !spaceFixEnabled) return;
+        if (spaceFixMode == KeyboardSettings.SpacebarFixMode.LONG_PRESS_PANEL) {
+            spaceGestureHandled = true;
+            if (haptics) performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            host.onSpacebarLongPress();
+        } else if (spaceFixMode == KeyboardSettings.SpacebarFixMode.HOLD_SLIDE_PICKER) {
+            spaceGestureHandled = true;
+            spaceSlideActive = true;
+            if (haptics) performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            host.onSpacebarSlideStart();
+        }
+    }
     private void reset() {
-        removeCallbacks(repeat); removeCallbacks(accent);
+        removeCallbacks(repeat); removeCallbacks(accent); removeCallbacks(spaceHold);
         if(heldShiftPointer!=-1 || (down!=null && down.kind()==KeyKind.SHIFT)) shift.onShiftUp();
         if(selecting) { selecting=false; host.onSelectionEnd(); }
+        if(spaceSlideActive) { spaceSlideActive=false; host.onSpacebarSlideEnd(); }
         heldShiftPointer=-1;
-        down=null; pointer=-1; variants=null; dragging=false; chordConsumed=false; invalidate();
+        down=null; pointer=-1; variants=null; dragging=false; chordConsumed=false; spaceGestureHandled=false; invalidate();
     }
     @Override protected void onDetachedFromWindow() { reset(); super.onDetachedFromWindow(); }
     @Override public boolean onTouchEvent(MotionEvent e) {
@@ -272,25 +301,34 @@ public final class KeyPlaneView extends View {
                 if(down!=null && hit!=null && TwoThumbSpaceDetector.isSimultaneousThumbTap(
                         twoThumbSpace, down.kind(), origin, started,
                         hit.kind(), tx, e.getEventTime(), getWidth()/density())) {
-                    removeCallbacks(repeat); removeCallbacks(accent);
+                    removeCallbacks(repeat); removeCallbacks(accent); removeCallbacks(spaceHold);
                     down=null; pointer=-1; variants=null; dragging=false; chordConsumed=true;
                     if(haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                    host.onSpace();
+                    host.onTwoThumbSpace();
                     invalidate();
                     return true;
                 }
                 if(down!=null && down.kind()==KeyKind.SHIFT) heldShiftPointer=pointer;
                 else if(down!=null && down.kind()==KeyKind.CHAR) commit();
-                removeCallbacks(repeat); removeCallbacks(accent); variants=null; dragging=false;
+                removeCallbacks(repeat); removeCallbacks(accent); removeCallbacks(spaceHold); variants=null; dragging=false; spaceGestureHandled=false;
             }
-            origin=cursor=lastX=tx; down=hit;
+            origin=cursor=lastX=tx; originY=ty; down=hit;
             if(down==null) return a!=MotionEvent.ACTION_DOWN;
             pointer=e.getPointerId(i); started=e.getEventTime();
+            host.onKeyTapTelemetry(down.label(), down.kind().name(), tx, ty,
+                    (down.left() + down.right()) / 2f, (down.top() + down.bottom()) / 2f,
+                    layer.name(), getWidth() / density());
             if(haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
             switch(down.kind()) {
                 case DELETE -> { host.onDeleteChar(); postDelayed(repeat,360); }
                 case SHIFT -> shift.onShiftDown(started);
                 case CHAR -> postDelayed(accent,400);
+                case SPACE -> {
+                    if(spaceFixEnabled && !searching && (spaceFixMode == KeyboardSettings.SpacebarFixMode.LONG_PRESS_PANEL
+                            || spaceFixMode == KeyboardSettings.SpacebarFixMode.HOLD_SLIDE_PICKER)) {
+                        postDelayed(spaceHold, 300);
+                    }
+                }
                 default -> {}
             }
             invalidate(); return true;
@@ -308,7 +346,22 @@ public final class KeyPlaneView extends View {
                 int prev=selection; select(x); if(haptics && prev!=selection) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
             }
         }
-        else if(down.kind()==KeyKind.SPACE && (dragging || Math.abs(x-origin)>=10)) {
+        else if(spaceSlideActive) {
+            if(a==MotionEvent.ACTION_MOVE) {
+                host.onSpacebarSlideMove(originY - y);
+            }
+        }
+        else if(down.kind()==KeyKind.SPACE && !spaceGestureHandled && !dragging
+                && spaceFixEnabled && !searching
+                && spaceFixMode == KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER
+                && (originY - y) >= 24f && Math.abs(x - origin) < 30f) {
+            removeCallbacks(spaceHold);
+            spaceGestureHandled = true;
+            if(haptics) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+            host.onSpacebarFlickUp();
+        }
+        else if(down.kind()==KeyKind.SPACE && !spaceGestureHandled && (dragging || Math.abs(x-origin)>=10)) {
+            removeCallbacks(spaceHold);
             if(!dragging) {
                 dragging=true;
                 selecting=heldShiftPointer!=-1 || shift.state()!=ShiftStateMachine.State.OFF;
@@ -329,7 +382,12 @@ public final class KeyPlaneView extends View {
             }
         }
         if(a==MotionEvent.ACTION_UP || (a==MotionEvent.ACTION_POINTER_UP && e.getActionIndex()==index)) {
-            if(variants!=null || down.hitTest(x,y)) commit();
+            if(spaceSlideActive) {
+                spaceSlideActive = false;
+                host.onSpacebarSlideEnd();
+            } else if(!spaceGestureHandled && (variants!=null || down.hitTest(x,y))) {
+                commit();
+            }
             int stillHeld=heldShiftPointer; heldShiftPointer=-1;
             reset(); heldShiftPointer=stillHeld;
         }

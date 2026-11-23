@@ -28,6 +28,28 @@ public final class KeyboardSettings {
     public boolean haptics() { return prefs.getBoolean("haptics", true); }
     public void setHaptics(boolean value) { prefs.edit().putBoolean("haptics", value).apply(); }
 
+    public enum SpacebarFixMode {
+        FLICK_SCRUBBER("flick_scrubber", "Flick up → inline word scrubber"),
+        LONG_PRESS_PANEL("long_press_panel", "Long-press → Fix Tail panel"),
+        HOLD_SLIDE_PICKER("hold_slide_picker", "Hold + slide up → release to pick");
+
+        public final String id, label;
+        SpacebarFixMode(String id, String label) { this.id = id; this.label = label; }
+        public static SpacebarFixMode fromId(String id) {
+            if (id != null) {
+                for (SpacebarFixMode m : values()) if (m.id.equals(id)) return m;
+            }
+            return FLICK_SCRUBBER;
+        }
+    }
+
     public boolean emojiEnabled() { return prefs.getBoolean("emojiEnabled", false); }
     public void setEmojiEnabled(boolean value) { prefs.edit().putBoolean("emojiEnabled", value).apply(); }
+
+    public SpacebarFixMode spacebarFixMode() {
+        return SpacebarFixMode.fromId(prefs.getString("spacebarFixMode", SpacebarFixMode.FLICK_SCRUBBER.id));
+    }
+    public void setSpacebarFixMode(SpacebarFixMode mode) {
+        prefs.edit().putString("spacebarFixMode", (mode == null ? SpacebarFixMode.FLICK_SCRUBBER : mode).id).apply();
+    }
 }

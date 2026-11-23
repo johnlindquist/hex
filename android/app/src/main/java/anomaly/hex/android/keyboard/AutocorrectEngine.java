@@ -256,6 +256,10 @@ public final class AutocorrectEngine {
                             return new Correction(word, canon, matchCase(word, title, canon));
                         }
                     }
+                    String sbSplit = SpatialKeyboardDecoder.splitSpacebarMiss(dictionary, lower, dc);
+                    if (sbSplit != null) {
+                        return new Correction(word, sbSplit, matchCase(word, title, sbSplit));
+                    }
                     String split = dictionary.splitMissedSpace(lower);
                     if (split != null) {
                         return new Correction(word, split, matchCase(word, title, split));
@@ -500,6 +504,11 @@ public final class AutocorrectEngine {
             }
         }
         return List.copyOf(result);
+    }
+
+    /** Analyzes the last few words before cursor for Spacebar Tail Fix gestures. */
+    public TailCorrectionEngine.TailAnalysis analyzeTail(String textBeforeCursor) {
+        return TailCorrectionEngine.analyze(textBeforeCursor, dictionary, decodeContext(""));
     }
 
     /** Returns top spatial candidate words for optional local Gemma contextual reranking. */

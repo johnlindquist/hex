@@ -85,6 +85,12 @@
       <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE"/></intent-filter>
     </service>
 
+    <provider
+        android:name=".keyboard.TypingTelemetryProvider"
+        android:authorities="anomaly.hex.android.telemetry"
+        android:exported="false"
+        android:grantUriPermissions="true"/>
+
     <receiver
         android:name=".control.HexControlReceiver"
         android:exported="true"

@@ -36,7 +36,8 @@ public final class HexInputMethodService extends InputMethodService implements F
   private SpeechLanguage speechLang;
   private List<String> vocabulary = List.of();
   private EditorInfo editor;
-  private boolean privateField, words, emojiEnabled, spatialAutocorrect;
+  private boolean privateField, words, emojiEnabled, spatialAutocorrect, telemetryEnabled;
+  private TypingTelemetryLog telemetry;
   private int action;
   private long lastSpace, generation;
   private String state = "idle";
@@ -60,6 +61,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     kbSettings = new KeyboardSettings(this); hexSettings = new HexSettings(this);
     labs = new HexLabs(this); history = new HexHistory(this); speechLang = new SpeechLanguage(this);
     personalStore = new PersonalAutocorrectStore(this);
+    telemetry = TypingTelemetryLog.get(this);
     spellChecker = new SystemSpellChecker(this::refresh);
     new Thread(() -> {
       englishDictionary = WordDictionary.loadEnglish(this);
@@ -111,8 +113,15 @@ public final class HexInputMethodService extends InputMethodService implements F
     words = text && !privateField && kind == KeyboardLayout.FieldKind.TEXT && (type & InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS) == 0;
     emojiEnabled = labs.isEnabled(LabId.EMOJI_KEYBOARD);
     spatialAutocorrect = labs.isEnabled(LabId.SPATIAL_AUTOCORRECT);
-    KeyboardLanguage language = KeyboardLanguage.resolve(kbSettings.layoutLanguage(), Locale.getDefault());
     boolean allowLearn = !privateField && (info.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
+    telemetryEnabled = labs.isEnabled(LabId.TYPING_TELEMETRY) && allowLearn && words;
+    boolean tailFixEnabled = labs.isEnabled(LabId.SPACEBAR_FIX_TAIL) && words && !privateField;
+    KeyboardSettings.SpacebarFixMode tailMode = kbSettings.spacebarFixMode();
+    if (telemetryEnabled) {
+      telemetry.logSession(info.packageName, spatialAutocorrect, labs.isEnabled(LabId.TWO_THUMB_SPACE),
+          tailFixEnabled ? tailMode.id : "off");
+    }
+    KeyboardLanguage language = KeyboardLanguage.resolve(kbSettings.layoutLanguage(), Locale.getDefault());
     autocorrect = new AutocorrectEngine(language, englishDictionary, personalStore, allowLearn, userDictionary, spatialAutocorrect);
     if (words && !privateField) refreshScreenContext(info);
     if (words && kbSettings.autocorrect() && !spatialAutocorrect) spellChecker.open(this, Locale.forLanguageTag(language.code()));
@@ -124,6 +133,7 @@ public final class HexInputMethodService extends InputMethodService implements F
       fullView.enableDrums(labs.isEnabled(LabId.PUNCTUATION_DRUMS));
       fullView.setSettings(language, kbSettings.keyPopups(), kbSettings.haptics(), emojiEnabled && !privateField && !EditorDeletePolicy.raw(type));
       fullView.setTwoThumbSpace(labs.isEnabled(LabId.TWO_THUMB_SPACE));
+      fullView.setSpacebarFix(tailFixEnabled, tailMode);
       fullView.setPrivateField(privateField);
       fullView.setFieldKind(kind, actionLabel(), KeyboardLayout.initialLayerForInputClass(cls), !restarting);
     }
@@ -147,7 +157,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     barView.setMeta(hexSettings.style(), id, SpeechLanguage.AUTO.equals(id) ? "Auto" : languageLabel(id));
     barView.setReturnAction(!actionLabel().isEmpty());
   }
-  private void resetEditor() { commitPendingQuickFixLearning(); if (autocorrect != null) autocorrect.setScreenWords(ScreenContextVocabulary.EMPTY); rewriteGen++; rewriteSession = null; if (fullView != null) { fullView.setQuickFixBusy(false); fullView.closeRewrite(); } trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
+  private void resetEditor() { commitPendingQuickFixLearning(); if (autocorrect != null) autocorrect.setScreenWords(ScreenContextVocabulary.EMPTY); rewriteGen++; rewriteSession = null; if (fullView != null) { fullView.setQuickFixBusy(false); fullView.closeRewrite(); fullView.closeTailFix(); } trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); if (fullView != null) fullView.resetSession(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
   @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); if (fullView != null) fullView.resetSession(); super.onWindowHidden(); }
@@ -223,7 +233,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     if (barView != null) barView.setUndoVisible(true);
     main.postDelayed(expireUndo, 20000);
   }
-  private void editing() { commitPendingQuickFixLearning(); lastSpace = 0; rewriteSession = null; autocorrect.clearUndo(); setUndo(null); }
+  private void editing() { commitPendingQuickFixLearning(); if (fullView != null) fullView.closeTailFix(); lastSpace = 0; rewriteSession = null; autocorrect.clearUndo(); setUndo(null); }
   private void replace(int n, String s) {
     InputConnection c = ic(); if (c == null) return;
     c.beginBatchEdit(); try { if (n == 0 || c.deleteSurroundingText(n, 0)) c.commitText(s, 1); }
@@ -243,10 +253,36 @@ public final class HexInputMethodService extends InputMethodService implements F
       String ctx = before(256);
       String typed = word(ctx);
       String prev = AutocorrectEngine.previousWord(ctx);
+      if (telemetryEnabled) telemetry.logSuggestionPick(typed, s);
       autocorrect.onSuggestionPicked(prev, typed, s);
       editing();
       replace(typed.length(), s + " ");
     }
+  }
+  public void onKeyTapTelemetry(String keyLabel, String kind, float tapXdp, float tapYdp,
+                                float keyCenterXdp, float keyCenterYdp, String layer, float kbWidthDp) {
+    if (telemetryEnabled) {
+      telemetry.logTap(keyLabel, kind, tapXdp, tapYdp, keyCenterXdp, keyCenterYdp, layer, kbWidthDp);
+    }
+  }
+  public void onSpacebarTailTrigger(KeyboardSettings.SpacebarFixMode mode) {
+    if (ic() == null || fullView == null || !words || privateField || autocorrect == null) return;
+    String ctx = before(256);
+    TailCorrectionEngine.TailAnalysis analysis = autocorrect.analyzeTail(ctx);
+    switch (mode) {
+      case FLICK_SCRUBBER -> fullView.showTailScrubber(analysis);
+      case LONG_PRESS_PANEL -> fullView.showTailPanel(analysis);
+      case HOLD_SLIDE_PICKER -> fullView.showTailSlide(analysis);
+    }
+  }
+  public void onTailFixApply(int replaceLength, String replacement, String modeId, String originalTail) {
+    if (ic() == null || replacement == null) return;
+    if (telemetryEnabled) telemetry.logTailFix(modeId, originalTail, replacement.trim());
+    editing();
+    replace(replaceLength, replacement);
+  }
+  public void onTwoThumbSpace() {
+    commitSpace("two_thumb");
   }
   private List<String> lookupHints(String context, String current) {
     if (!words || !kbSettings.autocorrect() || current == null || current.isEmpty()) return List.of();
@@ -263,12 +299,24 @@ public final class HexInputMethodService extends InputMethodService implements F
     return spellChecker != null ? spellChecker.lookupOrQuery(current) : List.of();
   }
   public void onSpace() {
+    commitSpace("spacebar");
+  }
+  private void commitSpace(String source) {
     if (ic() == null) return; setUndo(null);
+    if (fullView != null) fullView.closeTailFix();
     long now = SystemClock.uptimeMillis(); String s = words ? before(256) : "";
-    if (lastSpace != 0 && now - lastSpace < 350 && s.endsWith(" ")) { editing(); replace(1, ". "); return; }
+    if (lastSpace != 0 && now - lastSpace < 350 && s.endsWith(" ")) {
+      if (telemetryEnabled) telemetry.logSpace("", ". ", "double_space");
+      editing(); replace(1, ". "); return;
+    }
     lastSpace = now;
-    List<String> extraHints = lookupHints(s, word(s));
+    String rawWord = word(s);
+    List<String> extraHints = lookupHints(s, rawWord);
     var fix = words && kbSettings.autocorrect() ? autocorrect.correctOnSpace(s, extraHints) : null;
+    if (telemetryEnabled) {
+      telemetry.logSpace(rawWord, fix == null ? null : fix.caseMatched(),
+          fix == null ? source : source + "_autocorrect");
+    }
     replace(fix == null ? 0 : fix.original().length(), fix == null ? " " : fix.caseMatched() + " ");
   }
   public void onDelete() { onDeleteChar(); }
@@ -277,6 +325,10 @@ public final class HexInputMethodService extends InputMethodService implements F
     CharSequence selected = c.getSelectedText(0);
     String context = EditorDeletePolicy.raw(editor.inputType) ? "" : before(words ? 256 : 1);
     var fix = words ? autocorrect.checkBackspaceUndo(context) : null;
+    if (telemetryEnabled) {
+      if (fix != null) telemetry.logBackspace(null, fix.caseMatched(), fix.original());
+      else telemetry.logBackspace(word(context), null, null);
+    }
     editing();
     switch (EditorDeletePolicy.deletion(editor.inputType, selected, context)) {
       case SELECTION -> c.commitText("", 1);

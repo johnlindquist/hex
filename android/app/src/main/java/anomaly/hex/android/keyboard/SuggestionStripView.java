@@ -12,7 +12,7 @@ public final class SuggestionStripView extends FrameLayout {
     private final LinearLayout typing, recording, slots, toolbar;
     private final View emojiTool, quickFixBtn, promptRewriteBtn, rewriteBtn;
     private final FrameLayout center;
-    private final LinearLayout undoBar, undo, rewriteOptionsPill, noticeBar;
+    private final LinearLayout undoBar, undo, rewriteOptionsPill, noticeBar, scrubberBar;
     private final TextView clock, noticeText, noticeAction, undoLabel;
     private final Runnable clearNotice = () -> showNotice(null, false);
     private List<String> items=List.of();
@@ -65,7 +65,10 @@ public final class SuggestionStripView extends FrameLayout {
         LinearLayout.LayoutParams nap=new LinearLayout.LayoutParams(-2,dp(c,22)); nap.leftMargin=dp(c,8);
         noticeAction.setOnClickListener(v->{ showNotice(null,false); host.onOpenApp(); });
         noticeBar.addView(noticeAction,nap); noticeBar.setVisibility(GONE);
-        center.addView(noticeBar,new LayoutParams(-2,dp(c,30),Gravity.CENTER)); setUndo(false);
+        center.addView(noticeBar,new LayoutParams(-2,dp(c,30),Gravity.CENTER));
+        scrubberBar=row(c); scrubberBar.setVisibility(GONE);
+        center.addView(scrubberBar,new LayoutParams(-1,-1));
+        setUndo(false);
         quickFixBtn=new View(c) {
             protected void onDraw(android.graphics.Canvas canvas) {
                 KeyIcons.drawQuickFix(canvas,getWidth()/2f,getHeight()/2f,dp(c,18),TEXT_MUTED);
@@ -141,7 +144,9 @@ public final class SuggestionStripView extends FrameLayout {
         quickFixBtn.setAlpha(busy ? 0.4f : 1f);
     }
     private void updateContent() {
-        boolean available=undoBar.getVisibility()!=VISIBLE && noticeBar.getVisibility()!=VISIBLE;
+        boolean available=undoBar.getVisibility()!=VISIBLE
+                && noticeBar.getVisibility()!=VISIBLE
+                && scrubberBar.getVisibility()!=VISIBLE;
         boolean idle=items.isEmpty() && emojiContext==null;
         showContent(toolbar,available && idle); showContent(slots,available && !idle);
     }
@@ -176,6 +181,88 @@ public final class SuggestionStripView extends FrameLayout {
         undoBar.setVisibility(visible?VISIBLE:GONE);
         updateContent();
     }
+    void showScrubber(TailCorrectionEngine.TailAnalysis analysis, int focusIdx,
+                      java.util.function.IntConsumer onStep,
+                      java.util.function.BiConsumer<Integer, String> onPick,
+                      Runnable onClose) {
+        Context c = getContext();
+        scrubberBar.removeAllViews();
+        if (analysis == null || analysis.isEmpty()) {
+            hideScrubber();
+            return;
+        }
+        int idx = Math.max(0, Math.min(analysis.words().size() - 1, focusIdx));
+        TailCorrectionEngine.WordSlot slot = analysis.words().get(idx);
+
+        TextView prev = label(c, "‹", 18);
+        prev.setTextColor(idx > 0 ? TEXT : TEXT_MUTED);
+        prev.setBackground(pressable(CHIP_FILL));
+        prev.setContentDescription("Previous word");
+        prev.setEnabled(idx > 0);
+        prev.setOnClickListener(v -> onStep.accept(idx - 1));
+        scrubberBar.addView(prev, new LinearLayout.LayoutParams(dp(c, 26), dp(c, 30)));
+
+        HorizontalScrollView scroll = new HorizontalScrollView(c);
+        scroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout chips = row(c);
+        chips.setPadding(dp(c, 4), 0, dp(c, 4), 0);
+
+        TextView orig = label(c, slot.original() + "→", 13);
+        orig.setTextColor(TEXT_MUTED);
+        orig.setPadding(dp(c, 5), 0, dp(c, 5), 0);
+        chips.addView(orig, new LinearLayout.LayoutParams(-2, dp(c, 28)));
+
+        if (slot.candidates().isEmpty()) {
+            TextView none = label(c, "no fixes", 13);
+            none.setTextColor(TEXT_MUTED);
+            chips.addView(none, new LinearLayout.LayoutParams(-2, dp(c, 28)));
+        } else {
+            for (int i = 0; i < slot.candidates().size(); i++) {
+                String cand = slot.candidates().get(i);
+                TextView pill = label(c, cand, 14);
+                pill.setTextColor(i == 0 ? ON_PILL_TEXT : TEXT);
+                pill.setTypeface(android.graphics.Typeface.create("sans-serif-medium", 0));
+                pill.setBackground(pressable(i == 0 ? RETURN_PILL_FILL : CHIP_FILL));
+                pill.setPadding(dp(c, 9), 0, dp(c, 9), 0);
+                pill.setOnClickListener(v -> onPick.accept(idx, cand));
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, dp(c, 28));
+                cp.rightMargin = dp(c, 4);
+                chips.addView(pill, cp);
+            }
+        }
+        scroll.addView(chips, new FrameLayout.LayoutParams(-2, -1));
+        scrubberBar.addView(scroll, new LinearLayout.LayoutParams(0, dp(c, 30), 1f));
+
+        TextView next = label(c, "›", 18);
+        next.setTextColor(idx + 1 < analysis.words().size() ? TEXT : TEXT_MUTED);
+        next.setBackground(pressable(CHIP_FILL));
+        next.setContentDescription("Next word");
+        next.setEnabled(idx + 1 < analysis.words().size());
+        next.setOnClickListener(v -> onStep.accept(idx + 1));
+        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(dp(c, 26), dp(c, 30));
+        np.rightMargin = dp(c, 3);
+        scrubberBar.addView(next, np);
+
+        TextView close = label(c, "✕", 13);
+        close.setTextColor(TEXT_MUTED);
+        close.setBackground(pressable(CHIP_FILL));
+        close.setContentDescription("Close word scrubber");
+        close.setOnClickListener(v -> onClose.run());
+        scrubberBar.addView(close, new LinearLayout.LayoutParams(dp(c, 26), dp(c, 30)));
+
+        undoBar.setVisibility(GONE);
+        noticeBar.setVisibility(GONE);
+        scrubberBar.setVisibility(VISIBLE);
+        updateContent();
+    }
+
+    void hideScrubber() {
+        if (scrubberBar.getVisibility() != VISIBLE) return;
+        scrubberBar.setVisibility(GONE);
+        scrubberBar.removeAllViews();
+        updateContent();
+    }
+
     void showNotice(String message, boolean openApp) {
         timer.removeCallbacks(clearNotice);
         if(message==null || message.isBlank()) {
