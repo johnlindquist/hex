@@ -25,6 +25,8 @@ public final class TypingTelemetryLog {
     private final File file;
     private final LinkedBlockingQueue<String> queue = new LinkedBlockingQueue<>(512);
     private volatile boolean running;
+    private static final String FLUSH_SENTINEL = new String("__HEX_FLUSH__");
+    private volatile java.util.concurrent.CountDownLatch flushLatch;
 
     private TypingTelemetryLog(File file) {
         this.file = file;
@@ -162,14 +164,14 @@ public final class TypingTelemetryLog {
         return s.events() + " events · " + s.corrections() + " fixes · " + s.undos() + " undos · " + size;
     }
 
-    /** Flushes queued lines synchronously (useful before export or in unit tests). */
+    /** Flushes queued lines synchronously in FIFO order (useful before export or in unit tests). */
     public void flushSync() {
-        StringBuilder batch = new StringBuilder();
-        String line;
-        while ((line = queue.poll()) != null) {
-            batch.append(line).append('\n');
+        java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        flushLatch = latch;
+        if (queue.offer(FLUSH_SENTINEL)) {
+            try { latch.await(2, java.util.concurrent.TimeUnit.SECONDS); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
-        if (batch.length() > 0) writeBatch(batch.toString());
     }
 
     private JSONObject base(String ev) throws JSONException {
@@ -192,13 +194,19 @@ public final class TypingTelemetryLog {
             while (running) {
                 try {
                     String first = queue.take();
-                    StringBuilder sb = new StringBuilder(first.length() + 256);
-                    sb.append(first).append('\n');
+                    boolean sawFlush = (first == FLUSH_SENTINEL);
+                    StringBuilder sb = new StringBuilder(sawFlush ? 64 : first.length() + 256);
+                    if (!sawFlush) sb.append(first).append('\n');
                     String next;
                     while (sb.length() < 16384 && (next = queue.poll()) != null) {
+                        if (next == FLUSH_SENTINEL) { sawFlush = true; continue; }
                         sb.append(next).append('\n');
                     }
-                    writeBatch(sb.toString());
+                    if (sb.length() > 0) writeBatch(sb.toString());
+                    if (sawFlush) {
+                        java.util.concurrent.CountDownLatch l = flushLatch;
+                        if (l != null) l.countDown();
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;

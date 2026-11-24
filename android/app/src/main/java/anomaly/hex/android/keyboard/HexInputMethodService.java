@@ -54,6 +54,7 @@ public final class HexInputMethodService extends InputMethodService implements F
   private SpeechSession session;
   private InputConnection speechTarget;
   private LivePunctuationSession live;
+  private boolean cursorAnchored;
   private final Handler main = new Handler(Looper.getMainLooper());
   private final Runnable expireUndo = () -> setUndo(null);
   private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{M}\\p{N}_'’]+\\z");
@@ -766,8 +767,14 @@ public final class HexInputMethodService extends InputMethodService implements F
   public void onDictateToggle() { if (session == null) onStartDictation(); else onStopDictation(); }
   public void onCancel() { onCancelDictation(); }
   private boolean verifiedCursor(InputConnection target) {
+    if (target == null || ic() != target) return false;
+    if (!cursorAnchored) return true;
     SurroundingText s = target.getSurroundingText(0,0,0);
-    if (s != null && s.getOffset()>=0 && live.matches(s.getOffset()+s.getSelectionStart(),s.getOffset()+s.getSelectionEnd())) return true;
+    if (s == null || s.getOffset() < 0) {
+      cursorAnchored = false;
+      return true;
+    }
+    if (live.matches(s.getOffset()+s.getSelectionStart(),s.getOffset()+s.getSelectionEnd())) return true;
     interruptDictation("cursor_moved"); notice("Dictation interrupted — audio saved to History"); return false;
   }
   private static String drumName(String mark) {
@@ -823,12 +830,12 @@ public final class HexInputMethodService extends InputMethodService implements F
   private void interruptDictation(String reason) {
     if (session == null) return;
     explicitCancel = false;
-    generation++; live=null; speechTarget=null; releaseWakeLock();
+    generation++; live=null; cursorAnchored=false; speechTarget=null; releaseWakeLock();
     session.cancel(); session = null; drawState(idleState(),null);
   }
   public void onCancelDictation() {
     explicitCancel = true;
-    generation++; live=null; speechTarget=null; releaseWakeLock();
+    generation++; live=null; cursorAnchored=false; speechTarget=null; releaseWakeLock();
     if (session != null) session.cancel();
     session = null; drawState(idleState(),null);
   }
@@ -844,12 +851,12 @@ public final class HexInputMethodService extends InputMethodService implements F
     if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { notice("Allow mic in Hex", true); return; }
     if (!Engine.get(this).isAvailable()) { notice("Install model in Hex", true); return; }
     SurroundingText anchor = target.getSurroundingText(0,0,0);
-    if (anchor == null || anchor.getOffset() < 0) { notice("This editor cannot confirm the dictation target"); return; }
     CharSequence selected = target.getSelectedText(0);
-    String replacedSelection = selected == null || selected.length() == 0 ? null : selected.toString();
-    if (Math.abs(anchor.getSelectionEnd() - anchor.getSelectionStart()) != (replacedSelection == null ? 0 : replacedSelection.length())) {
-      notice("This editor cannot confirm the dictation target"); return;
-    }
+    String rawSelected = selected == null || selected.length() == 0 ? null : selected.toString();
+    boolean hasValidAnchor = anchor != null && anchor.getOffset() >= 0
+        && Math.abs(anchor.getSelectionEnd() - anchor.getSelectionStart())
+            == (rawSelected == null ? 0 : rawSelected.length());
+    final String replacedSelection = hasValidAnchor ? rawSelected : null;
     editing(); long id = ++generation; explicitCancel = false;
     TranscriptStyle style = hexSettings.style(); String lang = SpeechLanguage.resolveLocale(speechLang.selectedId(),Locale.getDefault()).toLanguageTag();
     var fixStore = new DictationFixStore(this); Map<String,String> fixes = fixStore.isEnabled() ? fixStore.activeFixes() : Map.of();
@@ -865,8 +872,13 @@ public final class HexInputMethodService extends InputMethodService implements F
     }
     final anomaly.hex.android.speech.RecordingStore.Writer recorder = recWriter;
     acquireWakeLock();
-    // Format each delivered phrase against its verified live cursor, not the cursor at mic start.
-    speechTarget = target; live = new LivePunctuationSession(anchor.getOffset()+anchor.getSelectionStart(),anchor.getOffset()+anchor.getSelectionEnd());
+    // Format each delivered phrase against its verified live cursor when supported;
+    // unanchored editors (terminals, WebViews, Herdr) still dictate directly via commitText.
+    speechTarget = target;
+    cursorAnchored = hasValidAnchor;
+    live = hasValidAnchor
+        ? new LivePunctuationSession(anchor.getOffset()+anchor.getSelectionStart(),anchor.getOffset()+anchor.getSelectionEnd())
+        : new LivePunctuationSession(0, 0);
     session = new SpeechSession(this, Engine.get(this), () -> new Microphone(this,hexSettings.preferBuiltInMic()), raw -> raw, new SpeechSession.Sink() {
       DictationUndo replacement;
       final StringBuilder allRaw = new StringBuilder();
@@ -917,7 +929,7 @@ public final class HexInputMethodService extends InputMethodService implements F
               anomaly.hex.android.speech.RecordingStore.deleteFile(wavPath);
             }
             if (generation == id) {
-              releaseWakeLock(); session = null; speechTarget = null; live = null; drawState(idleState(),null);
+              releaseWakeLock(); session = null; speechTarget = null; live = null; cursorAnchored = false; drawState(idleState(),null);
             }
           });
         } else {
