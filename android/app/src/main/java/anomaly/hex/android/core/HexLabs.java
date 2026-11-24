@@ -10,6 +10,7 @@ public final class HexLabs {
     private final SharedPreferences p;
     public HexLabs(Context ctx) { p = ctx.getSharedPreferences("hex_labs", Context.MODE_PRIVATE); }
     public synchronized boolean isEnabled(LabId lab) { return p.getBoolean(lab.id, false); }
+    public synchronized boolean isExplicitlySet(LabId lab) { return p.contains(lab.id); }
     public synchronized long revision() { return p.getLong("revision", 0); }
     public synchronized boolean setEnabled(LabId lab, boolean enabled, long expectedRevision) {
         synchronized (LOCK) {

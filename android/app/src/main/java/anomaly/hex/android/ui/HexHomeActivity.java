@@ -1525,7 +1525,11 @@ public final class HexHomeActivity extends Activity {
         KeyboardSettings kb = new KeyboardSettings(this);
         act("Gesture mode · " + kb.spacebarFixMode().label, false, this::configureSpacebarFixMode);
       }
-      if (lab == LabId.TYPING_TELEMETRY && labs.isEnabled(lab)) {
+      boolean telemetryActive = lab == LabId.TYPING_TELEMETRY
+          && (labs.isExplicitlySet(lab)
+              ? labs.isEnabled(lab)
+              : (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0);
+      if (telemetryActive) {
         anomaly.hex.android.keyboard.TypingTelemetryLog log =
             anomaly.hex.android.keyboard.TypingTelemetryLog.get(this);
         log.flushSync();

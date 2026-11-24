@@ -27,7 +27,8 @@ public final class KeyPlaneView extends View {
         void onSelectionEnd();
         void onSwitchKeyboard();
         void onKeyTapTelemetry(String keyLabel, String kind, float tapXdp, float tapYdp,
-                               float keyCenterXdp, float keyCenterYdp, String layer, float kbWidthDp);
+                               float keyCenterXdp, float keyCenterYdp, float keyWidthDp, float keyHeightDp,
+                               String rawKeyLabel, String layer, float kbWidthDp);
         void onSpacebarFlickUp();
         void onSpacebarLongPress();
         void onSpacebarSlideStart();
@@ -54,6 +55,7 @@ public final class KeyPlaneView extends View {
     private boolean spaceFixEnabled, spaceGestureHandled, spaceSlideActive;
     private KeyboardSettings.SpacebarFixMode spaceFixMode = KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER;
     private boolean quickAccentsEnabled;
+    private PersonalAutocorrectStore personalStore;
 
     KeyPlaneView(Context c, Input host, Runnable openEmoji) {
         super(c); this.host = host; this.openEmoji = openEmoji;
@@ -78,6 +80,18 @@ public final class KeyPlaneView extends View {
     }
     void setQuickAccents(boolean enabled) {
         quickAccentsEnabled = enabled;
+    }
+    void setPersonalStore(PersonalAutocorrectStore store) {
+        personalStore = store;
+    }
+    KeyboardLayout currentLayout() {
+        return layout;
+    }
+    private boolean stillOnKey(Key k, float x, float y) {
+        if (k == null) return false;
+        if (k.hitTest(x, y)) return true;
+        return k.kind() == KeyKind.CHAR && layer == Layer.LETTERS && personalStore != null
+                && layout != null && layout.hitTestAdaptive(x, y, personalStore) == k;
     }
     void field(FieldKind kind, String label) {
         field(kind, label, Layer.LETTERS, true);
@@ -306,7 +320,8 @@ public final class KeyPlaneView extends View {
         if(a==MotionEvent.ACTION_DOWN || a==MotionEvent.ACTION_POINTER_DOWN) {
             int i=e.getActionIndex();
             float tx=e.getX(i)/density(), ty=e.getY(i)/density();
-            Key hit=layout.hitTest(tx, ty);
+            Key rawHit=layout.hitTest(tx, ty);
+            Key hit=(layer==Layer.LETTERS && personalStore!=null) ? layout.hitTestAdaptive(tx, ty, personalStore) : rawHit;
             if(a==MotionEvent.ACTION_DOWN) reset();
             else {
                 if(dragging) return true;
@@ -327,9 +342,11 @@ public final class KeyPlaneView extends View {
             origin=cursor=lastX=tx; originY=ty; down=hit;
             if(down==null) return a!=MotionEvent.ACTION_DOWN;
             pointer=e.getPointerId(i); started=e.getEventTime();
+            String rawLabel = (rawHit != null && rawHit != down) ? rawHit.label() : null;
             host.onKeyTapTelemetry(down.label(), down.kind().name(), tx, ty,
                     (down.left() + down.right()) / 2f, (down.top() + down.bottom()) / 2f,
-                    layer.name(), getWidth() / density());
+                    down.right() - down.left(), down.bottom() - down.top(),
+                    rawLabel, layer.name(), getWidth() / density());
             if(haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
             switch(down.kind()) {
                 case DELETE -> { host.onDeleteChar(); postDelayed(repeat,360); }
@@ -381,9 +398,9 @@ public final class KeyPlaneView extends View {
             }
             int delta=(int)((x-cursor)/7.5f);
             if(delta!=0) { cursor+=delta*7.5f; if(selecting) host.onSelectionExtend(delta); else host.onCursorMove(delta); }
-        } else if(a==MotionEvent.ACTION_MOVE && !down.hitTest(x,y)) {
+        } else if(a==MotionEvent.ACTION_MOVE && !stillOnKey(down,x,y)) {
             if(down.kind()==KeyKind.CHAR) {
-                Key under=layout.hitTest(x,y);
+                Key under=(layer==Layer.LETTERS && personalStore!=null) ? layout.hitTestAdaptive(x,y,personalStore) : layout.hitTest(x,y);
                 if(under!=null && under.kind()==KeyKind.CHAR) {
                     down=under; origin=x; removeCallbacks(accent); postDelayed(accent,400);
                 } else {
@@ -397,7 +414,7 @@ public final class KeyPlaneView extends View {
             if(spaceSlideActive) {
                 spaceSlideActive = false;
                 host.onSpacebarSlideEnd();
-            } else if(!spaceGestureHandled && (variants!=null || down.hitTest(x,y))) {
+            } else if(!spaceGestureHandled && (variants!=null || stillOnKey(down,x,y))) {
                 commit();
             }
             int stillHeld=heldShiftPointer; heldShiftPointer=-1;

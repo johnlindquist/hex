@@ -46,21 +46,56 @@ public final class TypoFixExtractor {
     // 2. Deterministic word-alignment diff when token counts match (catches typos the model omitted).
     if (origTokens.size() == fixedTokens.size()) {
       for (int i = 0; i < origTokens.size() && out.size() < MAX_PAIRS; i++) {
-        String a = origTokens.get(i);
-        String b = fixedTokens.get(i);
-        if (a.equalsIgnoreCase(b)) continue;
-        FixPair clean = sanitizePair(a, b);
-        if (clean == null) continue;
-        String fromLower = clean.from().toLowerCase(Locale.ROOT);
-        String toLower = clean.to().toLowerCase(Locale.ROOT);
-        int maxDist = Math.max(fromLower.length(), toLower.length()) >= 5 ? 3 : 2;
-        if (editDistance(fromLower, toLower) <= maxDist) {
-          out.putIfAbsent(fromLower, clean);
+        collectAlignedPair(origTokens.get(i), fixedTokens.get(i), out);
+      }
+    } else {
+      // Also align matching prefix/suffix positions when a spacebar-miss split changed the token count
+      // (e.g. "Bow do you want to sknthkd" -> "How do you want to do this" still extracts "bow" -> "how").
+      int minLen = Math.min(origTokens.size(), fixedTokens.size());
+      int prefix = 0;
+      while (prefix < minLen && out.size() < MAX_PAIRS) {
+        String a = origTokens.get(prefix);
+        String b = fixedTokens.get(prefix);
+        if (a.equalsIgnoreCase(b)) {
+          prefix++;
+        } else if (prefix + 1 < minLen
+            && origTokens.get(prefix + 1).equalsIgnoreCase(fixedTokens.get(prefix + 1))) {
+          collectAlignedPair(a, b, out);
+          prefix += 2;
+        } else {
+          break;
+        }
+      }
+      int suffix = 0;
+      while (suffix < minLen - prefix && out.size() < MAX_PAIRS) {
+        String a = origTokens.get(origTokens.size() - 1 - suffix);
+        String b = fixedTokens.get(fixedTokens.size() - 1 - suffix);
+        if (a.equalsIgnoreCase(b)) {
+          suffix++;
+        } else if (suffix + 1 < minLen - prefix
+            && origTokens.get(origTokens.size() - 2 - suffix)
+                .equalsIgnoreCase(fixedTokens.get(fixedTokens.size() - 2 - suffix))) {
+          collectAlignedPair(a, b, out);
+          suffix += 2;
+        } else {
+          break;
         }
       }
     }
 
     return List.copyOf(out.values());
+  }
+
+  private static void collectAlignedPair(String a, String b, LinkedHashMap<String, FixPair> out) {
+    if (a.equalsIgnoreCase(b) || out.size() >= MAX_PAIRS) return;
+    FixPair clean = sanitizePair(a, b);
+    if (clean == null) return;
+    String fromLower = clean.from().toLowerCase(Locale.ROOT);
+    String toLower = clean.to().toLowerCase(Locale.ROOT);
+    int maxDist = Math.max(fromLower.length(), toLower.length()) >= 5 ? 3 : 2;
+    if (editDistance(fromLower, toLower) <= maxDist) {
+      out.putIfAbsent(fromLower, clean);
+    }
   }
 
   private static FixPair sanitizePair(String rawFrom, String rawTo) {

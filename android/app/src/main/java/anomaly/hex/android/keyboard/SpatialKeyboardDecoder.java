@@ -345,11 +345,11 @@ public final class SpatialKeyboardDecoder {
       slips++;
       if (slips > maxSlips) return -1;
       int base = (int) Math.round(9.0 + dSq * 5.0);
-      // Personal thumb-slip adaptation: if the user repeatedly slips `a -> b`, lower its cost.
+      // Personal thumb-slip adaptation: if the user repeatedly slips `a -> b`, lower its cost significantly.
       if (store != null) {
         int seen = store.slipCount(a, b);
-        if (seen >= 2) {
-          base = Math.max(6, base - Math.min(4, seen / 2));
+        if (seen >= 1) {
+          base = Math.max(4, base - Math.min(7, 2 + seen));
         }
       }
       cost += base;

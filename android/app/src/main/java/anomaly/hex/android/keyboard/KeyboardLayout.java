@@ -36,6 +36,58 @@ public final class KeyboardLayout {
         return null;
     }
 
+    public Key keyForChar(char lower) {
+        char target = Character.toLowerCase(lower);
+        for (Key key : keys) {
+            if (key.kind() == KeyKind.CHAR && key.label() != null && key.label().length() == 1
+                    && Character.toLowerCase(key.label().charAt(0)) == target) {
+                return key;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Hit-test that applies learned per-key thumb offsets to letter keys while keeping
+     * non-character keys (Space, Delete, Shift, Return, etc.) on exact geometric bounds.
+     */
+    public Key hitTestAdaptive(float x, float y, PersonalAutocorrectStore store) {
+        Key geom = hitTest(x, y);
+        if (geom == null || geom.kind() != KeyKind.CHAR || store == null
+                || geom.label() == null || geom.label().length() != 1) {
+            return geom;
+        }
+        Key best = geom;
+        float bestDistSq = Float.MAX_VALUE;
+        float geomDistSq = Float.MAX_VALUE;
+
+        for (Key key : keys) {
+            if (key.kind() != KeyKind.CHAR || key.label() == null || key.label().length() != 1) continue;
+            float kw = Math.max(1f, key.right() - key.left());
+            float kh = Math.max(1f, key.bottom() - key.top());
+            float cx = (key.left() + key.right()) * 0.5f;
+            float cy = (key.top() + key.bottom()) * 0.5f;
+            // Only consider the geometric hit key and its immediate neighbors.
+            if (Math.abs(x - cx) > kw * 1.15f || Math.abs(y - cy) > kh * 1.15f) continue;
+
+            float[] off = store.thumbOffset(key.label().charAt(0));
+            float acx = cx + (off != null ? off[0] : 0f);
+            float acy = cy + (off != null ? off[1] : 0f);
+            float nx = (x - acx) / kw;
+            float ny = (y - acy) / kh;
+            float dSq = nx * nx + ny * ny;
+            if (key == geom) geomDistSq = dSq;
+            if (dSq < bestDistSq) {
+                bestDistSq = dSq;
+                best = key;
+            }
+        }
+        if (best != geom && bestDistSq < 0.72f && bestDistSq + 0.04f < geomDistSq) {
+            return best;
+        }
+        return geom;
+    }
+
     public KeyboardLayout(float width, boolean landscape, Layer layer, FieldKind field,
                           boolean globe, boolean emoji, KeyboardLanguage language) {
         this.landscape = landscape;

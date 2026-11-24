@@ -36,8 +36,9 @@ public final class HexInputMethodService extends InputMethodService implements F
   private SpeechLanguage speechLang;
   private List<String> vocabulary = List.of();
   private EditorInfo editor;
-  private boolean privateField, words, emojiEnabled, spatialAutocorrect, telemetryEnabled;
+  private boolean privateField, words, emojiEnabled, spatialAutocorrect, telemetryEnabled, allowLearn;
   private TypingTelemetryLog telemetry;
+  private final RetypeTracker retypeTracker = new RetypeTracker();
   private int action;
   private long lastSpace, generation;
   private String state = "idle";
@@ -115,8 +116,12 @@ public final class HexInputMethodService extends InputMethodService implements F
     emojiEnabled = labs.isEnabled(LabId.EMOJI_KEYBOARD);
     emojiShortcodesEnabled = labs.isEnabled(LabId.EMOJI_SHORTCODES) && emojiEnabled && !privateField && words;
     spatialAutocorrect = labs.isEnabled(LabId.SPATIAL_AUTOCORRECT);
-    boolean allowLearn = !privateField && (info.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
-    telemetryEnabled = labs.isEnabled(LabId.TYPING_TELEMETRY) && allowLearn && words;
+    allowLearn = !privateField && (info.imeOptions & EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) == 0;
+    boolean debugBuild = (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    boolean telemetryOn = labs.isExplicitlySet(LabId.TYPING_TELEMETRY)
+        ? labs.isEnabled(LabId.TYPING_TELEMETRY)
+        : debugBuild;
+    telemetryEnabled = telemetryOn && allowLearn && words;
     boolean tailFixEnabled = labs.isEnabled(LabId.SPACEBAR_FIX_TAIL) && words && !privateField;
     KeyboardSettings.SpacebarFixMode tailMode = kbSettings.spacebarFixMode();
     if (telemetryEnabled) {
@@ -137,6 +142,7 @@ public final class HexInputMethodService extends InputMethodService implements F
       fullView.setTwoThumbSpace(labs.isEnabled(LabId.TWO_THUMB_SPACE));
       fullView.setSpacebarFix(tailFixEnabled, tailMode);
       fullView.setQuickAccents(labs.isEnabled(LabId.QUICK_ACCENTS));
+      fullView.setPersonalStore(allowLearn && words ? personalStore : null);
       fullView.setPrivateField(privateField);
       fullView.setFieldKind(kind, actionLabel(), KeyboardLayout.initialLayerForInputClass(cls), !restarting);
     }
@@ -160,7 +166,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     barView.setMeta(hexSettings.style(), id, SpeechLanguage.AUTO.equals(id) ? "Auto" : languageLabel(id));
     barView.setReturnAction(!actionLabel().isEmpty());
   }
-  private void resetEditor() { commitPendingQuickFixLearning(); if (autocorrect != null) autocorrect.setScreenWords(ScreenContextVocabulary.EMPTY); rewriteGen++; rewriteSession = null; if (fullView != null) { fullView.setQuickFixBusy(false); fullView.closeRewrite(); fullView.closeTailFix(); } trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
+  private void resetEditor() { commitPendingQuickFixLearning(); retypeTracker.reset(); if (autocorrect != null) autocorrect.setScreenWords(ScreenContextVocabulary.EMPTY); rewriteGen++; rewriteSession = null; if (fullView != null) { fullView.setQuickFixBusy(false); fullView.closeRewrite(); fullView.closeTailFix(); } trackpad.end(); if (barView != null) barView.resetGesture(); interruptDictation("editor_closed"); setUndo(null); editor = null; lastSpace = 0; }
   @Override public void onFinishInputView(boolean finishing) { resetEditor(); if (fullView != null) fullView.resetSession(); super.onFinishInputView(finishing); }
   @Override public void onWindowShown() { super.onWindowShown(); KeyboardPresence.setImeVisible(true); }
   @Override public void onWindowHidden() { KeyboardPresence.setImeVisible(false); resetEditor(); if (fullView != null) fullView.resetSession(); super.onWindowHidden(); }
@@ -274,7 +280,14 @@ public final class HexInputMethodService extends InputMethodService implements F
       }
     }
     if (words && s != null && s.length() == 1 && ".!?,;:".indexOf(s.charAt(0)) >= 0) {
-      autocorrect.recordCommittedWord(before(256));
+      String ctx = before(256);
+      String committed = word(ctx);
+      List<RetypeTracker.TapSample> taps = retypeTracker.currentWordTapsSnapshot();
+      autocorrect.recordCommittedWord(ctx);
+      if (!committed.isEmpty()) {
+        learnThumbOffsetsForWord(taps, committed, false);
+        learnRetypeIfMatched(committed);
+      }
     }
     editing();
     replace(0, s);
@@ -301,16 +314,24 @@ public final class HexInputMethodService extends InputMethodService implements F
       }
       String typed = word(ctx);
       String prev = AutocorrectEngine.previousWord(ctx);
+      List<RetypeTracker.TapSample> taps = retypeTracker.currentWordTapsSnapshot();
       if (telemetryEnabled) telemetry.logSuggestionPick(typed, s);
       autocorrect.onSuggestionPicked(prev, typed, s);
+      learnThumbOffsetsForWord(taps, s, !typed.equalsIgnoreCase(s));
+      learnRetypeIfMatched(s);
       editing();
       replace(typed.length(), s + " ");
     }
   }
   public void onKeyTapTelemetry(String keyLabel, String kind, float tapXdp, float tapYdp,
-                                float keyCenterXdp, float keyCenterYdp, String layer, float kbWidthDp) {
+                                float keyCenterXdp, float keyCenterYdp, float keyWidthDp, float keyHeightDp,
+                                String rawKeyLabel, String layer, float kbWidthDp) {
     if (telemetryEnabled) {
-      telemetry.logTap(keyLabel, kind, tapXdp, tapYdp, keyCenterXdp, keyCenterYdp, layer, kbWidthDp);
+      telemetry.logTap(keyLabel, kind, tapXdp, tapYdp, keyCenterXdp, keyCenterYdp, rawKeyLabel, layer, kbWidthDp);
+    }
+    if (allowLearn && words && "CHAR".equals(kind) && "LETTERS".equals(layer)
+        && keyLabel != null && keyLabel.length() == 1) {
+      retypeTracker.recordCharTap(keyLabel.charAt(0), tapXdp, tapYdp, keyCenterXdp, keyCenterYdp, keyWidthDp, keyHeightDp);
     }
   }
   public void onSpacebarTailTrigger(KeyboardSettings.SpacebarFixMode mode) {
@@ -324,8 +345,62 @@ public final class HexInputMethodService extends InputMethodService implements F
   public void onTailFixApply(int replaceLength, String replacement, String modeId, String originalTail) {
     if (ic() == null || replacement == null) return;
     if (telemetryEnabled) telemetry.logTailFix(modeId, originalTail, replacement.trim());
+    learnFromTailFix(originalTail, replacement);
+    retypeTracker.reset();
     editing();
     replace(replaceLength, replacement);
+  }
+  private void learnFromTailFix(String originalTail, String replacement) {
+    if (!allowLearn || personalStore == null || replacement == null) return;
+    String trimmed = replacement.trim();
+    if (trimmed.isEmpty()) return;
+    for (TypoFixExtractor.FixPair pair : TypoFixExtractor.extract(originalTail, trimmed, null)) {
+      personalStore.recordAccepted(pair.from(), pair.to());
+    }
+    String prev = null;
+    for (String raw : trimmed.split("\\s+")) {
+      String clean = raw.replaceAll("^[^\\p{L}]+|[^\\p{L}'’]+$", "");
+      if (clean.length() >= 2) {
+        personalStore.recordTypedWord(clean);
+        if (prev != null) personalStore.recordBigram(prev, clean);
+        prev = clean;
+      } else {
+        prev = null;
+      }
+    }
+  }
+  private void learnThumbOffsetsForWord(List<RetypeTracker.TapSample> taps, String intendedWord, boolean fromCorrection) {
+    if (!allowLearn || personalStore == null || taps == null || taps.isEmpty() || intendedWord == null) return;
+    String clean = intendedWord.replaceAll("[^\\p{L}]", "").toLowerCase(Locale.ROOT);
+    if (clean.length() != taps.size()) return;
+    KeyboardLayout layout = fullView != null ? fullView.currentLayout() : null;
+    for (int i = 0; i < taps.size(); i++) {
+      char intended = clean.charAt(i);
+      if (intended < 'a' || intended > 'z') continue;
+      RetypeTracker.TapSample tap = taps.get(i);
+      if (!fromCorrection) {
+        if (tap.key() == intended) {
+          personalStore.recordThumbSample(intended, tap.tapXdp() - tap.keyCenterXdp(),
+              tap.tapYdp() - tap.keyCenterYdp(), tap.keyWidthDp(), tap.keyHeightDp(), false);
+        }
+      } else if (layout != null) {
+        KeyboardLayout.Key k = layout.keyForChar(intended);
+        if (k != null) {
+          float cx = (k.left() + k.right()) * 0.5f;
+          float cy = (k.top() + k.bottom()) * 0.5f;
+          personalStore.recordThumbSample(intended, tap.tapXdp() - cx, tap.tapYdp() - cy,
+              k.right() - k.left(), k.bottom() - k.top(), true);
+        }
+      }
+    }
+  }
+  private void learnRetypeIfMatched(String committedWord) {
+    RetypeTracker.RetypeMatch rm = retypeTracker.onWordCommitted(committedWord);
+    if (rm != null && allowLearn && personalStore != null) {
+      personalStore.recordRetyped(rm.erased(), rm.retyped());
+      if (telemetryEnabled) telemetry.logRetype(rm.erased(), rm.retyped());
+      learnThumbOffsetsForWord(rm.erasedTaps(), rm.retyped(), true);
+    }
   }
   public void onTwoThumbSpace() {
     commitSpace("two_thumb");
@@ -357,11 +432,17 @@ public final class HexInputMethodService extends InputMethodService implements F
     }
     lastSpace = now;
     String rawWord = word(s);
+    List<RetypeTracker.TapSample> taps = retypeTracker.currentWordTapsSnapshot();
     List<String> extraHints = lookupHints(s, rawWord);
     var fix = words && kbSettings.autocorrect() ? autocorrect.correctOnSpace(s, extraHints) : null;
     if (telemetryEnabled) {
       telemetry.logSpace(rawWord, fix == null ? null : fix.caseMatched(),
           fix == null ? source : source + "_autocorrect");
+    }
+    String committed = fix == null ? rawWord : fix.caseMatched();
+    if (words && !committed.isEmpty()) {
+      learnThumbOffsetsForWord(taps, committed, fix != null);
+      learnRetypeIfMatched(committed);
     }
     replace(fix == null ? 0 : fix.original().length(), fix == null ? " " : fix.caseMatched() + " ");
   }
@@ -371,6 +452,9 @@ public final class HexInputMethodService extends InputMethodService implements F
     CharSequence selected = c.getSelectedText(0);
     String context = EditorDeletePolicy.raw(editor.inputType) ? "" : before(words ? 256 : 1);
     var fix = words ? autocorrect.checkBackspaceUndo(context) : null;
+    if (words && (selected == null || selected.length() == 0)) {
+      retypeTracker.onBackspace(context, fix != null);
+    }
     if (telemetryEnabled) {
       if (fix != null) telemetry.logBackspace(null, fix.caseMatched(), fix.original());
       else telemetry.logBackspace(word(context), null, null);
@@ -404,6 +488,7 @@ public final class HexInputMethodService extends InputMethodService implements F
   public void onDeleteWord() {
     if (ic() == null) return; if (privateField) { onDeleteChar(); return; }
     editing(); String s = EditorDeletePolicy.raw(editor.inputType) ? "" : before(2048);
+    if (words) retypeTracker.onDeleteWord(s);
     if (EditorDeletePolicy.deletion(editor.inputType, null, s) == EditorDeletePolicy.Delete.KEY_EVENT) {
       sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL); refresh(); return;
     }
@@ -413,12 +498,12 @@ public final class HexInputMethodService extends InputMethodService implements F
     ic().deleteSurroundingText(s.length()-i,0); refresh();
   }
   public void onCursorMove(int delta) {
-    InputConnection c = ic(); if (c == null) return; editing();
+    InputConnection c = ic(); if (c == null) return; retypeTracker.reset(); editing();
     ExtractedText t = c.getExtractedText(new ExtractedTextRequest(), 0); if (t == null || t.text == null) return;
     int p = t.startOffset + Math.max(0, Math.min(t.text.length(), t.selectionEnd + delta)); c.setSelection(p,p); refresh();
   }
   public void onSelectionStart() {
-    trackpad.end(); InputConnection c = ic(); if (c == null) return; editing();
+    trackpad.end(); InputConnection c = ic(); if (c == null) return; retypeTracker.reset(); editing();
     ExtractedText t = c.getExtractedText(new ExtractedTextRequest(), 0);
     if (t == null || t.text == null || t.startOffset < 0 || t.selectionStart < 0 || t.selectionEnd < 0) return;
     trackpadOffset = t.startOffset;
@@ -431,7 +516,16 @@ public final class HexInputMethodService extends InputMethodService implements F
   public void onSelectionEnd() { trackpad.end(); }
   public void onReturn() {
     if (ic() == null) return;
-    if (words) autocorrect.recordCommittedWord(before(256));
+    if (words) {
+      String ctx = before(256);
+      String committed = word(ctx);
+      List<RetypeTracker.TapSample> taps = retypeTracker.currentWordTapsSnapshot();
+      autocorrect.recordCommittedWord(ctx);
+      if (!committed.isEmpty()) {
+        learnThumbOffsetsForWord(taps, committed, false);
+        learnRetypeIfMatched(committed);
+      }
+    }
     editing(); String label = actionLabel();
     if (EditorDeletePolicy.sendEnter(editor.inputType, label)) sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER);
     else if (label.isEmpty()) replace(0,"\n");

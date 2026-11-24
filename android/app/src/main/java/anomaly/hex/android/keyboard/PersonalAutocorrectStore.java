@@ -23,9 +23,11 @@ public final class PersonalAutocorrectStore {
     private static final String KEY_WORD_COUNTS = "word_counts";
     private static final String KEY_BIGRAMS = "bigram_counts";
     private static final String KEY_CHAR_SLIPS = "char_slips";
+    private static final String KEY_THUMB_OFFSETS = "thumb_offsets";
 
     private record PendingFix(String replacement, int count) {}
     public record WordUsage(String canonical, int count) {}
+    public record ThumbOffset(float dx, float dy, int count) {}
 
     private final SharedPreferences prefs;
     private final LinkedHashMap<String, String> learned = new LinkedHashMap<>();
@@ -35,6 +37,7 @@ public final class PersonalAutocorrectStore {
     private final LinkedHashMap<String, WordUsage> wordCounts = new LinkedHashMap<>();
     private final LinkedHashMap<String, Integer> bigramCounts = new LinkedHashMap<>();
     private final HashMap<String, Integer> charSlips = new HashMap<>();
+    private final HashMap<Character, ThumbOffset> thumbOffsets = new HashMap<>();
 
     public PersonalAutocorrectStore(Context ctx) {
         this(ctx == null ? null : ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE));
@@ -153,7 +156,7 @@ public final class PersonalAutocorrectStore {
         if (typed == null || intended == null) return;
         String a = typed.trim().toLowerCase(Locale.ROOT);
         String b = intended.trim().toLowerCase(Locale.ROOT);
-        if (a.length() != b.length() || a.length() < 3 || a.equals(b)) return;
+        if (a.length() != b.length() || a.length() < 2 || a.equals(b)) return;
         boolean changed = false;
         int slips = 0;
         for (int i = 0; i < a.length(); i++) {
@@ -176,6 +179,56 @@ public final class PersonalAutocorrectStore {
     public synchronized int slipCount(char typed, char intended) {
         Integer c = charSlips.get(typed + ":" + intended);
         return c == null ? 0 : c;
+    }
+
+    /**
+     * Updates the per-key thumb landing offset EMA (in dp relative to the geometric key center).
+     * Corrections (where we know the tap aimed at {@code intendedKey}) learn faster than clean taps.
+     */
+    public synchronized void recordThumbSample(
+            char intendedKey, float dxDp, float dyDp, float keyWidthDp, float keyHeightDp, boolean fromCorrection) {
+        char k = Character.toLowerCase(intendedKey);
+        if (k < 'a' || k > 'z' || keyWidthDp <= 0f || keyHeightDp <= 0f) return;
+        if (Math.abs(dxDp) > keyWidthDp * 1.15f || Math.abs(dyDp) > keyHeightDp * 1.05f) return;
+
+        float sampleMaxX = keyWidthDp * 0.65f;
+        float sampleMaxY = keyHeightDp * 0.55f;
+        float sx = Math.max(-sampleMaxX, Math.min(sampleMaxX, dxDp));
+        float sy = Math.max(-sampleMaxY, Math.min(sampleMaxY, dyDp));
+
+        float maxX = Math.min(10.0f, keyWidthDp * 0.34f);
+        float maxY = Math.min(8.0f, keyHeightDp * 0.28f);
+
+        ThumbOffset prev = thumbOffsets.get(k);
+        float alpha = fromCorrection ? 0.24f : 0.10f;
+        float nextDx, nextDy;
+        int nextCount;
+        if (prev == null) {
+            nextDx = sx * (fromCorrection ? 0.6f : 0.4f);
+            nextDy = sy * (fromCorrection ? 0.6f : 0.4f);
+            nextCount = fromCorrection ? 2 : 1;
+        } else {
+            nextDx = prev.dx() + alpha * (sx - prev.dx());
+            nextDy = prev.dy() + alpha * (sy - prev.dy());
+            nextCount = Math.min(10000, prev.count() + (fromCorrection ? 2 : 1));
+        }
+        nextDx = Math.max(-maxX, Math.min(maxX, nextDx));
+        nextDy = Math.max(-maxY, Math.min(maxY, nextDy));
+        thumbOffsets.put(k, new ThumbOffset(nextDx, nextDy, nextCount));
+        save();
+    }
+
+    /** Returns the ramp-in-scaled (dx, dy) offset in dp for a letter key, or null if untrained. */
+    public synchronized float[] thumbOffset(char key) {
+        char k = Character.toLowerCase(key);
+        ThumbOffset o = thumbOffsets.get(k);
+        if (o == null || o.count() <= 0) return null;
+        float scale = Math.min(1.0f, o.count() / 4.0f);
+        return new float[] { o.dx() * scale, o.dy() * scale };
+    }
+
+    public synchronized int thumbOffsetKeyCount() {
+        return thumbOffsets.size();
     }
 
     private static boolean hasInternalUpper(String w) {
@@ -394,6 +447,18 @@ public final class PersonalAutocorrectStore {
                 }
             }
         }
+        String to = prefs.getString(KEY_THUMB_OFFSETS, "");
+        if (to != null && !to.isEmpty()) {
+            for (String line : to.split("\n")) {
+                String[] parts = line.split("\t", 4);
+                if (parts.length == 4 && parts[0].length() == 1) {
+                    try {
+                        thumbOffsets.put(parts[0].charAt(0), new ThumbOffset(
+                                Float.parseFloat(parts[1]), Float.parseFloat(parts[2]), Integer.parseInt(parts[3])));
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+        }
     }
 
     private void save() {
@@ -412,6 +477,14 @@ public final class PersonalAutocorrectStore {
         for (var e : bigramCounts.entrySet()) sbBg.append(e.getKey()).append('\t').append(e.getValue()).append('\n');
         StringBuilder sbSl = new StringBuilder();
         for (var e : charSlips.entrySet()) sbSl.append(e.getKey()).append('\t').append(e.getValue()).append('\n');
+        StringBuilder sbTo = new StringBuilder();
+        for (var e : thumbOffsets.entrySet()) {
+            ThumbOffset o = e.getValue();
+            sbTo.append(e.getKey()).append('\t')
+                    .append(String.format(Locale.ROOT, "%.2f", o.dx())).append('\t')
+                    .append(String.format(Locale.ROOT, "%.2f", o.dy())).append('\t')
+                    .append(o.count()).append('\n');
+        }
         prefs.edit()
                 .putString(KEY_LEARNED, sbLearned.toString())
                 .putString(KEY_PENDING, sbPending.toString())
@@ -420,6 +493,7 @@ public final class PersonalAutocorrectStore {
                 .putString(KEY_WORD_COUNTS, sbWc.toString())
                 .putString(KEY_BIGRAMS, sbBg.toString())
                 .putString(KEY_CHAR_SLIPS, sbSl.toString())
+                .putString(KEY_THUMB_OFFSETS, sbTo.toString())
                 .apply();
     }
 }

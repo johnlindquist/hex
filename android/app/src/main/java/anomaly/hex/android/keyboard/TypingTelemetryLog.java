@@ -52,6 +52,11 @@ public final class TypingTelemetryLog {
 
     public void logTap(String keyLabel, String kind, float tapXdp, float tapYdp,
                        float keyCenterXdp, float keyCenterYdp, String layer, float kbWidthDp) {
+        logTap(keyLabel, kind, tapXdp, tapYdp, keyCenterXdp, keyCenterYdp, null, layer, kbWidthDp);
+    }
+
+    public void logTap(String keyLabel, String kind, float tapXdp, float tapYdp,
+                       float keyCenterXdp, float keyCenterYdp, String rawKeyLabel, String layer, float kbWidthDp) {
         try {
             JSONObject o = base("tap")
                     .put("key", keyLabel == null ? "" : keyLabel)
@@ -64,7 +69,16 @@ public final class TypingTelemetryLog {
                     .put("dy", round1(tapYdp - keyCenterYdp))
                     .put("layer", layer == null ? "" : layer)
                     .put("w", round1(kbWidthDp));
+            if (rawKeyLabel != null && !rawKeyLabel.isEmpty()) o.put("rawKey", rawKeyLabel);
             enqueue(o);
+        } catch (JSONException ignored) {}
+    }
+
+    public void logRetype(String erased, String retyped) {
+        try {
+            enqueue(base("retype")
+                    .put("from", erased == null ? "" : erased)
+                    .put("to", retyped == null ? "" : retyped));
         } catch (JSONException ignored) {}
     }
 

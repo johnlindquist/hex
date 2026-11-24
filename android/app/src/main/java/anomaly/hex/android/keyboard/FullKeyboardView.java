@@ -21,7 +21,8 @@ public final class FullKeyboardView extends FrameLayout {
         void onSuggestionPick(String word);
         void onEmojiPick(String emoji);
         void onKeyTapTelemetry(String keyLabel, String kind, float tapXdp, float tapYdp,
-                               float keyCenterXdp, float keyCenterYdp, String layer, float kbWidthDp);
+                               float keyCenterXdp, float keyCenterYdp, float keyWidthDp, float keyHeightDp,
+                               String rawKeyLabel, String layer, float kbWidthDp);
         void onSpacebarTailTrigger(KeyboardSettings.SpacebarFixMode mode);
         void onTailFixApply(int replaceLength, String replacement, String modeId, String originalTail);
         void onUndoDictation();
@@ -213,6 +214,12 @@ public final class FullKeyboardView extends FrameLayout {
     public void setQuickAccents(boolean enabled) {
         plane.setQuickAccents(enabled);
     }
+    public void setPersonalStore(PersonalAutocorrectStore store) {
+        plane.setPersonalStore(store);
+    }
+    public KeyboardLayout currentLayout() {
+        return plane.currentLayout();
+    }
     public void showTailScrubber(TailCorrectionEngine.TailAnalysis analysis) {
         closeTailPanel();
         hideTailSlide();
@@ -320,9 +327,11 @@ public final class FullKeyboardView extends FrameLayout {
         public void onCursorMove(int d) { if(!emojiOpen && !inRewritePrompt()) host.onCursorMove(d); }
         public void onSwitchKeyboard() { host.onSwitchKeyboard(); }
         public void onKeyTapTelemetry(String keyLabel, String kind, float tapXdp, float tapYdp,
-                                      float keyCenterXdp, float keyCenterYdp, String layer, float kbWidthDp) {
+                                      float keyCenterXdp, float keyCenterYdp, float keyWidthDp, float keyHeightDp,
+                                      String rawKeyLabel, String layer, float kbWidthDp) {
             if (!emojiOpen && !inRewritePrompt()) {
-                host.onKeyTapTelemetry(keyLabel, kind, tapXdp, tapYdp, keyCenterXdp, keyCenterYdp, layer, kbWidthDp);
+                host.onKeyTapTelemetry(keyLabel, kind, tapXdp, tapYdp, keyCenterXdp, keyCenterYdp,
+                        keyWidthDp, keyHeightDp, rawKeyLabel, layer, kbWidthDp);
             }
         }
         public void onSpacebarFlickUp() {
