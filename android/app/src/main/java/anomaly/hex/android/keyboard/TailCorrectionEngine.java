@@ -14,6 +14,35 @@ public final class TailCorrectionEngine {
     public static final int MAX_WORDS = 6;
     public static final int MAX_SENTENCE_WORDS = 24;
     private static final Pattern WORD_SPAN = Pattern.compile("[\\p{L}][\\p{L}'’]{0,23}");
+    private static final Map<String, String> ALWAYS_CONTRACTIONS = Map.ofEntries(
+            Map.entry("dont", "don't"), Map.entry("cant", "can't"), Map.entry("wont", "won't"),
+            Map.entry("didnt", "didn't"), Map.entry("doesnt", "doesn't"), Map.entry("isnt", "isn't"),
+            Map.entry("arent", "aren't"), Map.entry("wasnt", "wasn't"), Map.entry("werent", "weren't"),
+            Map.entry("couldnt", "couldn't"), Map.entry("wouldnt", "wouldn't"), Map.entry("shouldnt", "shouldn't"),
+            Map.entry("havent", "haven't"), Map.entry("hasnt", "hasn't"), Map.entry("hadnt", "hadn't"),
+            Map.entry("thats", "that's"), Map.entry("whats", "what's"), Map.entry("whos", "who's"),
+            Map.entry("heres", "here's"), Map.entry("theres", "there's"), Map.entry("youre", "you're"),
+            Map.entry("theyre", "they're"), Map.entry("weve", "we've"), Map.entry("youve", "you've"),
+            Map.entry("theyve", "they've"), Map.entry("ive", "I've"), Map.entry("im", "I'm"),
+            Map.entry("youll", "you'll"), Map.entry("theyll", "they'll"), Map.entry("youd", "you'd"),
+            Map.entry("theyd", "they'd"), Map.entry("hes", "he's"), Map.entry("shes", "she's")
+    );
+    private static final Map<String, String> CONTEXT_CONTRACTIONS = Map.of(
+            "lets", "let's",
+            "its", "it's",
+            "ill", "I'll",
+            "id", "I'd",
+            "were", "we're",
+            "well", "we'll",
+            "wed", "we'd",
+            "hell", "he'll",
+            "shell", "she'll"
+    );
+    private static final Set<String> LETS_FOLLOWERS = Set.of(
+            "see", "go", "do", "try", "get", "make", "check", "test", "keep", "take",
+            "talk", "meet", "start", "stop", "run", "build", "fix", "add", "use",
+            "look", "wait", "find", "open", "send", "play", "work", "move", "just", "not"
+    );
 
     public record WordSlot(
             String original,
@@ -113,11 +142,17 @@ public final class TailCorrectionEngine {
             String prevLower = i > 0
                     ? textBeforeCursor.substring(spans.get(i - 1)[0], spans.get(i - 1)[1]).toLowerCase(Locale.ROOT)
                     : null;
+            String nextLower = (i + 1 < spans.size())
+                    ? textBeforeCursor.substring(spans.get(i + 1)[0], spans.get(i + 1)[1]).toLowerCase(Locale.ROOT)
+                    : null;
+            boolean atSentenceStart = (i == fromIdx);
             SpatialKeyboardDecoder.DecodeContext wordCtx =
                     new SpatialKeyboardDecoder.DecodeContext(prevLower, screen, store);
 
-            boolean known = isKnownWord(dict, lower, screen, store);
-            List<String> cands = candidatesForWord(orig, lower, dict, wordCtx, screen, store);
+            boolean forcedContraction = ALWAYS_CONTRACTIONS.containsKey(lower)
+                    || ("lets".equals(lower) && (atSentenceStart || (nextLower != null && LETS_FOLLOWERS.contains(nextLower))));
+            boolean known = !forcedContraction && isKnownWord(dict, lower, screen, store);
+            List<String> cands = candidatesForWord(orig, lower, nextLower, dict, wordCtx, screen, store);
             boolean suspicious = !known && !cands.isEmpty();
             int slotIdx = slots.size();
             slots.add(new WordSlot(orig, start, end, suspicious, cands));
@@ -156,16 +191,24 @@ public final class TailCorrectionEngine {
     }
 
     private static List<String> candidatesForWord(
-            String orig, String lower, WordDictionary dict,
+            String orig, String lower, String nextLower, WordDictionary dict,
             SpatialKeyboardDecoder.DecodeContext ctx,
             Map<String, String> screen, PersonalAutocorrectStore store) {
         if (dict == null || lower.length() < 2) return List.of();
         boolean title = !orig.equals(lower) && Character.isUpperCase(orig.charAt(0));
         LinkedHashSet<String> out = new LinkedHashSet<>();
 
-        // 1. Spacebar-miss split ("wantbto" -> "want to")
-        String sbSplit = SpatialKeyboardDecoder.splitSpacebarMiss(dict, lower, ctx);
-        if (sbSplit != null) out.add(applyCase(title, sbSplit));
+        // 0. Contraction restoration ("dont" -> "don't", "Lets" -> "Let's")
+        String alwaysContr = ALWAYS_CONTRACTIONS.get(lower);
+        if (alwaysContr != null) out.add(applyCase(title, alwaysContr));
+        String ctxContr = CONTEXT_CONTRACTIONS.get(lower);
+        if (ctxContr != null) out.add(applyCase(title, ctxContr));
+
+        // 1. Spacebar-miss split including fuzzy halves ("wantbto" -> "want to", "hisbwekk" -> "how well")
+        List<String> sbSplits = SpatialKeyboardDecoder.splitSpacebarMissCandidates(dict, lower, ctx, nextLower, 3);
+        for (String split : sbSplits) {
+            out.add(applyCase(title, split));
+        }
 
         // 2. Concatenated missed-space split ("upto" -> "up to")
         String concatSplit = dict.splitMissedSpace(lower);

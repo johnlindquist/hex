@@ -316,7 +316,7 @@ public final class HexInputMethodService extends InputMethodService implements F
     switch (mode) {
       case FLICK_SCRUBBER -> fullView.showSentencePicker(autocorrect.analyzeSentence(before(512)));
       case LONG_PRESS_PANEL -> fullView.showTailPanel(autocorrect.analyzeSentence(before(512)));
-      case HOLD_SLIDE_PICKER -> fullView.showTailSlide(autocorrect.analyzeTail(before(256)));
+      case HOLD_SLIDE_PICKER -> fullView.showTailSlide(autocorrect.analyzeSentence(before(512)));
     }
   }
   public void onTailFixApply(int replaceLength, String replacement, String modeId, String originalTail) {

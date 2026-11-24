@@ -108,6 +108,23 @@ public class SpacebarTailFixAndTelemetryTest {
                 analysis.phraseFixes().size() >= 2);
     }
 
+    @Test public void sentenceFixerCorrectsFuzzySpacebarMissAndContractions() {
+        var analysis = TailCorrectionEngine.analyzeSentence(
+                "Lets see just hisbwekk this works nks",
+                dict, SpatialKeyboardDecoder.DecodeContext.EMPTY);
+        assertFalse(analysis.isEmpty());
+        assertFalse("Expected full-sentence phrase fixes", analysis.phraseFixes().isEmpty());
+        assertEquals("Let's see just how well this works now", analysis.phraseFixes().get(0).label());
+    }
+
+    @Test public void sentenceFixerHandlesFuzzySpacebarMissSiblingsAndAlwaysContractions() {
+        var analysis = TailCorrectionEngine.analyzeSentence(
+                "I dont think thats inmteh plan",
+                dict, SpatialKeyboardDecoder.DecodeContext.EMPTY);
+        assertFalse(analysis.phraseFixes().isEmpty());
+        assertEquals("I don't think that's in the plan", analysis.phraseFixes().get(0).label());
+    }
+
     @Test public void spacebarFixModeDefaultsToFlickScrubber() {
         assertEquals(KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER,
                 KeyboardSettings.SpacebarFixMode.fromId(null));

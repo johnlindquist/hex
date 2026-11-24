@@ -157,6 +157,110 @@ public final class SpatialKeyboardDecoder {
     return best;
   }
 
+  /**
+   * Returns ranked two-word split candidates for a bottom-row spacebar miss (c/v/b/n/m),
+   * optionally allowing spatial QWERTY decoding of each half (e.g. "hisbwekk" -> "how well", "his well").
+   */
+  public static List<String> splitSpacebarMissCandidates(
+      WordDictionary dict, String lower, DecodeContext ctx, String nextWordLower, int limit) {
+    if (dict == null || lower == null || lower.length() < 4 || lower.length() > 20
+        || limit <= 0 || dict.contains(lower)) {
+      return List.of();
+    }
+    DecodeContext dc = ctx == null ? DecodeContext.EMPTY : ctx;
+    Map<String, String> screen = dc.screenWords() == null ? Map.of() : dc.screenWords();
+    PersonalAutocorrectStore store = dc.personalStore();
+    if (screen.containsKey(lower) || (store != null && store.isPersonalWord(lower))) {
+      return List.of();
+    }
+
+    String prevLower = dc.prevWordLower();
+    DecodeContext leftCtx = new DecodeContext(prevLower, screen, store);
+    DecodeContext rightCtx = new DecodeContext(null, screen, store);
+    Map<String, Integer> scored = new HashMap<>();
+    int n = lower.length();
+
+    for (int i = 1; i < n - 1; i++) {
+      char mid = lower.charAt(i);
+      if (mid != 'c' && mid != 'v' && mid != 'b' && mid != 'n' && mid != 'm') continue;
+      String left = lower.substring(0, i);
+      String right = lower.substring(i + 1);
+
+      List<WordDictionary.Candidate> leftCands = splitHalfCandidates(dict, left, screen, store, leftCtx);
+      if (leftCands.isEmpty()) continue;
+      List<WordDictionary.Candidate> rightCands = splitHalfCandidates(dict, right, screen, store, rightCtx);
+      if (rightCands.isEmpty()) continue;
+
+      int midPenalty = (mid == 'c' || mid == 'm') ? 2000 : 0;
+      for (WordDictionary.Candidate lc : leftCands) {
+        for (WordDictionary.Candidate rc : rightCands) {
+          if ((left.length() == 1 || right.length() == 1) && (lc.rank() > 1200 || rc.rank() > 1200)) continue;
+          if (lc.cost() > 0 && rc.cost() > 0 && lc.cost() + rc.cost() > 75) continue;
+
+          int score = (lc.cost() + rc.cost()) * 1000
+              + rankPenalty(lc.rank())
+              + rankPenalty(rc.rank())
+              + midPenalty;
+          if (CommonBigrams.isCommon(lc.word(), rc.word())) score -= 28000;
+          if (CommonBigrams.isCommon(prevLower, lc.word())) score -= 22000;
+          if (CommonBigrams.isCommon(rc.word(), nextWordLower)) score -= 12000;
+          if (store != null) {
+            int bgMid = store.bigramCount(lc.word(), rc.word());
+            if (bgMid > 0) score -= Math.min(18000, (int) Math.round(Math.log1p(bgMid) * 6000.0));
+            if (prevLower != null && !prevLower.isEmpty()) {
+              int bgPrev = store.bigramCount(prevLower, lc.word());
+              if (bgPrev > 0) score -= Math.min(12000, (int) Math.round(Math.log1p(bgPrev) * 4500.0));
+            }
+          }
+
+          String leftOut = lc.word().equals("i") ? "I" : lc.word();
+          String rightOut = rc.word().equals("i") ? "I" : rc.word();
+          String phrase = leftOut + " " + rightOut;
+          Integer existing = scored.get(phrase);
+          if (existing == null || score < existing) {
+            scored.put(phrase, score);
+          }
+        }
+      }
+    }
+
+    if (scored.isEmpty()) return List.of();
+    List<Map.Entry<String, Integer>> entries = new ArrayList<>(scored.entrySet());
+    entries.sort(Comparator.<Map.Entry<String, Integer>>comparingInt(Map.Entry::getValue)
+        .thenComparing(Map.Entry::getKey));
+    List<String> out = new ArrayList<>(Math.min(limit, entries.size()));
+    for (int i = 0; i < entries.size() && out.size() < limit; i++) {
+      out.add(entries.get(i).getKey());
+    }
+    return out;
+  }
+
+  private static List<WordDictionary.Candidate> splitHalfCandidates(
+      WordDictionary dict, String part, Map<String, String> screen,
+      PersonalAutocorrectStore store, DecodeContext halfCtx) {
+    List<WordDictionary.Candidate> out = new ArrayList<>(3);
+    int exactRank = splitWordRank(dict, part, screen, store);
+    if (exactRank >= 0) {
+      out.add(new WordDictionary.Candidate(part, exactRank, 0));
+    }
+    if (part.length() == 2) {
+      String twoFix = dict.bestTwoLetterFix(part);
+      if (twoFix != null && !twoFix.equals(part)) {
+        int r = dict.rankOf(twoFix);
+        if (r >= 0 && r < 4000) out.add(new WordDictionary.Candidate(twoFix, r, 14));
+      }
+    } else if (part.length() >= 3) {
+      List<WordDictionary.Candidate> decoded = decode(dict, part, 8, halfCtx);
+      int added = 0;
+      for (WordDictionary.Candidate c : decoded) {
+        if (c.word().equals(part) || c.rank() >= 4000) continue;
+        out.add(c);
+        if (++added >= 5) break;
+      }
+    }
+    return out;
+  }
+
   private static int splitWordRank(
       WordDictionary dict, String w, Map<String, String> screen, PersonalAutocorrectStore store) {
     if (w.equals("i") || w.equals("a")) return 5;
@@ -273,6 +377,9 @@ public final class SpatialKeyboardDecoder {
       WordDictionary.Candidate c, String prevLower,
       Map<String, String> screen, PersonalAutocorrectStore store) {
     int score = c.cost() * 1000 + rankPenalty(c.rank());
+    if (CommonBigrams.isCommon(prevLower, c.word())) {
+      score -= 8000;
+    }
     // Words literally on screen get a strong contextual prior
     if (screen.containsKey(c.word())) {
       score -= 3200;
