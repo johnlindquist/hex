@@ -104,6 +104,34 @@ public final class WordDictionary {
         return null;
     }
 
+    /**
+     * Returns spatial 2-letter candidates (transposition, 1-slip, and 2-slip adjacent fixes like "sk" -> "do")
+     * for sentence/split decoding.
+     */
+    public List<Candidate> twoLetterCandidates(String lower) {
+        if (lower == null || lower.length() != 2) return List.of();
+        char a = lower.charAt(0), b = lower.charAt(1);
+        Map<String, Candidate> best = new LinkedHashMap<>();
+        for (String w : COMMON_TWO_LETTER) {
+            if (w.equals(lower)) continue;
+            int rank = rankOf(w);
+            if (rank < 0) rank = 100;
+            char wa = w.charAt(0), wb = w.charAt(1);
+            if (a == wb && b == wa) {
+                putBest(best, w, rank, 10);
+            } else if (a == wa && isAdjacentKey(b, wb)) {
+                putBest(best, w, rank, 14);
+            } else if (b == wb && isAdjacentKey(a, wa)) {
+                putBest(best, w, rank, 14);
+            } else if (isAdjacentKey(a, wa) && isAdjacentKey(b, wb)) {
+                putBest(best, w, rank, 28);
+            }
+        }
+        List<Candidate> out = new ArrayList<>(best.values());
+        out.sort(Comparator.comparingInt(Candidate::cost).thenComparingInt(Candidate::rank));
+        return out;
+    }
+
     /** Splits a missed-space compound ("upto"->"up to", "nevermind"->"never mind", "alot"->"a lot") into two common words. */
     public String splitMissedSpace(String lower) {
         if (lower == null || lower.length() < 4 || lower.length() > 18 || contains(lower) || ranks.isEmpty()) return null;

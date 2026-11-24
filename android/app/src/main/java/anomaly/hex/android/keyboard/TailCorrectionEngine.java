@@ -152,8 +152,10 @@ public final class TailCorrectionEngine {
             boolean forcedContraction = ALWAYS_CONTRACTIONS.containsKey(lower)
                     || ("lets".equals(lower) && (atSentenceStart || (nextLower != null && LETS_FOLLOWERS.contains(nextLower))));
             boolean known = !forcedContraction && isKnownWord(dict, lower, screen, store);
-            List<String> cands = candidatesForWord(orig, lower, nextLower, dict, wordCtx, screen, store);
-            boolean suspicious = !known && !cands.isEmpty();
+            List<String> cands = candidatesForWord(orig, lower, prevLower, nextLower, dict, wordCtx, screen, store);
+            boolean contextualRealWordSlip = known && !cands.isEmpty()
+                    && isLikelyRealWordSlip(lower, cands.get(0).toLowerCase(Locale.ROOT), prevLower, nextLower, dict);
+            boolean suspicious = (!known || contextualRealWordSlip) && !cands.isEmpty();
             int slotIdx = slots.size();
             slots.add(new WordSlot(orig, start, end, suspicious, cands));
             if (suspicious) focusIndex = slotIdx;
@@ -182,6 +184,58 @@ public final class TailCorrectionEngine {
         return tail.substring(0, slot.startInTail()) + replacement + tail.substring(slot.endInTail());
     }
 
+    /**
+     * Recomputes full-sentence options targeting ONLY the user-marked word indices (and any
+     * explicitly pinned per-word replacements). Powers the interactive "tap words to mark bad
+     * sections" flow in {@link TailFixPanelView}.
+     */
+    public static List<PhraseFix> recomputePhrases(
+            TailAnalysis base,
+            Set<Integer> markedIndices,
+            Map<Integer, String> pinnedWords,
+            int focusIndex,
+            int maxPhrases) {
+        if (base == null || base.isEmpty()) return List.of();
+        Set<Integer> marked = markedIndices == null ? Set.of() : markedIndices;
+        Map<Integer, String> pinned = pinnedWords == null ? Map.of() : pinnedWords;
+
+        List<WordSlot> adjusted = new ArrayList<>(base.words().size());
+        for (int i = 0; i < base.words().size(); i++) {
+            WordSlot w = base.words().get(i);
+            String pin = pinned.get(i);
+            boolean isMarked = marked.contains(i) || pin != null;
+            List<String> cands = w.candidates();
+            if (pin != null) {
+                LinkedHashSet<String> reordered = new LinkedHashSet<>();
+                reordered.add(pin);
+                reordered.addAll(cands);
+                cands = new ArrayList<>(reordered);
+            }
+            adjusted.add(new WordSlot(w.original(), w.startInTail(), w.endInTail(), isMarked && !cands.isEmpty(), cands));
+        }
+
+        int effFocus = focusIndex;
+        if (effFocus < 0 || effFocus >= adjusted.size() || !adjusted.get(effFocus).suspicious()) {
+            effFocus = -1;
+            for (int i = adjusted.size() - 1; i >= 0; i--) {
+                if (adjusted.get(i).suspicious()) { effFocus = i; break; }
+            }
+        }
+        if (effFocus < 0) return List.of();
+        return buildPhraseFixes(base.originalTail(), adjusted, effFocus, maxPhrases);
+    }
+
+    private static boolean isLikelyRealWordSlip(
+            String lower, String topCandLower, String prevLower, String nextLower, WordDictionary dict) {
+        if (dict == null || lower.equals(topCandLower)) return false;
+        int origRank = dict.rankOf(lower);
+        int candRank = dict.rankOf(topCandLower);
+        if (origRank < 1200 || candRank < 0 || candRank > 250) return false;
+        boolean origFits = CommonBigrams.isCommon(prevLower, lower) || CommonBigrams.isCommon(lower, nextLower);
+        if (origFits) return false;
+        return CommonBigrams.isCommon(prevLower, topCandLower) || CommonBigrams.isCommon(topCandLower, nextLower);
+    }
+
     private static boolean isKnownWord(
             WordDictionary dict, String lower, Map<String, String> screen, PersonalAutocorrectStore store) {
         if (lower.equals("i") || lower.equals("a")) return true;
@@ -191,7 +245,7 @@ public final class TailCorrectionEngine {
     }
 
     private static List<String> candidatesForWord(
-            String orig, String lower, String nextLower, WordDictionary dict,
+            String orig, String lower, String prevLower, String nextLower, WordDictionary dict,
             SpatialKeyboardDecoder.DecodeContext ctx,
             Map<String, String> screen, PersonalAutocorrectStore store) {
         if (dict == null || lower.length() < 2) return List.of();
@@ -214,12 +268,33 @@ public final class TailCorrectionEngine {
         String concatSplit = dict.splitMissedSpace(lower);
         if (concatSplit != null) out.add(applyCase(title, concatSplit));
 
-        // 3. Spatial QWERTY neighbors (works for BOTH typos AND real-word slips like "thin" -> "this"/"then")
+        // 3. Spatial QWERTY neighbors (works for BOTH typos AND real-word slips like "Bow" -> "How", "thin" -> "this")
         if (lower.length() == 2) {
-            String twoFix = dict.bestTwoLetterFix(lower);
-            if (twoFix != null && !twoFix.equalsIgnoreCase(orig)) out.add(applyCase(title, twoFix));
+            List<WordDictionary.Candidate> twoCands = dict.twoLetterCandidates(lower);
+            twoCands.sort((a, b) -> {
+                int sa = a.cost() * 1000
+                        - (CommonBigrams.isCommon(prevLower, a.word()) ? 10000 : 0)
+                        - (CommonBigrams.isCommon(a.word(), nextLower) ? 10000 : 0);
+                int sb = b.cost() * 1000
+                        - (CommonBigrams.isCommon(prevLower, b.word()) ? 10000 : 0)
+                        - (CommonBigrams.isCommon(b.word(), nextLower) ? 10000 : 0);
+                int cmp = Integer.compare(sa, sb);
+                return cmp != 0 ? cmp : Integer.compare(a.rank(), b.rank());
+            });
+            for (WordDictionary.Candidate c : twoCands) {
+                if (c.word().equalsIgnoreCase(orig)) continue;
+                out.add(applyCase(title, c.word()));
+                if (out.size() >= 4) break;
+            }
         } else {
-            List<WordDictionary.Candidate> spatial = SpatialKeyboardDecoder.decode(dict, lower, 5, ctx);
+            List<WordDictionary.Candidate> spatial = new ArrayList<>(SpatialKeyboardDecoder.decode(dict, lower, 6, ctx));
+            if (nextLower != null && !nextLower.isEmpty()) {
+                spatial.sort((a, b) -> {
+                    int ba = CommonBigrams.isCommon(a.word(), nextLower) ? 1 : 0;
+                    int bb = CommonBigrams.isCommon(b.word(), nextLower) ? 1 : 0;
+                    return Integer.compare(bb, ba);
+                });
+            }
             for (WordDictionary.Candidate c : spatial) {
                 if (c.word().equalsIgnoreCase(lower)) continue;
                 String canon = canonical(c.word(), screen, store);

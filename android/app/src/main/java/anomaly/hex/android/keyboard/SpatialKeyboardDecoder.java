@@ -244,10 +244,11 @@ public final class SpatialKeyboardDecoder {
       out.add(new WordDictionary.Candidate(part, exactRank, 0));
     }
     if (part.length() == 2) {
-      String twoFix = dict.bestTwoLetterFix(part);
-      if (twoFix != null && !twoFix.equals(part)) {
-        int r = dict.rankOf(twoFix);
-        if (r >= 0 && r < 4000) out.add(new WordDictionary.Candidate(twoFix, r, 14));
+      List<WordDictionary.Candidate> twoCands = dict.twoLetterCandidates(part);
+      int added = 0;
+      for (WordDictionary.Candidate c : twoCands) {
+        out.add(c);
+        if (++added >= 4) break;
       }
     } else if (part.length() >= 3) {
       List<WordDictionary.Candidate> decoded = decode(dict, part, 8, halfCtx);

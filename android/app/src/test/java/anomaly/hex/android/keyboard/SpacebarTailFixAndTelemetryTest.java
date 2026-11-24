@@ -125,6 +125,26 @@ public class SpacebarTailFixAndTelemetryTest {
         assertEquals("I don't think that's in the plan", analysis.phraseFixes().get(0).label());
     }
 
+    @Test public void sentenceFixerFixesBowAndTwoSlipSpacebarMissAndSupportsManualMarking() {
+        var analysis = TailCorrectionEngine.analyzeSentence(
+                "Bow do you want to sknthkd?",
+                dict, SpatialKeyboardDecoder.DecodeContext.EMPTY);
+        assertFalse(analysis.phraseFixes().isEmpty());
+        assertEquals("How do you want to do this?", analysis.phraseFixes().get(0).label());
+
+        // Manual marking: unmarking "Bow" (index 0) and marking only "sknthkd" (index 5) fixes only "sknthkd"
+        var onlyLast = TailCorrectionEngine.recomputePhrases(
+                analysis, java.util.Set.of(5), java.util.Map.of(), 5, 4);
+        assertFalse(onlyLast.isEmpty());
+        assertEquals("Bow do you want to do this?", onlyLast.get(0).label());
+
+        // Manual marking + pinning a word combines cleanly into the full sentence
+        var pinned = TailCorrectionEngine.recomputePhrases(
+                analysis, java.util.Set.of(0, 5), java.util.Map.of(0, "Now"), 5, 4);
+        assertFalse(pinned.isEmpty());
+        assertEquals("Now do you want to do this?", pinned.get(0).label());
+    }
+
     @Test public void spacebarFixModeDefaultsToFlickScrubber() {
         assertEquals(KeyboardSettings.SpacebarFixMode.FLICK_SCRUBBER,
                 KeyboardSettings.SpacebarFixMode.fromId(null));

@@ -27,6 +27,8 @@ final class TailFixPanelView extends LinearLayout {
     private final ScrollView scroll;
     private TailCorrectionEngine.TailAnalysis analysis;
     private int selectedWordIndex = -1;
+    private final Set<Integer> markedWords = new LinkedHashSet<>();
+    private final Map<Integer, String> pinnedWords = new HashMap<>();
     private Consumer<TailCorrectionEngine.PhraseFix> onPickPhrase;
     private BiConsumer<Integer, String> onPickWord;
 
@@ -71,17 +73,12 @@ final class TailFixPanelView extends LinearLayout {
         LinearLayout body = new LinearLayout(c);
         body.setOrientation(VERTICAL);
 
-        // Full corrected sentence cards
-        phraseList = new LinearLayout(c);
-        phraseList.setOrientation(VERTICAL);
-        body.addView(phraseList, new LayoutParams(-1, -2));
-
-        // Optional surgical word-level swap row
+        // Interactive word-marking row: tap words to mark/unmark bad sections
         TextView chipLabel = new TextView(c);
-        chipLabel.setText("Or tap a word to swap");
+        chipLabel.setText("Tap words to mark what needs fixing");
         chipLabel.setTextColor(TEXT_MUTED);
         chipLabel.setTextSize(11.5f);
-        chipLabel.setPadding(0, dp(c, 8), 0, dp(c, 4));
+        chipLabel.setPadding(0, 0, 0, dp(c, 5));
         body.addView(chipLabel, new LayoutParams(-1, -2));
 
         HorizontalScrollView chipScroll = new HorizontalScrollView(c);
@@ -97,9 +94,14 @@ final class TailFixPanelView extends LinearLayout {
         wordCandRow = new LinearLayout(c);
         wordCandRow.setOrientation(HORIZONTAL);
         wordCandRow.setGravity(Gravity.CENTER_VERTICAL);
-        wordCandRow.setPadding(0, dp(c, 6), 0, dp(c, 4));
+        wordCandRow.setPadding(0, dp(c, 6), 0, dp(c, 8));
         candScroll.addView(wordCandRow, new FrameLayout.LayoutParams(-2, -2));
         body.addView(candScroll, new LayoutParams(-1, -2));
+
+        // Full corrected sentence cards (live-updated from marked words)
+        phraseList = new LinearLayout(c);
+        phraseList.setOrientation(VERTICAL);
+        body.addView(phraseList, new LayoutParams(-1, -2));
 
         scroll.addView(body, new FrameLayout.LayoutParams(-1, -2));
         addView(scroll, new LayoutParams(-1, 0, 1f));
@@ -111,6 +113,15 @@ final class TailFixPanelView extends LinearLayout {
         this.analysis = analysis;
         this.onPickPhrase = onPickPhrase;
         this.onPickWord = onPickWord;
+        this.markedWords.clear();
+        this.pinnedWords.clear();
+        if (analysis != null) {
+            for (int i = 0; i < analysis.words().size(); i++) {
+                if (analysis.words().get(i).suspicious()) {
+                    markedWords.add(i);
+                }
+            }
+        }
         this.selectedWordIndex = analysis == null ? -1 : analysis.defaultFocusIndex();
         scroll.scrollTo(0, 0);
         render();
@@ -129,10 +140,78 @@ final class TailFixPanelView extends LinearLayout {
         String origTrim = analysis.originalTail().trim();
         subtitle.setText("Typed: “" + origTrim + "”");
 
-        List<TailCorrectionEngine.PhraseFix> phrases = analysis.phraseFixes();
+        List<TailCorrectionEngine.WordSlot> words = analysis.words();
+        for (int i = 0; i < words.size(); i++) {
+            final int idx = i;
+            TailCorrectionEngine.WordSlot slot = words.get(i);
+            boolean marked = markedWords.contains(i);
+            String pinned = pinnedWords.get(i);
+            TextView chip = new TextView(c);
+            chip.setText(pinned != null ? "✓ " + pinned : (marked ? "• " + slot.original() : slot.original()));
+            chip.setTextColor(marked ? ON_PILL_TEXT : TEXT);
+            chip.setTextSize(13.5f);
+            chip.setPadding(dp(c, 11), dp(c, 6), dp(c, 11), dp(c, 6));
+            chip.setBackground(pillPress(c, marked ? ACTION_FILL : CHIP_FILL));
+            chip.setOnClickListener(v -> {
+                if (markedWords.contains(idx)) {
+                    markedWords.remove(idx);
+                    pinnedWords.remove(idx);
+                    if (selectedWordIndex == idx) {
+                        selectedWordIndex = markedWords.isEmpty() ? -1 : markedWords.iterator().next();
+                    }
+                } else {
+                    markedWords.add(idx);
+                    selectedWordIndex = idx;
+                }
+                render();
+            });
+            LayoutParams lp = new LayoutParams(-2, -2);
+            lp.rightMargin = dp(c, 6);
+            wordChipRow.addView(chip, lp);
+        }
+
+        if (selectedWordIndex >= 0 && selectedWordIndex < words.size() && markedWords.contains(selectedWordIndex)) {
+            TailCorrectionEngine.WordSlot slot = words.get(selectedWordIndex);
+            String activePin = pinnedWords.get(selectedWordIndex);
+            if (slot.candidates().isEmpty()) {
+                TextView empty = new TextView(c);
+                empty.setText("No close neighbors for “" + slot.original() + "”");
+                empty.setTextColor(TEXT_MUTED);
+                empty.setTextSize(12.5f);
+                wordCandRow.addView(empty);
+            } else {
+                for (String cand : slot.candidates()) {
+                    boolean isPinned = cand.equals(activePin);
+                    TextView pill = new TextView(c);
+                    pill.setText(cand);
+                    pill.setTextColor(isPinned ? ON_PILL_TEXT : TEXT);
+                    pill.setTextSize(13.5f);
+                    pill.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                    pill.setPadding(dp(c, 12), dp(c, 6), dp(c, 12), dp(c, 6));
+                    pill.setBackground(pillPress(c, isPinned ? RETURN_PILL_FILL : KEY_FILL));
+                    pill.setOnClickListener(v -> {
+                        if (cand.equals(pinnedWords.get(selectedWordIndex))) {
+                            pinnedWords.remove(selectedWordIndex);
+                        } else {
+                            pinnedWords.put(selectedWordIndex, cand);
+                        }
+                        render();
+                    });
+                    LayoutParams lp = new LayoutParams(-2, -2);
+                    lp.rightMargin = dp(c, 6);
+                    wordCandRow.addView(pill, lp);
+                }
+            }
+        }
+
+        List<TailCorrectionEngine.PhraseFix> phrases = markedWords.isEmpty()
+                ? List.of()
+                : TailCorrectionEngine.recomputePhrases(analysis, markedWords, pinnedWords, selectedWordIndex, 4);
         if (phrases.isEmpty()) {
             TextView none = new TextView(c);
-            none.setText("Looks clean — tap any word below to inspect close alternatives.");
+            none.setText(markedWords.isEmpty()
+                    ? "Tap any word above to mark it for correction."
+                    : "No close replacements for the marked words.");
             none.setTextColor(TEXT_MUTED);
             none.setTextSize(13f);
             none.setPadding(0, dp(c, 4), 0, dp(c, 6));
@@ -153,53 +232,6 @@ final class TailFixPanelView extends LinearLayout {
                 LayoutParams lp = new LayoutParams(-1, -2);
                 lp.bottomMargin = dp(c, 7);
                 phraseList.addView(row, lp);
-            }
-        }
-
-        List<TailCorrectionEngine.WordSlot> words = analysis.words();
-        for (int i = 0; i < words.size(); i++) {
-            final int idx = i;
-            TailCorrectionEngine.WordSlot slot = words.get(i);
-            boolean selected = (i == selectedWordIndex);
-            TextView chip = new TextView(c);
-            chip.setText(slot.suspicious() ? "• " + slot.original() : slot.original());
-            chip.setTextColor(selected ? ON_PILL_TEXT : TEXT);
-            chip.setTextSize(13.5f);
-            chip.setPadding(dp(c, 11), dp(c, 6), dp(c, 11), dp(c, 6));
-            chip.setBackground(pillPress(c, selected ? ACTION_FILL : (slot.suspicious() ? KEY_FILL : CHIP_FILL)));
-            chip.setOnClickListener(v -> {
-                selectedWordIndex = idx;
-                render();
-            });
-            LayoutParams lp = new LayoutParams(-2, -2);
-            lp.rightMargin = dp(c, 6);
-            wordChipRow.addView(chip, lp);
-        }
-
-        if (selectedWordIndex >= 0 && selectedWordIndex < words.size()) {
-            TailCorrectionEngine.WordSlot slot = words.get(selectedWordIndex);
-            if (slot.candidates().isEmpty()) {
-                TextView empty = new TextView(c);
-                empty.setText("No close neighbors for “" + slot.original() + "”");
-                empty.setTextColor(TEXT_MUTED);
-                empty.setTextSize(12.5f);
-                wordCandRow.addView(empty);
-            } else {
-                for (String cand : slot.candidates()) {
-                    TextView pill = new TextView(c);
-                    pill.setText(cand);
-                    pill.setTextColor(TEXT);
-                    pill.setTextSize(14f);
-                    pill.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-                    pill.setPadding(dp(c, 13), dp(c, 7), dp(c, 13), dp(c, 7));
-                    pill.setBackground(pillPress(c, KEY_FILL));
-                    pill.setOnClickListener(v -> {
-                        if (onPickWord != null) onPickWord.accept(selectedWordIndex, cand);
-                    });
-                    LayoutParams lp = new LayoutParams(-2, -2);
-                    lp.rightMargin = dp(c, 6);
-                    wordCandRow.addView(pill, lp);
-                }
             }
         }
     }

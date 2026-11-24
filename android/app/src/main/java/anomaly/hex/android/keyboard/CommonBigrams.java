@@ -21,6 +21,8 @@ final class CommonBigrams {
             "let's take", "let's run", "let's fix", "let's look", "let's wait",
             // High-frequency everyday bigrams
             "want to", "need to", "have to", "going to", "trying to", "used to", "able to",
+            "to do", "do this", "do that", "do it", "what do", "where do", "why do",
+            "can do", "will do", "would do", "could do", "should do", "fix this", "fix that",
             "back to", "up to", "out of", "kind of", "sort of", "a lot", "at all",
             "in the", "on the", "for the", "to the", "of the", "at the", "with the",
             "from the", "by the", "and the", "is the", "was the", "that the",
