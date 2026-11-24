@@ -192,8 +192,10 @@ public final class HexInputMethodService extends InputMethodService implements F
     InputConnection c = ic(); if (fullView == null || c == null) return;
     int explicitCap = editor.inputType & (InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_CAP_WORDS | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
     int capFlags = explicitCap != 0 ? editor.inputType : (words ? (editor.inputType | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES) : editor.inputType);
-    fullView.setAutoCap(!privateField && c.getCursorCapsMode(capFlags) != 0);
     String context = words ? before(256) : "";
+    boolean appCap = c.getCursorCapsMode(capFlags) != 0;
+    boolean fallbackCap = words && explicitCap == 0 && CapitalizationRules.shouldAutoCapAfter(context);
+    fullView.setAutoCap(!privateField && (appCap || fallbackCap));
     String current = word(context);
     String prevWord = AutocorrectEngine.previousWord(context);
     if (emojiShortcodesEnabled) {

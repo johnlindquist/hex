@@ -40,7 +40,7 @@ public final class AutocorrectEngine {
             "ok", "okay", "ty", "thx", "pls", "plz", "tmrw", "tbh", "idk", "imo", "imho",
             "lol", "lmao", "omg", "brb", "btw", "afaik", "fyi", "nvm", "rn", "irl", "jk",
             "np", "yw", "smh", "ikr", "ngl", "fr", "gg", "dm", "pr", "prs", "ci", "ui",
-            "ux", "ios", "macos", "api", "apis", "url", "urls", "json", "sql", "ssh", "cli",
+            "ux", "api", "apis", "url", "urls", "json", "sql", "ssh", "cli",
             "gpu", "cpu", "ram", "sdk", "hex", "wisp", "seer", "rune", "kit", "gonna",
             "wanna", "gotta", "kinda", "sorta", "yeah", "yep", "nope", "nah", "hey", "yo"
     );
@@ -179,7 +179,8 @@ public final class AutocorrectEngine {
             String p = store.personalCanonical(lower);
             if (p != null) return p;
         }
-        return lower;
+        String c = english ? CapitalizationRules.canonicalCase(lower) : null;
+        return c != null ? c : lower;
     }
 
     private Correction lookup(String word, List<String> spellSuggestions) {
@@ -203,33 +204,52 @@ public final class AutocorrectEngine {
         if (screenVocab.contains(lower)) return null;
         if (allowLearning && store != null && store.isPersonalWord(lower)) return null;
 
-        boolean title = !word.equals(lower);
-        if (title && !word.equals(capitalize(lower))) return null;
+        // 0b. Double-cap Shift-hold slip ("THis" -> "This", "SOunds" -> "Sounds", "DOn't" -> "Don't")
+        String deDouble = english ? CapitalizationRules.fixDoubleCap(word) : null;
+        boolean allCaps = CapitalizationRules.isAllCaps(word);
+        boolean title = !allCaps && !word.equals(lower);
+        if (deDouble == null && !allCaps && title && !word.equals(capitalize(lower))) return null;
+
+        // Protect short ALL-CAPS acronyms & identifiers (e.g. "TEH", "TIEM", "NASA", "HTTP", "WIP")
+        if (allCaps && lower.length() <= 4) return null;
+
+        // 0c. Curated canonical casing ("i'm" -> "I'm", "monday" -> "Monday", "github" -> "GitHub")
+        if (english && !allCaps) {
+            String canonical = CapitalizationRules.canonicalCase(lower);
+            if (canonical != null && !word.equals(canonical)) {
+                String out = title ? CapitalizationRules.capitalizePreservingBrand(canonical) : canonical;
+                if (!word.equals(out)) {
+                    return new Correction(word, canonical, out);
+                }
+            }
+        }
+
+        String caseSource = deDouble != null ? deDouble : word;
 
         // 1. User-learned replacement (promoted after 2 consistent accepts; never auto-replaces a valid word)
         if (allowLearning && store != null) {
             String learned = store.lookupLearned(lower);
             if (learned != null && !word.equals(learned) && !(english && dictionary != null && dictionary.contains(lower))) {
-                return new Correction(word, learned, matchCase(word, title, learned));
+                return new Correction(word, learned, CapitalizationRules.matchCase(caseSource, learned));
             }
         }
 
         // 2. Curated typo & contraction map
         String fix = fixes.get(lower);
         if (fix != null && !word.equals(fix)) {
-            return new Correction(word, fix, matchCase(word, title, fix));
+            return new Correction(word, fix, CapitalizationRules.matchCase(caseSource, fix));
         }
 
         // 3. Two-letter neighbor/swap typo ("tk" -> "to", "fo" -> "of")
-        if (english && dictionary != null && lower.length() == 2 && isPlainWord(word)) {
+        if (english && dictionary != null && lower.length() == 2 && isPlainWord(lower)) {
             String twoFix = dictionary.bestTwoLetterFix(lower);
             if (twoFix != null) {
-                return new Correction(word, twoFix, matchCase(word, title, twoFix));
+                return new Correction(word, twoFix, CapitalizationRules.matchCase(caseSource, twoFix));
             }
         }
 
         // 4. Full 30k English frequency dictionary + screen/personal vocab + QWERTY spatial decoding
-        if (english && dictionary != null && dictionary.size() > 0 && lower.length() >= 3 && isPlainWord(word)) {
+        if (english && dictionary != null && dictionary.size() > 0 && lower.length() >= 3 && isPlainWord(lower)) {
             if (!dictionary.contains(lower)) {
                 if (spatialMode) {
                     SpatialKeyboardDecoder.DecodeContext dc = decodeContext(prevWord);
@@ -241,7 +261,7 @@ public final class AutocorrectEngine {
                             for (WordDictionary.Candidate c : spatial) {
                                 if (c.word().equalsIgnoreCase(reranked)) {
                                     String canon = canonicalFor(c.word());
-                                    return new Correction(word, canon, matchCase(word, title, canon));
+                                    return new Correction(word, canon, CapitalizationRules.matchCase(caseSource, canon));
                                 }
                             }
                         }
@@ -253,18 +273,18 @@ public final class AutocorrectEngine {
                                 || (lower.length() >= 7 && top.cost() <= 58 && top.rank() < 18000);
                         if (accept) {
                             String canon = canonicalFor(top.word());
-                            return new Correction(word, canon, matchCase(word, title, canon));
+                            return new Correction(word, canon, CapitalizationRules.matchCase(caseSource, canon));
                         }
                     }
                     String sbSplit = SpatialKeyboardDecoder.splitSpacebarMiss(dictionary, lower, dc);
                     if (sbSplit != null) {
-                        return new Correction(word, sbSplit, matchCase(word, title, sbSplit));
+                        return new Correction(word, sbSplit, CapitalizationRules.matchCase(caseSource, sbSplit));
                     }
                     String split = dictionary.splitMissedSpace(lower);
                     if (split != null) {
-                        return new Correction(word, split, matchCase(word, title, split));
+                        return new Correction(word, split, CapitalizationRules.matchCase(caseSource, split));
                     }
-                    return null; // In spatial mode, skip distant traditional spellcheck.
+                    return null;
                 }
                 List<WordDictionary.Candidate> edits = dictionary.bestEdits(lower, 1);
                 String split = dictionary.splitMissedSpace(lower);
@@ -272,27 +292,32 @@ public final class AutocorrectEngine {
                     WordDictionary.Candidate top = edits.get(0);
                     // Prefer a high-frequency missed-space split ("upto" -> "up to") over a rare 1-edit word ("upton").
                     if (split != null && top.rank() > 3000) {
-                        return new Correction(word, split, matchCase(word, title, split));
+                        return new Correction(word, split, CapitalizationRules.matchCase(caseSource, split));
                     }
                     if (top.rank() < 31000 && (top.cost() <= 14 || lower.length() >= 5)) {
-                        return new Correction(word, top.word(), matchCase(word, title, top.word()));
+                        String canon = canonicalFor(top.word());
+                        return new Correction(word, canon, CapitalizationRules.matchCase(caseSource, canon));
                     }
                 }
                 if (split != null) {
-                    return new Correction(word, split, matchCase(word, title, split));
+                    return new Correction(word, split, CapitalizationRules.matchCase(caseSource, split));
                 }
             } else {
-                return null; // Valid known English word: never replace on space.
+                // Valid known English word: only normalize a double-cap slip ("THis" -> "This").
+                return deDouble != null && !word.equals(deDouble) ? new Correction(word, deDouble, deDouble) : null;
             }
         }
 
         // 5. System SpellCheckerSession recommendation (e.g. 2-edit typos or non-English locales)
-        if (!spatialMode && spellSuggestions != null && !spellSuggestions.isEmpty() && lower.length() >= 3 && isPlainWord(word)) {
+        if (!spatialMode && spellSuggestions != null && !spellSuggestions.isEmpty() && lower.length() >= 3 && isPlainWord(lower)) {
             String best = spellSuggestions.get(0);
             if (best != null && !best.isBlank() && !best.equalsIgnoreCase(word)
                     && (dictionary == null || !english || !dictionary.contains(lower))) {
-                return new Correction(word, best, matchCase(word, title, best));
+                return new Correction(word, best, CapitalizationRules.matchCase(caseSource, best));
             }
+        }
+        if (deDouble != null && !word.equals(deDouble) && fixes.containsValue(lower)) {
+            return new Correction(word, deDouble, deDouble);
         }
         return null;
     }
@@ -307,9 +332,7 @@ public final class AutocorrectEngine {
     }
 
     private static String matchCase(String original, boolean title, String replacement) {
-        if (replacement.isEmpty()) return replacement;
-        if (!title) return replacement;
-        return Character.isUpperCase(replacement.charAt(0)) ? replacement : capitalize(replacement);
+        return CapitalizationRules.matchCase(original, replacement);
     }
 
     private static String capitalize(String word) {

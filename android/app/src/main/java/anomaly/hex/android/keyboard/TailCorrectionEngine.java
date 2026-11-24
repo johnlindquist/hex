@@ -152,10 +152,14 @@ public final class TailCorrectionEngine {
             boolean forcedContraction = ALWAYS_CONTRACTIONS.containsKey(lower)
                     || ("lets".equals(lower) && (atSentenceStart || (nextLower != null && LETS_FOLLOWERS.contains(nextLower))));
             boolean known = !forcedContraction && isKnownWord(dict, lower, screen, store);
-            List<String> cands = candidatesForWord(orig, lower, prevLower, nextLower, dict, wordCtx, screen, store);
-            boolean contextualRealWordSlip = known && !cands.isEmpty()
+            List<String> cands = candidatesForWord(
+                    orig, lower, prevLower, nextLower, atSentenceStart && stopAtSentenceBoundary,
+                    dict, wordCtx, screen, store);
+            boolean casingIssue = hasCasingIssue(
+                    orig, lower, atSentenceStart && stopAtSentenceBoundary, dict, screen, store);
+            boolean contextualRealWordSlip = known && !casingIssue && !cands.isEmpty()
                     && isLikelyRealWordSlip(lower, cands.get(0).toLowerCase(Locale.ROOT), prevLower, nextLower, dict);
-            boolean suspicious = (!known || contextualRealWordSlip) && !cands.isEmpty();
+            boolean suspicious = (!known || casingIssue || contextualRealWordSlip) && !cands.isEmpty();
             int slotIdx = slots.size();
             slots.add(new WordSlot(orig, start, end, suspicious, cands));
             if (suspicious) focusIndex = slotIdx;
@@ -244,29 +248,89 @@ public final class TailCorrectionEngine {
         return dict != null && dict.contains(lower);
     }
 
+    private static boolean hasCasingIssue(
+            String orig, String lower, boolean sentenceStart,
+            WordDictionary dict, Map<String, String> screen, PersonalAutocorrectStore store) {
+        if (CapitalizationRules.fixDoubleCap(orig) != null) return true;
+        if ("i".equals(orig)) return true;
+        String canon = CapitalizationRules.canonicalCase(lower);
+        if (canon != null && !CapitalizationRules.isAllCaps(orig)) {
+            String target = sentenceStart ? CapitalizationRules.capitalizePreservingBrand(canon) : canon;
+            if (!orig.equals(target)) return true;
+        }
+        if (sentenceStart && !orig.isEmpty() && Character.isLowerCase(orig.charAt(0))) {
+            String cap = CapitalizationRules.capitalizePreservingBrand(orig);
+            if (!cap.equals(orig)) return true;
+        }
+        if (!sentenceStart && dict != null
+                && CapitalizationRules.isLikelyAccidentalMidSentenceCap(orig, lower, dict.rankOf(lower), screen, store)) {
+            return true;
+        }
+        return false;
+    }
+
     private static List<String> candidatesForWord(
-            String orig, String lower, String prevLower, String nextLower, WordDictionary dict,
+            String orig, String lower, String prevLower, String nextLower, boolean sentenceStart,
+            WordDictionary dict,
             SpatialKeyboardDecoder.DecodeContext ctx,
             Map<String, String> screen, PersonalAutocorrectStore store) {
-        if (dict == null || lower.length() < 2) return List.of();
-        boolean title = !orig.equals(lower) && Character.isUpperCase(orig.charAt(0));
+        if (dict == null || lower.isEmpty()) return List.of();
+        String deDouble = CapitalizationRules.fixDoubleCap(orig);
+        String caseSource = deDouble != null ? deDouble : orig;
+        boolean forceStartCap = sentenceStart && !CapitalizationRules.isAllCaps(orig);
         LinkedHashSet<String> out = new LinkedHashSet<>();
 
-        // 0. Contraction restoration ("dont" -> "don't", "Lets" -> "Let's")
+        // Standalone lowercase "i" -> "I"
+        if ("i".equals(orig)) {
+            out.add("I");
+            return new ArrayList<>(out);
+        }
+        if (lower.length() < 2) {
+            if (forceStartCap && Character.isLowerCase(orig.charAt(0))) {
+                out.add(orig.toUpperCase(Locale.ROOT));
+            }
+            return new ArrayList<>(out);
+        }
+
+        // 0a. Contraction restoration ("dont" -> "don't", "Lets" -> "Let's")
         String alwaysContr = ALWAYS_CONTRACTIONS.get(lower);
-        if (alwaysContr != null) out.add(applyCase(title, alwaysContr));
+        if (alwaysContr != null) out.add(applyCase(caseSource, forceStartCap, alwaysContr));
         String ctxContr = CONTEXT_CONTRACTIONS.get(lower);
-        if (ctxContr != null) out.add(applyCase(title, ctxContr));
+        if (ctxContr != null) out.add(applyCase(caseSource, forceStartCap, ctxContr));
+
+        // 0b. Canonical casing ("i'm" -> "I'm", "monday" -> "Monday", "github" -> "GitHub")
+        String canonCase = CapitalizationRules.canonicalCase(lower);
+        if (canonCase != null && !CapitalizationRules.isAllCaps(orig)) {
+            String target = forceStartCap ? CapitalizationRules.capitalizePreservingBrand(canonCase) : canonCase;
+            if (!target.equals(orig)) out.add(target);
+        }
+
+        // 0c. Double-cap fix ("THis" -> "This") on known words
+        if (deDouble != null && dict.contains(lower) && !deDouble.equals(orig)) {
+            out.add(deDouble);
+        }
+
+        // 0d. Lowercase sentence opener ("hey" -> "Hey") when word is otherwise valid
+        if (forceStartCap && Character.isLowerCase(orig.charAt(0)) && dict.contains(lower)) {
+            String cap = CapitalizationRules.capitalizePreservingBrand(orig);
+            if (!cap.equals(orig)) out.add(cap);
+        }
+
+        // 0e. Mid-sentence Shift-graze capital ("this Works" -> "this works")
+        if (!sentenceStart
+                && CapitalizationRules.isLikelyAccidentalMidSentenceCap(orig, lower, dict.rankOf(lower), screen, store)) {
+            out.add(lower);
+        }
 
         // 1. Spacebar-miss split including fuzzy halves ("wantbto" -> "want to", "hisbwekk" -> "how well")
         List<String> sbSplits = SpatialKeyboardDecoder.splitSpacebarMissCandidates(dict, lower, ctx, nextLower, 3);
         for (String split : sbSplits) {
-            out.add(applyCase(title, split));
+            out.add(applyCase(caseSource, forceStartCap, split));
         }
 
         // 2. Concatenated missed-space split ("upto" -> "up to")
         String concatSplit = dict.splitMissedSpace(lower);
-        if (concatSplit != null) out.add(applyCase(title, concatSplit));
+        if (concatSplit != null) out.add(applyCase(caseSource, forceStartCap, concatSplit));
 
         // 3. Spatial QWERTY neighbors (works for BOTH typos AND real-word slips like "Bow" -> "How", "thin" -> "this")
         if (lower.length() == 2) {
@@ -283,7 +347,7 @@ public final class TailCorrectionEngine {
             });
             for (WordDictionary.Candidate c : twoCands) {
                 if (c.word().equalsIgnoreCase(orig)) continue;
-                out.add(applyCase(title, c.word()));
+                out.add(applyCase(caseSource, forceStartCap, c.word()));
                 if (out.size() >= 4) break;
             }
         } else {
@@ -298,7 +362,7 @@ public final class TailCorrectionEngine {
             for (WordDictionary.Candidate c : spatial) {
                 if (c.word().equalsIgnoreCase(lower)) continue;
                 String canon = canonical(c.word(), screen, store);
-                out.add(applyCase(title, canon));
+                out.add(applyCase(caseSource, forceStartCap, canon));
                 if (out.size() >= 4) break;
             }
         }
@@ -388,13 +452,13 @@ public final class TailCorrectionEngine {
             String p = store.personalCanonical(lower);
             if (p != null) return p;
         }
-        return lower;
+        String c = CapitalizationRules.canonicalCase(lower);
+        return c != null ? c : lower;
     }
 
-    private static String applyCase(boolean title, String text) {
-        if (!title || text.isEmpty()) return text;
-        return Character.isUpperCase(text.charAt(0))
-                ? text
-                : Character.toUpperCase(text.charAt(0)) + text.substring(1);
+    private static String applyCase(String original, boolean forceSentenceStartCap, String text) {
+        if (text == null || text.isEmpty()) return "";
+        String matched = CapitalizationRules.matchCase(original, text);
+        return forceSentenceStartCap ? CapitalizationRules.capitalizePreservingBrand(matched) : matched;
     }
 }
